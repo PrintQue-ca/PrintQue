@@ -25,9 +25,11 @@ export function initSocket(queryClient: QueryClient) {
       queryClient.setQueryData(['printers'], data.printers)
     }
     if (data.orders) {
-      // Use invalidateQueries instead of setQueryData to avoid overwriting
-      // local state with potentially stale socket data (e.g., after deletions)
-      queryClient.invalidateQueries({ queryKey: ['orders'] })
+      // Only update if no mutation is in progress to avoid flickering during drag-drop
+      const isMutating = queryClient.isMutating({ mutationKey: ['reorderOrder'] })
+      if (!isMutating) {
+        queryClient.invalidateQueries({ queryKey: ['orders'] })
+      }
     }
     if (data.total_filament !== undefined) {
       queryClient.setQueryData(['stats', 'filament'], data.total_filament)
@@ -45,8 +47,12 @@ export function initSocket(queryClient: QueryClient) {
   })
 
   // Order updates
-  socket.on('order_update', (data) => {
-    queryClient.invalidateQueries({ queryKey: ['orders'] })
+  socket.on('order_update', () => {
+    // Only update if no mutation is in progress to avoid flickering during drag-drop
+    const isMutating = queryClient.isMutating({ mutationKey: ['reorderOrder'] })
+    if (!isMutating) {
+      queryClient.invalidateQueries({ queryKey: ['orders'] })
+    }
   })
 
   return socket

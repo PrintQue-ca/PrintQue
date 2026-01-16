@@ -5,6 +5,22 @@ import {
   createColumnHelper,
 } from '@tanstack/react-table'
 import {
+  DndContext,
+  closestCenter,
+  KeyboardSensor,
+  PointerSensor,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+} from '@dnd-kit/core'
+import {
+  SortableContext,
+  sortableKeyboardCoordinates,
+  useSortable,
+  verticalListSortingStrategy,
+} from '@dnd-kit/sortable'
+import { CSS } from '@dnd-kit/utilities'
+import {
   Table,
   TableBody,
   TableCell,
@@ -15,10 +31,10 @@ import {
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Input } from '@/components/ui/input'
-import { ChevronUp, ChevronDown, Trash2, Plus, Minus } from 'lucide-react'
+import { GripVertical, Trash2, Plus, Minus } from 'lucide-react'
 import type { Order } from '@/types'
-import { useDeleteOrder, useMoveOrder, useUpdateQuantity } from '@/hooks'
-import { useState } from 'react'
+import { useDeleteOrder, useReorderOrder, useUpdateQuantity } from '@/hooks'
+import { useState, useEffect } from 'react'
 
 interface OrdersTableProps {
   orders: Order[]
@@ -26,21 +42,90 @@ interface OrdersTableProps {
 
 const columnHelper = createColumnHelper<Order>()
 
+// Helper to reorder array
+function arrayMove<T>(array: T[], from: number, to: number): T[] {
+  const newArray = [...array]
+  const [item] = newArray.splice(from, 1)
+  newArray.splice(to, 0, item)
+  return newArray
+}
+
+// Sortable row component
+function SortableRow({ 
+  row, 
+  children 
+}: { 
+  row: { id: string; original: Order }
+  children: React.ReactNode 
+}) {
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({ 
+    id: row.original.id,
+  })
+
+  const style = {
+    transform: CSS.Transform.toString(transform),
+    // Smooth transitions while dragging for other items to shift
+    transition,
+    opacity: isDragging ? 0.5 : 1,
+    // Lift dragged item above others
+    zIndex: isDragging ? 1 : 0,
+    position: 'relative' as const,
+  }
+
+  return (
+    <TableRow ref={setNodeRef} style={style} className={isDragging ? 'bg-muted' : ''}>
+      <TableCell className="w-10">
+        <div
+          {...attributes}
+          {...listeners}
+          className="cursor-grab active:cursor-grabbing p-1 hover:bg-muted rounded"
+        >
+          <GripVertical className="h-4 w-4 text-muted-foreground" />
+        </div>
+      </TableCell>
+      {children}
+    </TableRow>
+  )
+}
+
 export function OrdersTable({ orders }: OrdersTableProps) {
   const deleteOrder = useDeleteOrder()
-  const moveOrder = useMoveOrder()
+  const reorderOrder = useReorderOrder()
   const updateQuantity = useUpdateQuantity()
   const [editingQuantity, setEditingQuantity] = useState<number | null>(null)
   const [quantityValue, setQuantityValue] = useState<number>(0)
+  
+  // Local state for immediate UI updates during drag
+  const [localOrders, setLocalOrders] = useState(orders)
+  
+  // Sync with prop changes (from server/other sources)
+  useEffect(() => {
+    setLocalOrders(orders)
+  }, [orders])
+
+  const sensors = useSensors(
+    useSensor(PointerSensor, {
+      activationConstraint: {
+        distance: 8,
+      },
+    }),
+    useSensor(KeyboardSensor, {
+      coordinateGetter: sortableKeyboardCoordinates,
+    })
+  )
 
   const handleDelete = (id: number) => {
     if (confirm('Are you sure you want to delete this order?')) {
       deleteOrder.mutate(id)
     }
   }
-
-  const handleMoveUp = (id: number) => moveOrder.mutate({ id, direction: 'up' })
-  const handleMoveDown = (id: number) => moveOrder.mutate({ id, direction: 'down' })
 
   const handleQuantityChange = (id: number, currentQuantity: number) => {
     setEditingQuantity(id)
@@ -64,31 +149,27 @@ export function OrdersTable({ orders }: OrdersTableProps) {
     }
   }
 
+  const handleDragEnd = (event: DragEndEvent) => {
+    const { active, over } = event
+    
+    if (over && active.id !== over.id) {
+      const oldIndex = localOrders.findIndex((order) => order.id === active.id)
+      const newIndex = localOrders.findIndex((order) => order.id === over.id)
+      
+      if (oldIndex !== -1 && newIndex !== -1) {
+        // Update local state immediately (synchronous - no flicker)
+        setLocalOrders(arrayMove(localOrders, oldIndex, newIndex))
+        // Then persist to server
+        reorderOrder.mutate({ id: active.id as number, newIndex })
+      }
+    }
+  }
+
   const columns = [
     columnHelper.accessor('priority', {
       header: '#',
       cell: (info) => (
-        <div className="flex items-center gap-1">
-          <span className="font-medium">{info.getValue()}</span>
-          <div className="flex flex-col">
-            <Button
-              variant="ghost"
-              size="sm"
-              className="h-5 w-5 p-0"
-              onClick={() => handleMoveUp(info.row.original.id)}
-            >
-              <ChevronUp className="h-3 w-3" />
-            </Button>
-            <Button
-              variant="ghost"
-              size="sm"
-              className="h-5 w-5 p-0"
-              onClick={() => handleMoveDown(info.row.original.id)}
-            >
-              <ChevronDown className="h-3 w-3" />
-            </Button>
-          </div>
-        </div>
+        <span className="font-medium text-muted-foreground">{info.row.index + 1}</span>
       ),
     }),
     columnHelper.accessor('filename', {
@@ -193,47 +274,60 @@ export function OrdersTable({ orders }: OrdersTableProps) {
   ]
 
   const table = useReactTable({
-    data: orders,
+    data: localOrders,
     columns,
     getCoreRowModel: getCoreRowModel(),
+    getRowId: (row) => String(row.id),
   })
 
   return (
     <div className="rounded-md border">
-      <Table>
-        <TableHeader>
-          {table.getHeaderGroups().map((headerGroup) => (
-            <TableRow key={headerGroup.id}>
-              {headerGroup.headers.map((header) => (
-                <TableHead key={header.id}>
-                  {header.isPlaceholder
-                    ? null
-                    : flexRender(header.column.columnDef.header, header.getContext())}
-                </TableHead>
-              ))}
-            </TableRow>
-          ))}
-        </TableHeader>
-        <TableBody>
-          {table.getRowModel().rows?.length ? (
-            table.getRowModel().rows.map((row) => (
-              <TableRow key={row.id}>
-                {row.getVisibleCells().map((cell) => (
-                  <TableCell key={cell.id}>
-                    {flexRender(cell.column.columnDef.cell, cell.getContext())}
-                  </TableCell>
+      <DndContext
+        sensors={sensors}
+        collisionDetection={closestCenter}
+        onDragEnd={handleDragEnd}
+      >
+        <Table>
+          <TableHeader>
+            {table.getHeaderGroups().map((headerGroup) => (
+              <TableRow key={headerGroup.id}>
+                <TableHead className="w-10"></TableHead>
+                {headerGroup.headers.map((header) => (
+                  <TableHead key={header.id}>
+                    {header.isPlaceholder
+                      ? null
+                      : flexRender(header.column.columnDef.header, header.getContext())}
+                  </TableHead>
                 ))}
               </TableRow>
-            ))
-          ) : (
-            <TableRow>
-              <TableCell colSpan={columns.length} className="h-24 text-center">
-                No items in library.
-              </TableCell>
-            </TableRow>
-          )}
-        </TableBody>
-      </Table>
+            ))}
+          </TableHeader>
+          <TableBody>
+            {table.getRowModel().rows?.length ? (
+              <SortableContext
+                items={localOrders.map((o) => o.id)}
+                strategy={verticalListSortingStrategy}
+              >
+                {table.getRowModel().rows.map((row) => (
+                  <SortableRow key={row.id} row={row}>
+                    {row.getVisibleCells().map((cell) => (
+                      <TableCell key={cell.id}>
+                        {flexRender(cell.column.columnDef.cell, cell.getContext())}
+                      </TableCell>
+                    ))}
+                  </SortableRow>
+                ))}
+              </SortableContext>
+            ) : (
+              <TableRow>
+                <TableCell colSpan={columns.length + 1} className="h-24 text-center">
+                  No items in library.
+                </TableCell>
+              </TableRow>
+            )}
+          </TableBody>
+        </Table>
+      </DndContext>
     </div>
   )
 }

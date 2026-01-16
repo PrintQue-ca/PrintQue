@@ -196,15 +196,40 @@ def register_routes(app, socketio):
     def api_system_info():
         """API: Get system information"""
         try:
-            from utils.license_validator import get_machine_id
+            import sys
+            import time
+            import psutil
+            
+            # Get app version (you can update this as needed)
+            version = app.config.get('APP_VERSION', '1.0.0')
+            
+            # Get uptime - use process start time
+            process = psutil.Process()
+            uptime_seconds = time.time() - process.create_time()
+            
+            # Get memory usage percentage
+            memory = psutil.virtual_memory()
+            memory_usage = memory.percent
+            
+            # Get CPU usage percentage
+            cpu_usage = psutil.cpu_percent(interval=0.1)
+            
+            # Get Python version
+            python_version = f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
+            
+            # Get platform info
+            platform_info = f"{platform.system()} {platform.release()}"
+            
             return jsonify({
-                'machine_id': get_machine_id(),
-                'hostname': platform.node(),
-                'system': platform.system(),
-                'release': platform.release(),
-                'processor': platform.processor()
+                'version': version,
+                'uptime': int(uptime_seconds),
+                'memory_usage': memory_usage,
+                'cpu_usage': cpu_usage,
+                'python_version': python_version,
+                'platform': platform_info
             })
         except Exception as e:
+            logging.error(f"Error in api_system_info: {str(e)}")
             return jsonify({'error': str(e)}), 500
 
     @app.route('/api/v1/system/groups', methods=['GET'])
@@ -557,6 +582,61 @@ def register_routes(app, socketio):
                 elif direction == 'down' and order_index < len(ORDERS) - 1:
                     ORDERS[order_index], ORDERS[order_index + 1] = ORDERS[order_index + 1], ORDERS[order_index]
                 
+                save_data(ORDERS_FILE, ORDERS)
+            
+            return jsonify({'success': True})
+        except Exception as e:
+            return jsonify({'error': str(e)}), 500
+
+    @app.route('/api/v1/orders/<int:order_id>/reorder', methods=['POST'])
+    def api_reorder_order(order_id):
+        """API: Move an order to a specific position (for drag and drop)"""
+        try:
+            data = request.get_json()
+            new_index = data.get('new_index')
+            
+            if new_index is None:
+                return jsonify({'error': 'new_index is required'}), 400
+            
+            with SafeLock(orders_lock):
+                # Filter to only non-deleted orders for reordering
+                active_indices = [i for i, order in enumerate(ORDERS) if not order.get('deleted', False)]
+                
+                # Find the order's current index in active orders
+                current_active_index = None
+                current_real_index = None
+                for active_idx, real_idx in enumerate(active_indices):
+                    if ORDERS[real_idx].get('id') == order_id:
+                        current_active_index = active_idx
+                        current_real_index = real_idx
+                        break
+                
+                if current_active_index is None:
+                    return jsonify({'error': 'Order not found'}), 404
+                
+                # Clamp new_index to valid range
+                new_index = max(0, min(new_index, len(active_indices) - 1))
+                
+                if current_active_index == new_index:
+                    return jsonify({'success': True})  # No change needed
+                
+                # Remove the order from its current position
+                order = ORDERS.pop(current_real_index)
+                
+                # Calculate the new real index
+                # Re-calculate active indices after removal
+                active_indices_after = [i for i, o in enumerate(ORDERS) if not o.get('deleted', False)]
+                
+                if new_index >= len(active_indices_after):
+                    # Insert at the end (after the last active order)
+                    if active_indices_after:
+                        new_real_index = active_indices_after[-1] + 1
+                    else:
+                        new_real_index = 0
+                else:
+                    new_real_index = active_indices_after[new_index]
+                
+                ORDERS.insert(new_real_index, order)
                 save_data(ORDERS_FILE, ORDERS)
             
             return jsonify({'success': True})

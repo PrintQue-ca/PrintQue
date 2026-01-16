@@ -5,6 +5,9 @@ from cryptography.fernet import Fernet
 load_dotenv()
 
 class Config:
+    # Application version
+    APP_VERSION = '1.0.0'
+    
     SECRET_KEY = os.getenv('SECRET_KEY', 'default-secret-for-dev-only')
     
     # CRITICAL FIX: Encryption key with fallback

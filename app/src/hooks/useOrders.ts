@@ -71,3 +71,40 @@ export function useUpdateQuantity() {
     },
   })
 }
+
+export function useReorderOrder() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationKey: ['reorderOrder'],
+    mutationFn: ({ id, newIndex }: { id: number; newIndex: number }) =>
+      api.post<ApiResponse>(`/orders/${id}/reorder`, { new_index: newIndex }),
+    onMutate: async ({ id, newIndex }) => {
+      // Cancel any outgoing refetches
+      await queryClient.cancelQueries({ queryKey: ['orders'] })
+
+      // Snapshot the previous value
+      const previousOrders = queryClient.getQueryData<Order[]>(['orders'])
+
+      // Optimistically update the cache
+      if (previousOrders) {
+        const oldIndex = previousOrders.findIndex((order) => order.id === id)
+        if (oldIndex !== -1) {
+          const newOrders = [...previousOrders]
+          const [movedOrder] = newOrders.splice(oldIndex, 1)
+          newOrders.splice(newIndex, 0, movedOrder)
+          queryClient.setQueryData(['orders'], newOrders)
+        }
+      }
+
+      // Return context with the previous value
+      return { previousOrders }
+    },
+    onError: (_err, _variables, context) => {
+      // Rollback to the previous value on error
+      if (context?.previousOrders) {
+        queryClient.setQueryData(['orders'], context.previousOrders)
+      }
+    },
+    // No onSettled/onSuccess - trust the optimistic update, don't refetch
+  })
+}

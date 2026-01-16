@@ -68,6 +68,7 @@ os.makedirs(static_folder, exist_ok=True)
 
 app = Flask(__name__, static_folder=static_folder, static_url_path='/static', template_folder=template_folder)
 app.config['SECRET_KEY'] = Config.SECRET_KEY
+app.config['APP_VERSION'] = Config.APP_VERSION
 app.config['UPLOAD_FOLDER'] = os.path.join(LOG_DIR, "uploads")  # Writable upload folder
 app.config['LOG_DIR'] = LOG_DIR
 
