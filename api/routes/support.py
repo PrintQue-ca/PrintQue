@@ -1,14 +1,14 @@
 from flask import Blueprint, render_template, request, flash, redirect, url_for, current_app, send_file
 import smtplib
 import ssl
-import os  # Add this import for environment variables
+import os
 import io
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from datetime import datetime
 import logging
-from state import PRINTERS, printers_rwlock, ReadLock
-from license_validator import get_license_info
+from services.state import PRINTERS, printers_rwlock, ReadLock
+from utils.license_validator import get_license_info
 
 # Create a Blueprint for support-related routes
 support_bp = Blueprint('support', __name__, url_prefix='/support')
@@ -177,7 +177,7 @@ def download_logs():
     """Download logs from the last 5 minutes"""
     try:
         # Import the logger module to access the function
-        from logger import get_recent_logs
+        from utils.logger import get_recent_logs
 
         # Get logs from the last 5 minutes
         logs_content = get_recent_logs(minutes=5)

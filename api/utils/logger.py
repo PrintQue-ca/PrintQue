@@ -271,7 +271,7 @@ def get_recent_logs(minutes=5):
     
     # Get console output
     try:
-        from console_capture import console_capture
+        from utils.console_capture import console_capture
         
         logs_content.append("=== CONSOLE OUTPUT (Command Prompt) ===\n")
         logs_content.append("=" * 70 + "\n")

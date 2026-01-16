@@ -6,20 +6,20 @@ import uuid
 import threading
 from flask import Blueprint, request, redirect, url_for, flash, jsonify
 from werkzeug.utils import secure_filename
-from state import (
+from services.state import (
     PRINTERS, TOTAL_FILAMENT_CONSUMPTION, ORDERS, 
     save_data, load_data, encrypt_api_key, decrypt_api_key, 
     logging, orders_lock, filament_lock, printers_rwlock, SafeLock, ReadLock, WriteLock,
     PRINTERS_FILE, TOTAL_FILAMENT_FILE, validate_gcode_file,
     register_task, update_task_progress, complete_task,
-    sanitize_group_name  # Added import for group sanitization
+    sanitize_group_name
 )
-from printer_manager import distribute_orders_async, extract_filament_from_file, start_background_distribution, send_print_to_printer, prepare_printer_data_for_broadcast
-from config import Config
-from retry_utils import retry_async
+from services.printer_manager import distribute_orders_async, extract_filament_from_file, start_background_distribution, send_print_to_printer, prepare_printer_data_for_broadcast
+from utils.config import Config
+from utils.retry_utils import retry_async
 import copy
 # Bambu printer support
-from bambu_handler import (
+from services.bambu_handler import (
     pause_bambu_print, resume_bambu_print, stop_bambu_print, connect_bambu_printer,
     send_bambu_print_command
 )
@@ -540,7 +540,7 @@ def stop_print(printer_id):
                         connector=aiohttp.TCPConnector(limit=10, ttl_dns_cache=300),
                         timeout=aiohttp.ClientTimeout(total=30)
                     ) as session:
-                        from printer_manager import stop_print_async
+                        from services.printer_manager import stop_print_async
                         return await stop_print_async(session, printer_copy)
                 
                 success = loop.run_until_complete(execute_stop())
@@ -653,7 +653,7 @@ def pause_print(printer_id):
                         connector=aiohttp.TCPConnector(limit=10, ttl_dns_cache=300),
                         timeout=aiohttp.ClientTimeout(total=30)
                     ) as session:
-                        from printer_manager import pause_print_async
+                        from services.printer_manager import pause_print_async
                         return await pause_print_async(session, printer_copy)
                 
                 success = loop.run_until_complete(execute_pause())
@@ -760,7 +760,7 @@ def resume_print(printer_id):
                         connector=aiohttp.TCPConnector(limit=10, ttl_dns_cache=300),
                         timeout=aiohttp.ClientTimeout(total=30)
                     ) as session:
-                        from printer_manager import resume_print_async
+                        from services.printer_manager import resume_print_async
                         return await resume_print_async(session, printer_copy)
                 
                 success = loop.run_until_complete(execute_resume())
@@ -870,7 +870,7 @@ def stop_all_printers():
                         idx = printer_info['index']
                         
                         try:
-                            from printer_manager import stop_print_async
+                            from services.printer_manager import stop_print_async
                             success = await stop_print_async(session, printer)
                             
                             if success:
@@ -1229,7 +1229,7 @@ def mark_group_ready(group):
             
             # Log the group action
             try:
-                from logger import log_manual_action
+                from utils.logger import log_manual_action
                 log_manual_action('MARK_GROUP_READY', f'group_{group}', {
                     'group': group,
                     'printers_affected': success_count,

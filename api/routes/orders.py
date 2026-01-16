@@ -3,16 +3,16 @@ import asyncio
 from datetime import datetime
 from flask import Blueprint, request, redirect, url_for, flash, jsonify
 from werkzeug.utils import secure_filename
-from state import (
+from services.state import (
     PRINTERS, TOTAL_FILAMENT_CONSUMPTION, ORDERS, 
     save_data, load_data, encrypt_api_key, decrypt_api_key, 
     logging, orders_lock, filament_lock, printers_rwlock, SafeLock, ReadLock, WriteLock, get_order_lock,
     PRINTERS_FILE, TOTAL_FILAMENT_FILE, ORDERS_FILE,
-    validate_gcode_file, increment_order_sent_count, sanitize_group_name  # Added sanitize_group_name import
+    validate_gcode_file, increment_order_sent_count, sanitize_group_name
 )
-from printer_manager import distribute_orders_async, extract_filament_from_file, start_background_distribution
-from config import Config
-from default_settings import load_default_settings, save_default_settings
+from services.printer_manager import distribute_orders_async, extract_filament_from_file, start_background_distribution
+from utils.config import Config
+from services.default_settings import load_default_settings, save_default_settings
 
 order_bp = Blueprint('order_routes', __name__)
 

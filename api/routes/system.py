@@ -1,18 +1,18 @@
 from flask import render_template, request, redirect, url_for, flash, jsonify, make_response, current_app
-from state import (
+from services.state import (
     ReadLock, WriteLock, SafeLock, printers_rwlock, PRINTERS, 
     orders_lock, ORDERS, filament_lock, TOTAL_FILAMENT_CONSUMPTION,
     save_data, load_data, PRINTERS_FILE, ORDERS_FILE, TOTAL_FILAMENT_FILE,
     sanitize_group_name
 )
-from default_settings import load_default_settings
+from services.default_settings import load_default_settings
 import os
 import uuid
 import logging
 from datetime import datetime
 import csv
 import io
-from printer_manager import start_background_distribution, extract_filament_from_file
+from services.printer_manager import start_background_distribution, extract_filament_from_file
 from werkzeug.utils import secure_filename
 import shutil
 
@@ -208,7 +208,7 @@ def register_misc_routes(app, socketio):
     @app.route('/system-info')
     def system_info():
         """Display system information including Machine ID"""
-        from license_validator import get_machine_id
+        from utils.license_validator import get_machine_id
         import platform
         
         info = {
