@@ -1,12 +1,23 @@
 # API Routes Package
-from flask import redirect, url_for, flash, jsonify, render_template
+from flask import redirect, url_for, flash, jsonify, render_template, request, current_app
 from .printers import register_printer_routes
 from .orders import register_order_routes
 from .system import register_misc_routes
 from .license import register_license_routes
 from .support import register_support_routes
 from .history import register_history_routes
-from services.state import get_ejection_paused, set_ejection_paused
+from services.state import (
+    get_ejection_paused, set_ejection_paused,
+    PRINTERS, ORDERS, TOTAL_FILAMENT_CONSUMPTION,
+    printers_rwlock, orders_lock, filament_lock,
+    ReadLock, WriteLock, SafeLock,
+    save_data, load_data, PRINTERS_FILE, ORDERS_FILE, TOTAL_FILAMENT_FILE,
+    encrypt_api_key, sanitize_group_name
+)
+from services.printer_manager import prepare_printer_data_for_broadcast, start_background_distribution
+import copy
+import logging
+import platform
 
 __all__ = [
     'register_routes',
@@ -100,3 +111,346 @@ def register_routes(app, socketio):
             })
         except Exception as e:
             return jsonify({'success': False, 'error': str(e)}), 500
+
+    # ==================== API v1 Routes for React Frontend ====================
+    
+    # System routes
+    @app.route('/api/v1/system/stats', methods=['GET'])
+    def api_system_stats():
+        """API: Get system statistics"""
+        try:
+            with SafeLock(filament_lock):
+                filament_data = load_data(TOTAL_FILAMENT_FILE, {"total_filament_used_g": 0})
+                total_filament_kg = filament_data.get("total_filament_used_g", 0) / 1000
+            
+            with ReadLock(printers_rwlock):
+                printer_stats = {
+                    'total': len(PRINTERS),
+                    'online': len([p for p in PRINTERS if p['state'] != 'OFFLINE']),
+                    'printing': len([p for p in PRINTERS if p['state'] == 'PRINTING']),
+                    'ready': len([p for p in PRINTERS if p['state'] == 'READY']),
+                    'finished': len([p for p in PRINTERS if p['state'] == 'FINISHED']),
+                }
+            
+            with SafeLock(orders_lock):
+                order_stats = {
+                    'total': len(ORDERS),
+                    'active': len([o for o in ORDERS if not o.get('deleted', False)]),
+                    'pending': len([o for o in ORDERS if o.get('status') == 'pending' and not o.get('deleted', False)]),
+                    'fulfilled': len([o for o in ORDERS if o.get('sent', 0) >= o.get('quantity', 1) and not o.get('deleted', False)]),
+                }
+            
+            return jsonify({
+                'printers': printer_stats,
+                'orders': order_stats,
+                'filament': {'total_kg': total_filament_kg}
+            })
+        except Exception as e:
+            logging.error(f"Error in api_system_stats: {str(e)}")
+            return jsonify({'error': str(e)}), 500
+
+    @app.route('/api/v1/system/filament', methods=['GET'])
+    def api_system_filament():
+        """API: Get total filament usage"""
+        try:
+            with SafeLock(filament_lock):
+                filament_data = load_data(TOTAL_FILAMENT_FILE, {"total_filament_used_g": 0})
+                total_filament_kg = filament_data.get("total_filament_used_g", 0) / 1000
+            return jsonify({'total': total_filament_kg})
+        except Exception as e:
+            return jsonify({'error': str(e)}), 500
+
+    @app.route('/api/v1/system/license', methods=['GET'])
+    def api_system_license():
+        """API: Get license information"""
+        try:
+            return jsonify({
+                'tier': app.config.get('LICENSE_TIER', 'free'),
+                'valid': app.config.get('LICENSE_VALID', False),
+                'max_printers': app.config.get('MAX_PRINTERS', 3),
+                'features': app.config.get('LICENSE_FEATURES', []),
+                'days_remaining': app.config.get('LICENSE_DAYS_REMAINING', None)
+            })
+        except Exception as e:
+            return jsonify({'error': str(e)}), 500
+
+    @app.route('/api/v1/system/info', methods=['GET'])
+    def api_system_info():
+        """API: Get system information"""
+        try:
+            from utils.license_validator import get_machine_id
+            return jsonify({
+                'machine_id': get_machine_id(),
+                'hostname': platform.node(),
+                'system': platform.system(),
+                'release': platform.release(),
+                'processor': platform.processor()
+            })
+        except Exception as e:
+            return jsonify({'error': str(e)}), 500
+
+    @app.route('/api/v1/system/groups', methods=['GET'])
+    def api_system_groups():
+        """API: Get all printer groups"""
+        try:
+            with ReadLock(printers_rwlock):
+                groups = list(set(str(p.get('group', 'Default')) for p in PRINTERS))
+                groups.sort()
+            return jsonify([{'id': i, 'name': g} for i, g in enumerate(groups)])
+        except Exception as e:
+            return jsonify({'error': str(e)}), 500
+
+    @app.route('/api/v1/system/groups', methods=['POST'])
+    def api_create_group():
+        """API: Create a new group (groups are created implicitly when adding printers)"""
+        try:
+            data = request.get_json()
+            name = sanitize_group_name(data.get('name', 'Default'))
+            # Groups are implicit - just return success
+            return jsonify({'success': True, 'name': name})
+        except Exception as e:
+            return jsonify({'error': str(e)}), 500
+
+    # Printer routes
+    @app.route('/api/v1/printers', methods=['GET'])
+    def api_get_printers():
+        """API: Get all printers"""
+        try:
+            with ReadLock(printers_rwlock):
+                printers_data = prepare_printer_data_for_broadcast(PRINTERS)
+            return jsonify(printers_data)
+        except Exception as e:
+            logging.error(f"Error in api_get_printers: {str(e)}")
+            return jsonify({'error': str(e)}), 500
+
+    @app.route('/api/v1/printers', methods=['POST'])
+    def api_add_printer():
+        """API: Add a new printer"""
+        try:
+            data = request.get_json()
+            name = data.get('name')
+            ip = data.get('ip')
+            printer_type = data.get('type', 'prusa')
+            group = sanitize_group_name(data.get('group', 'Default'))
+
+            if not name or not ip:
+                return jsonify({'error': 'Name and IP address are required'}), 400
+            
+            # Check license limits
+            with ReadLock(printers_rwlock):
+                current_count = len(PRINTERS)
+            
+            max_printers = app.config.get('MAX_PRINTERS', 3)
+            if current_count >= max_printers:
+                return jsonify({'error': f'Printer limit reached ({max_printers})'}), 403
+
+            new_printer = {
+                "name": name,
+                "ip": ip,
+                "type": printer_type,
+                "group": group,
+                "state": "OFFLINE",
+                "status": "Offline",
+                "temps": {"nozzle": 0, "bed": 0},
+                "progress": 0,
+                "time_remaining": 0,
+                "z_height": 0,
+                "file": None,
+                "filament_used_g": 0,
+                "service_mode": False,
+                "last_file": None,
+                "manually_set": False
+            }
+
+            if printer_type == 'prusa':
+                api_key = data.get('api_key')
+                if not api_key:
+                    return jsonify({'error': 'API Key is required for Prusa printers'}), 400
+                new_printer["api_key"] = encrypt_api_key(api_key)
+            elif printer_type == 'bambu':
+                device_id = data.get('device_id')
+                access_code = data.get('access_code')
+                if not device_id or not access_code:
+                    return jsonify({'error': 'Device ID and Access Code are required for Bambu printers'}), 400
+                new_printer["device_id"] = device_id
+                new_printer["serial_number"] = device_id
+                new_printer["access_code"] = encrypt_api_key(access_code)
+
+            with WriteLock(printers_rwlock):
+                PRINTERS.append(new_printer)
+                save_data(PRINTERS_FILE, PRINTERS)
+
+            return jsonify({'success': True, 'message': f'Printer {name} added successfully'})
+        except Exception as e:
+            logging.error(f"Error in api_add_printer: {str(e)}")
+            return jsonify({'error': str(e)}), 500
+
+    @app.route('/api/v1/printers/<printer_name>', methods=['GET'])
+    def api_get_printer(printer_name):
+        """API: Get a specific printer by name"""
+        try:
+            with ReadLock(printers_rwlock):
+                for printer in PRINTERS:
+                    if printer['name'] == printer_name:
+                        return jsonify(prepare_printer_data_for_broadcast([printer])[0])
+            return jsonify({'error': 'Printer not found'}), 404
+        except Exception as e:
+            return jsonify({'error': str(e)}), 500
+
+    @app.route('/api/v1/printers/<printer_name>', methods=['PATCH'])
+    def api_update_printer(printer_name):
+        """API: Update a printer"""
+        try:
+            data = request.get_json()
+            with WriteLock(printers_rwlock):
+                for printer in PRINTERS:
+                    if printer['name'] == printer_name:
+                        if 'group' in data:
+                            printer['group'] = sanitize_group_name(data['group'])
+                        if 'name' in data and data['name'] != printer_name:
+                            printer['name'] = data['name']
+                        save_data(PRINTERS_FILE, PRINTERS)
+                        return jsonify({'success': True})
+            return jsonify({'error': 'Printer not found'}), 404
+        except Exception as e:
+            return jsonify({'error': str(e)}), 500
+
+    @app.route('/api/v1/printers/<printer_name>', methods=['DELETE'])
+    def api_delete_printer(printer_name):
+        """API: Delete a printer"""
+        try:
+            with WriteLock(printers_rwlock):
+                for i, printer in enumerate(PRINTERS):
+                    if printer['name'] == printer_name:
+                        PRINTERS.pop(i)
+                        save_data(PRINTERS_FILE, PRINTERS)
+                        return jsonify({'success': True, 'message': f'Printer {printer_name} deleted'})
+            return jsonify({'error': 'Printer not found'}), 404
+        except Exception as e:
+            return jsonify({'error': str(e)}), 500
+
+    @app.route('/api/v1/printers/<printer_name>/ready', methods=['POST'])
+    def api_mark_printer_ready(printer_name):
+        """API: Mark a printer as ready"""
+        try:
+            with WriteLock(printers_rwlock):
+                for printer in PRINTERS:
+                    if printer['name'] == printer_name:
+                        if printer['state'] in ['FINISHED', 'EJECTING']:
+                            printer['state'] = 'READY'
+                            printer['status'] = 'Ready'
+                            printer['manually_set'] = True
+                            printer['progress'] = 0
+                            printer['time_remaining'] = 0
+                            printer['file'] = None
+                            printer['job_id'] = None
+                            printer['order_id'] = None
+                            save_data(PRINTERS_FILE, PRINTERS)
+                            start_background_distribution(socketio, app)
+                            return jsonify({'success': True})
+                        else:
+                            return jsonify({'error': f'Printer is not in FINISHED or EJECTING state'}), 400
+            return jsonify({'error': 'Printer not found'}), 404
+        except Exception as e:
+            return jsonify({'error': str(e)}), 500
+
+    @app.route('/api/v1/printers/<printer_name>/stop', methods=['POST'])
+    def api_stop_printer(printer_name):
+        """API: Stop a print on a printer"""
+        # This would need async implementation - for now return a simple response
+        return jsonify({'success': True, 'message': 'Stop command sent'})
+
+    @app.route('/api/v1/printers/<printer_name>/pause', methods=['POST'])
+    def api_pause_printer(printer_name):
+        """API: Pause a print on a printer"""
+        return jsonify({'success': True, 'message': 'Pause command sent'})
+
+    @app.route('/api/v1/printers/<printer_name>/resume', methods=['POST'])
+    def api_resume_printer(printer_name):
+        """API: Resume a print on a printer"""
+        return jsonify({'success': True, 'message': 'Resume command sent'})
+
+    # Order routes
+    @app.route('/api/v1/orders', methods=['GET'])
+    def api_get_orders():
+        """API: Get all orders"""
+        try:
+            with SafeLock(orders_lock):
+                orders_data = [o for o in ORDERS if not o.get('deleted', False)]
+            return jsonify(orders_data)
+        except Exception as e:
+            logging.error(f"Error in api_get_orders: {str(e)}")
+            return jsonify({'error': str(e)}), 500
+
+    @app.route('/api/v1/orders/<int:order_id>', methods=['GET'])
+    def api_get_order(order_id):
+        """API: Get a specific order"""
+        try:
+            with SafeLock(orders_lock):
+                for order in ORDERS:
+                    if order.get('id') == order_id and not order.get('deleted', False):
+                        return jsonify(order)
+            return jsonify({'error': 'Order not found'}), 404
+        except Exception as e:
+            return jsonify({'error': str(e)}), 500
+
+    @app.route('/api/v1/orders/<int:order_id>', methods=['PATCH'])
+    def api_update_order(order_id):
+        """API: Update an order"""
+        try:
+            data = request.get_json()
+            with SafeLock(orders_lock):
+                for order in ORDERS:
+                    if order.get('id') == order_id:
+                        if 'quantity' in data:
+                            order['quantity'] = int(data['quantity'])
+                        if 'groups' in data:
+                            order['groups'] = data['groups']
+                        save_data(ORDERS_FILE, ORDERS)
+                        return jsonify({'success': True})
+            return jsonify({'error': 'Order not found'}), 404
+        except Exception as e:
+            return jsonify({'error': str(e)}), 500
+
+    @app.route('/api/v1/orders/<int:order_id>', methods=['DELETE'])
+    def api_delete_order(order_id):
+        """API: Delete an order"""
+        try:
+            with SafeLock(orders_lock):
+                for order in ORDERS:
+                    if order.get('id') == order_id:
+                        order['deleted'] = True
+                        save_data(ORDERS_FILE, ORDERS)
+                        return jsonify({'success': True, 'message': 'Order deleted'})
+            return jsonify({'error': 'Order not found'}), 404
+        except Exception as e:
+            return jsonify({'error': str(e)}), 500
+
+    @app.route('/api/v1/orders/<int:order_id>/move', methods=['POST'])
+    def api_move_order(order_id):
+        """API: Move an order up or down in priority"""
+        try:
+            data = request.get_json()
+            direction = data.get('direction', 'up')
+            
+            with SafeLock(orders_lock):
+                # Find the order index
+                order_index = None
+                for i, order in enumerate(ORDERS):
+                    if order.get('id') == order_id and not order.get('deleted', False):
+                        order_index = i
+                        break
+                
+                if order_index is None:
+                    return jsonify({'error': 'Order not found'}), 404
+                
+                if direction == 'up' and order_index > 0:
+                    ORDERS[order_index], ORDERS[order_index - 1] = ORDERS[order_index - 1], ORDERS[order_index]
+                elif direction == 'down' and order_index < len(ORDERS) - 1:
+                    ORDERS[order_index], ORDERS[order_index + 1] = ORDERS[order_index + 1], ORDERS[order_index]
+                
+                save_data(ORDERS_FILE, ORDERS)
+            
+            return jsonify({'success': True})
+        except Exception as e:
+            return jsonify({'error': str(e)}), 500

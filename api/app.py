@@ -73,11 +73,11 @@ app.config['LOG_DIR'] = LOG_DIR
 
 # Enable CORS for React frontend development
 CORS(app, resources={
-    r"/api/*": {"origins": ["http://localhost:5173", "http://127.0.0.1:5173"]},
-    r"/socket.io/*": {"origins": ["http://localhost:5173", "http://127.0.0.1:5173"]}
+    r"/api/*": {"origins": ["http://localhost:3000", "http://127.0.0.1:3000", "http://localhost:5173", "http://127.0.0.1:5173"]},
+    r"/socket.io/*": {"origins": ["http://localhost:3000", "http://127.0.0.1:3000", "http://localhost:5173", "http://127.0.0.1:5173"]}
 })
 
-socketio = SocketIO(app, async_mode='threading', thread_pool=executor, cors_allowed_origins=["http://localhost:5173", "http://127.0.0.1:5173"])
+socketio = SocketIO(app, async_mode='threading', thread_pool=executor, cors_allowed_origins=["http://localhost:3000", "http://127.0.0.1:3000", "http://localhost:5173", "http://127.0.0.1:5173"])
 
 # Initialize state
 initialize_state()
