@@ -1,0 +1,42 @@
+# Core Flask dependencies
+Flask>=2.2.3
+Flask-SocketIO>=5.3.3
+Werkzeug>=2.2.3
+Jinja2>=3.1.2
+MarkupSafe>=2.1.2
+itsdangerous>=2.1.2
+
+# Socket.IO and async support
+python-socketio>=5.8.0
+python-engineio>=4.4.1
+eventlet>=0.35.0
+simple-websocket>=0.10.0
+
+# HTTP and networking
+aiohttp>=3.9.0
+aiofiles>=23.2.1
+requests>=2.31.0
+urllib3>=2.0.4
+certifi>=2023.7.22
+
+# MQTT for Bambu printers
+paho-mqtt>=1.6.1
+
+# System utilities
+psutil>=5.9.5
+python-dotenv>=1.0.0
+
+# Security
+cryptography>=40.0.1
+
+# Web server
+gunicorn>=20.1.0
+
+# Additional async dependencies
+greenlet>=3.0.0
+dnspython>=2.4.2
+bidict>=0.22.1
+
+# Optional build tools (can be commented out if not building executables)
+# pyinstaller==5.13.2
+# cx-Freeze==6.15.10

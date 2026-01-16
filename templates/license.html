@@ -1,0 +1,266 @@
+{% extends "base.html" %}
+
+{% block title %}License Management - PrintQue{% endblock %}
+
+{% block extra_styles %}
+<style>
+    .status-active { background-color: #28a745; }
+    .status-inactive { background-color: #dc3545; }
+    
+    [data-theme="dark"] .status-active { 
+        background-color: #1e7e34;
+        filter: brightness(0.8);
+    }
+    
+    [data-theme="dark"] .status-inactive { 
+        background-color: #bd2130;
+        filter: brightness(0.8);
+    }
+    
+    .usage-bar {
+        height: 20px;
+        border-radius: 10px;
+        background-color: #e9ecef;
+        margin: 10px 0;
+        overflow: hidden;
+    }
+    
+    [data-theme="dark"] .usage-bar {
+        background-color: var(--bg-secondary);
+    }
+    
+    .usage-fill {
+        height: 100%;
+        background-color: #28a745;
+    }
+    .usage-warning .usage-fill {
+        background-color: #ffc107;
+    }
+    .usage-danger .usage-fill {
+        background-color: #dc3545;
+    }
+    
+    [data-theme="dark"] .usage-fill {
+        filter: brightness(0.8);
+    }
+    
+    .license-key-display {
+        font-family: monospace;
+        background-color: var(--code-bg);
+        padding: 10px;
+        border-radius: 5px;
+        border: 1px solid var(--border-color);
+        word-break: break-all;
+        color: var(--text-primary);
+    }
+    
+    .copy-button {
+        margin-left: 10px;
+        vertical-align: middle;
+    }
+    
+    .tier-card {
+        text-align: center;
+        transition: transform 0.2s;
+        background-color: var(--code-bg);
+        border: 1px solid var(--border-color);
+        color: var(--text-primary);
+    }
+    
+    .tier-card:hover {
+        transform: translateY(-5px);
+        box-shadow: 0 5px 15px var(--shadow-color);
+    }
+    
+    .tier-card.active {
+        background-color: #d1e7dd;
+        border-color: #28a745;
+        border-width: 2px;
+    }
+    
+    [data-theme="dark"] .tier-card.active {
+        background-color: #0f3013;
+        border-color: #28a745;
+        color: var(--text-primary);
+    }
+    
+    .tier-printer-count {
+        font-size: 2rem;
+        font-weight: bold;
+        margin: 10px 0;
+    }
+    
+    /* SVG icon color adjustment for dark mode */
+    [data-theme="dark"] .bi-clipboard {
+        fill: var(--text-primary);
+    }
+    
+    /* Help text styling */
+    #license_key_help {
+        color: var(--text-secondary);
+    }
+    
+    .text-muted {
+        color: var(--text-secondary) !important;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="container py-4">
+    <h1 class="mb-4">License Management</h1>
+    
+    <div class="row">
+        <div class="col-md-8">
+            <div class="card mb-4">
+                <div class="card-body">
+                    <h4 class="card-title d-flex align-items-center">
+                        <div class="status-indicator {% if license.valid %}status-active{% else %}status-inactive{% endif %}" aria-label="{% if license.valid %}Active license{% else %}Inactive license{% endif %}" data-bs-toggle="tooltip" data-bs-placement="top" title="{% if license.valid %}License is active{% else %}License is inactive{% endif %}"></div>
+                        License Status: {% if license.valid %}Active{% else %}Inactive{% endif %}
+                    </h4>
+                    
+                    <div class="row mt-4">
+                        <div class="col-md-6">
+                            <p><strong>License Tier:</strong> {{ license.tier }}</p>
+                            {% if license.customer %}
+                            <p><strong>Customer:</strong> {{ license.customer }}</p>
+                            {% endif %}
+                            {% if license.days_remaining is not none %}
+                            <p><strong>Days Remaining:</strong> {{ license.days_remaining }}</p>
+                            {% endif %}
+                        </div>
+                        <div class="col-md-6">
+                            <p><strong>Max Printers:</strong> 
+                                {% if license.max_printers == -1 %}
+                                    Unlimited
+                                {% else %}
+                                    {{ license.max_printers }}
+                                {% endif %}
+                            </p>
+                            <p><strong>Last Verified:</strong> 
+                                {% if license.last_verified %}
+                                    {{ license.last_verified.split('T')[0] if 'T' in license.last_verified else license.last_verified }}
+                                {% else %}
+                                    Never
+                                {% endif %}
+                            </p>
+                            {% if license.message %}
+                            <p><strong>Message:</strong> {{ license.message }}</p>
+                            {% endif %}
+                        </div>
+                    </div>
+                    
+                    {% if license.max_printers > 0 %}
+                    <div class="mt-3">
+                        <h5>Printer Usage</h5>
+                        <p>{{ license.current_printer_count }} of {{ license.max_printers }} printers used</p>
+                        <div class="usage-bar {% if printer_limit_percent >= 90 %}usage-danger{% elif printer_limit_percent >= 75 %}usage-warning{% endif %}">
+                            <div class="usage-fill" style="width: {% if printer_limit_percent > 100 %}100{% else %}{{ printer_limit_percent }}{% endif %}%"></div>
+                        </div>
+                    </div>
+                    {% endif %}
+                    
+                    {% if license.license_key %}
+                    <div class="mt-3">
+                        <h5>Current License Key</h5>
+                        <div class="d-flex align-items-center">
+                            <div class="license-key-display flex-grow-1">{{ license.license_key }}</div>
+                            <button class="btn btn-outline-secondary btn-sm copy-button" onclick="copyLicenseKey('{{ license.license_key }}')" title="Copy license key" aria-label="Copy license key">
+                                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" class="bi bi-clipboard" viewBox="0 0 16 16">
+                                    <path d="M4 1.5H3a2 2 0 0 0-2 2V14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V3.5a2 2 0 0 0-2-2h-1v1h1a1 1 0 0 1 1 1V14a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V3.5a1 1 0 0 1 1-1h1v-1z"/>
+                                    <path d="M9.5 1a.5.5 0 0 1 .5.5v1a.5.5 0 0 1-.5.5h-3a.5.5 0 0 1-.5-.5v-1a.5.5 0 0 1 .5-.5h3zm-3-1A1.5 1.5 0 0 0 5 1.5v1A1.5 1.5 0 0 0 6.5 4h3A1.5 1.5 0 0 0 11 2.5v-1A1.5 1.5 0 0 0 9.5 0h-3z"/>
+                                </svg>
+                            </button>
+                        </div>
+                    </div>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+        
+        <div class="col-md-4">
+            <div class="card">
+                <div class="card-body">
+                    <h4>Update License</h4>
+                    <form method="POST" action="{{ url_for('license.update_license_route') }}" aria-label="Update license form">
+                        <div class="mb-3">
+                            <label for="license_key" class="form-label">New License Key</label>
+                            <input type="text" class="form-control" id="license_key" name="license_key" placeholder="Enter license key" required aria-describedby="license_key_help">
+                            <div id="license_key_help" class="form-text">Enter a valid license key to activate or update your license.</div>
+                        </div>
+                        <button type="submit" class="btn btn-primary">Activate License</button>
+                        <a href="{{ url_for('system_info') }}" class="btn btn-info mt-2">    <i class="fas fa-info-circle"></i> Get Machine ID</a>
+                    </form>
+                    
+                    <hr class="my-4">
+                    
+                    <h5 class="text-center mb-3">License Tiers</h5>
+                    <div class="row g-2">
+                        <div class="col-6">
+                            <div class="card tier-card p-2 h-100 {% if license.tier == 'FREE' %}active{% endif %}">
+                                <h6>Free</h6>
+                                <div class="tier-printer-count">3</div>
+                                <div>Printers</div>
+                            </div>
+                        </div>
+                        <div class="col-6">
+                            <div class="card tier-card p-2 h-100 {% if license.tier == 'STANDARD' %}active{% endif %}">
+                                <h6>Standard</h6>
+                                <div class="tier-printer-count">10</div>
+                                <div>Printers</div>
+                            </div>
+                        </div>
+                        <div class="col-6">
+                            <div class="card tier-card p-2 h-100 {% if license.tier == 'PREMIUM' %}active{% endif %}">
+                                <h6>Premium</h6>
+                                <div class="tier-printer-count">20</div>
+                                <div>Printers</div>
+                            </div>
+                        </div>
+                        <div class="col-6">
+                            <div class="card tier-card p-2 h-100 {% if license.tier == 'PROFESSIONAL' %}active{% endif %}">
+                                <h6>Professional</h6>
+                                <div class="tier-printer-count">50</div>
+                                <div>Printers</div>
+                            </div>
+                        </div>
+                        <div class="col-12">
+                            <div class="card tier-card p-2 {% if license.tier == 'ENTERPRISE' %}active{% endif %}">
+                                <h6>Enterprise</h6>
+                                <div class="tier-printer-count">∞</div>
+                                <div>Unlimited Printers</div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="mt-4 text-center">
+                        <p class="text-muted">Contact support to purchase a license or for assistance.</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+    // Enable tooltips
+    document.addEventListener('DOMContentLoaded', function () {
+        var tooltipTriggerList = [].slice.call(document.querySelectorAll('[data-bs-toggle="tooltip"]'));
+        var tooltipList = tooltipTriggerList.map(function (tooltipTriggerEl) {
+            return new bootstrap.Tooltip(tooltipTriggerEl);
+        });
+    });
+
+    // Copy license key to clipboard
+    function copyLicenseKey(key) {
+        navigator.clipboard.writeText(key).then(function() {
+            alert('License key copied to clipboard!');
+        }, function(err) {
+            console.error('Failed to copy license key: ', err);
+            alert('Failed to copy license key.');
+        });
+    }
+</script>
+{% endblock %}

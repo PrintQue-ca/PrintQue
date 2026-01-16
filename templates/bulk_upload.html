@@ -1,0 +1,506 @@
+{% extends "base.html" %}
+
+{% block title %}Bulk Upload - PrintQue{% endblock %}
+
+{% block extra_styles %}
+<style>
+    .upload-section {
+        background: var(--card-bg);
+        border-radius: 12px;
+        border: 1px solid var(--border-color);
+        padding: 25px;
+        margin-bottom: 25px;
+        transition: all 0.3s ease;
+    }
+    
+    .upload-section:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 5px 15px rgba(0,0,0,0.1);
+    }
+    
+    [data-theme="dark"] .upload-section:hover {
+        box-shadow: 0 5px 15px rgba(0,0,0,0.3);
+    }
+    
+    .file-upload-area {
+        border: 2px dashed var(--border-color);
+        border-radius: 8px;
+        padding: 20px;
+        text-align: center;
+        background: var(--input-bg);
+        transition: all 0.3s ease;
+    }
+    
+    .file-upload-area:hover {
+        border-color: #007bff;
+        background: rgba(0, 123, 255, 0.05);
+    }
+    
+    .filename-note {
+        background: var(--input-bg);
+        border-radius: 6px;
+        padding: 12px;
+        font-size: 0.9em;
+        border: 1px solid var(--border-color);
+    }
+    
+    .preview-section {
+        background: var(--card-bg);
+        border-radius: 12px;
+        border: 1px solid var(--border-color);
+        padding: 20px;
+        margin-top: 20px;
+    }
+    
+    .table-responsive {
+        border-radius: 8px;
+        overflow: hidden;
+    }
+    
+    .btn-file-select {
+        background: linear-gradient(135deg, #007bff 0%, #0056b3 100%);
+        border: none;
+        padding: 12px 24px;
+        font-weight: 500;
+        transition: all 0.3s ease;
+    }
+    
+    .btn-file-select:hover {
+        transform: translateY(-1px);
+        box-shadow: 0 4px 12px rgba(0, 123, 255, 0.3);
+    }
+    
+    .status-alert {
+        border-radius: 8px;
+        border: none;
+        padding: 15px 20px;
+    }
+    
+    .badge-priority-high { background-color: #dc3545; }
+    .badge-priority-normal { background-color: #007bff; }
+    .badge-priority-low { background-color: #6c757d; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="container">
+    <!-- Page Header -->
+    <div class="dashboard-header">
+        <h5>📊 Bulk Print Jobs Upload</h5>
+        <p class="dashboard-subtitle">Upload a CSV file to queue multiple print jobs from local file paths</p>
+    </div>
+
+    <!-- File Upload Section -->
+    <div class="upload-section">
+        <h6 class="mb-3">📄 Upload Print Jobs CSV</h6>
+        <div class="file-upload-area">
+            <input type="file" class="form-control" id="printJobsFile" style="display: none;" accept=".csv,.xlsx,.xls">
+            <div class="mb-3">
+                <i class="fas fa-cloud-upload-alt" style="font-size: 48px; color: var(--text-secondary); margin-bottom: 15px;"></i>
+                <div>
+                    <button type="button" class="btn btn-primary btn-file-select" onclick="document.getElementById('printJobsFile').click()">
+                        <i class="fas fa-file-upload me-2"></i>Choose CSV File
+                    </button>
+                </div>
+                <div class="mt-2">
+                    <span id="selectedFileName" class="text-muted">No file chosen</span>
+                </div>
+            </div>
+        </div>
+        
+        <div class="filename-note mt-3">
+            <h6 class="mb-2">📋 CSV Format Requirements</h6>
+            <div class="row">
+                <div class="col-md-6">
+                    <strong>Required columns:</strong>
+                    <ul class="mb-2">
+                        <li><code>folder_path</code> - Local folder containing the print file</li>
+                        <li><code>filename</code> - Name of the print file</li>
+                        <li><code>quantity</code> - Number of copies to print</li>
+                        <li><code>printer_groups</code> - Comma-separated group names (e.g., "Default,Production,Testing")</li>
+                    </ul>
+                </div>
+                <div class="col-md-6">
+                    <strong>Optional columns:</strong>
+                    <ul class="mb-2">
+                        <li><code>ejection_folder</code> - Folder containing ejection .txt file</li>
+                        <li><code>ejection_filename</code> - Name of the ejection .txt file</li>
+                    </ul>
+                    <small class="text-muted">
+                        <strong>Ejection behavior:</strong><br>
+                        • Both columns filled = Custom ejection enabled<br>
+                        • One or both empty = Ejection disabled<br>
+                        • File not found = Ejection disabled (job continues)
+                    </small>
+                </div>
+            </div>
+        </div>
+
+        <!-- Sample CSV Download -->
+        <div class="mt-3">
+            <button type="button" class="btn btn-outline-secondary" onclick="downloadSampleCSV()">
+                <i class="fas fa-download me-2"></i>Download Sample CSV
+            </button>
+        </div>
+    </div>
+
+    <!-- Status Messages -->
+    <div id="uploadStatus"></div>
+    
+    <!-- Preview Section -->
+    <div id="previewTable"></div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.3.2/papaparse.min.js"></script>
+<script>
+        // Handle file selection
+        document.getElementById('printJobsFile').addEventListener('change', function(e) {
+            const file = e.target.files[0];
+            if (!file) return;
+            
+            document.querySelector('#selectedFileName').textContent = file.name;
+            processFile(file);
+        });
+
+        async function processFile(file) {
+            const statusDiv = document.getElementById('uploadStatus');
+            const previewDiv = document.getElementById('previewTable');
+            
+            try {
+                statusDiv.innerHTML = '<div class="alert alert-info status-alert"><i class="fas fa-spinner fa-spin me-2"></i>Processing file...</div>';
+                
+                let jobs = [];
+                
+                if (file.name.endsWith('.csv')) {
+                    const text = await file.text();
+                    const result = Papa.parse(text, { 
+                        header: true, 
+                        skipEmptyLines: true,
+                        trimHeaders: true
+                    });
+                    jobs = result.data;
+                } else {
+                    const data = await file.arrayBuffer();
+                    const workbook = XLSX.read(data);
+                    jobs = XLSX.utils.sheet_to_json(workbook.Sheets[workbook.SheetNames[0]]);
+                }
+
+                // Validate and process jobs
+                const processedJobs = validateAndProcessJobs(jobs);
+                
+                if (processedJobs.errors.length > 0) {
+                    statusDiv.innerHTML = `
+                        <div class="alert alert-warning status-alert">
+                            <i class="fas fa-exclamation-triangle me-2"></i><strong>Validation Issues:</strong>
+                            <ul class="mb-0 mt-2">
+                                ${processedJobs.errors.map(error => `<li>${error}</li>`).join('')}
+                            </ul>
+                        </div>
+                    `;
+                }
+
+                if (processedJobs.valid.length > 0) {
+                    displayPreview(processedJobs.valid);
+                    
+                    if (processedJobs.errors.length === 0) {
+                        statusDiv.innerHTML = `
+                            <div class="alert alert-success status-alert">
+                                <i class="fas fa-check-circle me-2"></i>Successfully processed ${processedJobs.valid.length} print orders
+                            </div>
+                        `;
+                    }
+                } else {
+                    previewDiv.innerHTML = '';
+                    if (processedJobs.errors.length === 0) {
+                        statusDiv.innerHTML = '<div class="alert alert-warning status-alert"><i class="fas fa-exclamation-triangle me-2"></i>No valid orders found in file</div>';
+                    }
+                }
+
+            } catch (error) {
+                statusDiv.innerHTML = `<div class="alert alert-danger status-alert"><i class="fas fa-exclamation-circle me-2"></i>Error processing file: ${error.message}</div>`;
+                previewDiv.innerHTML = '';
+            }
+        }
+
+        // 1. Updated validateAndProcessJobs function
+        function validateAndProcessJobs(jobs) {
+            const valid = [];
+            const errors = [];
+            const requiredColumns = ['folder_path', 'filename', 'quantity', 'printer_groups'];
+            const optionalColumns = ['ejection_folder', 'ejection_filename'];
+            
+            // Check if required columns exist
+            if (jobs.length > 0) {
+                const firstJob = jobs[0];
+                const missingColumns = requiredColumns.filter(col => !(col in firstJob));
+                if (missingColumns.length > 0) {
+                    errors.push(`Missing required columns: ${missingColumns.join(', ')}`);
+                    return { valid: [], errors };
+                }
+                
+                // Identify extra columns (up to 20 additional columns)
+                const allColumns = Object.keys(firstJob);
+                const systemColumns = [...requiredColumns, ...optionalColumns];
+                const extraColumns = allColumns.filter(col => !systemColumns.includes(col));
+                
+                if (extraColumns.length > 20) {
+                    errors.push(`Warning: Found ${extraColumns.length} extra columns. Only the first 20 will be preserved.`);
+                }
+                
+                console.log(`Found ${extraColumns.length} extra columns:`, extraColumns);
+            }
+            
+            jobs.forEach((job, index) => {
+                const rowNum = index + 1;
+                const jobErrors = [];
+                
+                // Validate required fields
+                if (!job.folder_path || !job.folder_path.trim()) {
+                    jobErrors.push(`Row ${rowNum}: Missing folder_path`);
+                }
+                if (!job.filename || !job.filename.trim()) {
+                    jobErrors.push(`Row ${rowNum}: Missing filename`);
+                }
+                
+                // Validate quantity
+                const quantity = parseInt(job.quantity);
+                if (isNaN(quantity) || quantity <= 0) {
+                    jobErrors.push(`Row ${rowNum}: Invalid quantity "${job.quantity}" - must be positive number`);
+                }
+                
+                // Validate printer groups
+                let printerGroups = [];
+                if (job.printer_groups) {
+                    const groupsStr = job.printer_groups.toString().trim();
+                    if (groupsStr) {
+                        printerGroups = groupsStr.split(',').map(g => g.trim()).filter(g => g.length > 0);
+                        // Validate each group name
+                        printerGroups.forEach(group => {
+                            if (!/^[\w\s-]+$/.test(group)) {
+                                jobErrors.push(`Row ${rowNum}: Invalid group name "${group}" - only letters, numbers, spaces, hyphens, and underscores allowed`);
+                            }
+                            if (group.length > 50) {
+                                jobErrors.push(`Row ${rowNum}: Group name "${group}" is too long (max 50 characters)`);
+                            }
+                        });
+                    }
+                }
+                
+                if (printerGroups.length === 0) {
+                    printerGroups = ['Default'];
+                }
+                
+                // Handle ejection settings (optional)
+                let ejectionEnabled = false;
+                let ejectionPath = null;
+                const ejectionFolder = job.ejection_folder ? job.ejection_folder.toString().trim() : '';
+                const ejectionFilename = job.ejection_filename ? job.ejection_filename.toString().trim() : '';
+                
+                if (ejectionFolder && ejectionFilename) {
+                    const pathSeparator = ejectionFolder.includes('\\') ? '\\' : '/';
+                    ejectionPath = ejectionFolder + pathSeparator + ejectionFilename;
+                    ejectionEnabled = true;
+                }
+                
+                // Capture extra data columns (up to 20)
+                const extraData = {};
+                const systemColumns = [...requiredColumns, ...optionalColumns];
+                let extraColumnCount = 0;
+                
+                for (const [key, value] of Object.entries(job)) {
+                    if (!systemColumns.includes(key) && extraColumnCount < 20) {
+                        // Store the extra column if it has a value
+                        if (value !== undefined && value !== null && value !== '') {
+                            extraData[key] = String(value);
+                            extraColumnCount++;
+                        }
+                    }
+                }
+                
+                if (jobErrors.length > 0) {
+                    errors.push(...jobErrors);
+                } else {
+                    valid.push({
+                        folder_path: job.folder_path.trim(),
+                        filename: job.filename.trim(),
+                        full_path: '', // Let backend construct this
+                        quantity: quantity,
+                        printer_groups: printerGroups,
+                        priority: 'normal',
+                        source_row: rowNum,
+                        order_index: rowNum - 1,
+                        ejection_enabled: ejectionEnabled,
+                        ejection_path: ejectionPath,
+                        ejection_folder: ejectionFolder,
+                        ejection_filename: ejectionFilename,
+                        extra_data: extraData // Include extra columns
+                    });
+                }
+            });
+            
+            return { valid, errors };
+        }
+
+        // 2. Updated displayPreview function to show extra columns
+        function displayPreview(jobs) {
+            const previewDiv = document.getElementById('previewTable');
+            
+            // Collect all unique extra data keys
+            const extraDataKeys = new Set();
+            jobs.forEach(job => {
+                if (job.extra_data) {
+                    Object.keys(job.extra_data).forEach(key => extraDataKeys.add(key));
+                }
+            });
+            
+            const extraColumns = Array.from(extraDataKeys);
+            
+            // Build table with extra columns
+            let extraColumnHeaders = '';
+            if (extraColumns.length > 0) {
+                extraColumnHeaders = extraColumns.map(col =>
+                    `<th>${escapeHtml(col)}</th>`
+                ).join('');
+            }
+            
+            const tableRows = jobs.map(job => {
+                const displayPath = `${job.folder_path}\\${job.filename}`;
+                let extraDataCells = '';
+                if (extraColumns.length > 0) {
+                    extraDataCells = extraColumns.map(col =>
+                        `<td>${escapeHtml(job.extra_data[col] || '')}</td>`
+                    ).join('');
+                }
+                
+                return `
+                    <tr>
+                        <td><code>${displayPath}</code></td>
+                        <td>${job.quantity}</td>
+                        <td><span class="badge bg-info">${job.printer_groups.join(', ')}</span></td>
+                        <td>
+                            ${job.ejection_enabled ? 
+                                `<span class="badge bg-success"><i class="fas fa-check"></i> Enabled</span>` :
+                                `<span class="badge bg-secondary"><i class="fas fa-times"></i> Disabled</span>`
+                            }
+                        </td>
+                        ${extraDataCells}
+                    </tr>
+                `;
+            }).join('');
+            
+            previewDiv.innerHTML = `
+                <div class="preview-section">
+                    <h6>Preview of ${jobs.length} print jobs to be added:</h6>
+                    <div class="table-responsive">
+                        <table class="table table-sm table-hover">
+                            <thead>
+                                <tr>
+                                    <th>File Path</th>
+                                    <th>Quantity</th>
+                                    <th>Groups</th>
+                                    <th>Ejection</th>
+                                    ${extraColumnHeaders}
+                                </tr>
+                            </thead>
+                            <tbody>${tableRows}</tbody>
+                        </table>
+                    </div>
+                    ${extraColumns.length > 0 ? 
+                        `<div class="alert alert-info mt-2">
+                            <i class="fas fa-info-circle me-2"></i>
+                            ${extraColumns.length} additional column${extraColumns.length > 1 ? 's' : ''} will be preserved: 
+                            <strong>${extraColumns.join(', ')}</strong>
+                        </div>` : ''
+                    }
+                    <button class="btn btn-success mt-3" onclick="submitPrintJobs(${JSON.stringify(jobs).replace(/"/g, '&quot;')})">
+                        <i class="fas fa-upload me-2"></i>Submit ${jobs.length} Orders
+                    </button>
+                    <button class="btn btn-secondary mt-3 ms-2" onclick="clearPreview()">
+                        <i class="fas fa-times me-2"></i>Clear
+                    </button>
+                </div>
+            `;
+        }
+        
+        // 4. Updated submitPrintJobs function to use new endpoint and handle response
+        async function submitPrintJobs(jobs) {
+            const statusDiv = document.getElementById('uploadStatus');
+            const previewDiv = document.getElementById('previewTable');
+            
+            try {
+                statusDiv.innerHTML = '<div class="alert alert-info status-alert"><i class="fas fa-spinner fa-spin me-2"></i>Submitting print jobs...</div>';
+                
+                const response = await fetch('/submit_bulk_orders', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ jobs: jobs })
+                });
+                
+                if (response.ok) {
+                    const result = await response.json();
+                    statusDiv.innerHTML = `
+                        <div class="alert alert-success status-alert">
+                            <i class="fas fa-check-circle me-2"></i>Successfully queued ${result.successful_count} print orders!
+                            ${result.failed_count > 0 ? `<br>${result.failed_count} orders failed.` : ''}
+                        </div>
+                    `;
+                    previewDiv.innerHTML = '';
+                    document.getElementById('printJobsFile').value = '';
+                    document.getElementById('selectedFileName').textContent = 'No file chosen';
+                } else {
+                    const errorData = await response.json();
+                    statusDiv.innerHTML = `<div class="alert alert-danger status-alert"><i class="fas fa-exclamation-circle me-2"></i>Error: ${errorData.error || 'Unknown error'}</div>`;
+                }
+            } catch (error) {
+                statusDiv.innerHTML = `<div class="alert alert-danger status-alert"><i class="fas fa-exclamation-circle me-2"></i>Error submitting orders: ${error.message}</div>`;
+            }
+        }
+        
+        function clearPreview() {
+            document.getElementById('previewTable').innerHTML = '';
+            document.getElementById('uploadStatus').innerHTML = '';
+        }
+
+        // Helper function to escape HTML
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        function downloadSampleCSV() {
+            const sampleData = [
+                ['folder_path', 'filename', 'quantity', 'printer_groups', 'ejection_folder', 'ejection_filename'],
+                ['C:\\MyPrintFiles', 'part1.gcode', 3, 'Default', '', ''],
+                ['C:\\MyPrintFiles', 'part2.stl', 1, 'Production,Testing', 'C:\\EjectionScripts', 'part2_eject.txt'],
+                ['D:\\Downloads\\STLs', 'bracket.stl', 5, 'Default,Production,Testing', '', ''],
+                ['C:\\MyPrintFiles', 'housing.3mf', 2, 'Testing', 'C:\\EjectionScripts', 'housing_eject.txt']
+            ];
+
+            // Properly format CSV with quoted fields that contain commas
+            const csvContent = sampleData.map(row => 
+                row.map(field => {
+                    const fieldStr = String(field);
+                    // Quote fields that contain commas, quotes, or newlines
+                    if (fieldStr.includes(',') || fieldStr.includes('"') || fieldStr.includes('\n')) {
+                        return `"${fieldStr.replace(/"/g, '""')}"`;
+                    }
+                    return fieldStr;
+                }).join(',')
+            ).join('\n');
+
+            const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+            const url = window.URL.createObjectURL(blob);
+            
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = 'sample_print_jobs.csv';
+            a.click();
+            
+            window.URL.revokeObjectURL(url);
+        }
+</script>
+{% endblock %}

@@ -1,0 +1,545 @@
+{% extends "base.html" %}
+
+{% block title %}Manage Printers - PrintQue{% endblock %}
+
+{% block extra_styles %}
+<style>
+    .filename-note { 
+        font-size: 0.85rem; 
+        color: var(--text-secondary);
+        margin-top: 5px; 
+    }
+    .printer-type-badge {
+        font-size: 0.75rem;
+        padding: 2px 8px;
+        border-radius: 3px;
+        background-color: #6c757d;
+        color: white;
+        margin-left: 5px;
+    }
+    .printer-type-badge.bambu {
+        background-color: #fd7e14;
+    }
+    .printer-type-badge.prusa {
+        background-color: #28a745;
+    }
+    
+    /* Dark mode specific styles */
+    [data-theme="dark"] .printer-type-badge {
+        filter: brightness(0.8);
+    }
+    
+    /* Table styles for dark mode */
+    [data-theme="dark"] .table {
+        color: var(--text-primary);
+    }
+    
+    [data-theme="dark"] .table thead th {
+        background-color: var(--bg-secondary);
+        color: var(--text-primary);
+        border-color: var(--border-color);
+    }
+    
+    [data-theme="dark"] .table td {
+        border-color: var(--border-color);
+    }
+    
+    /* File input styling */
+    #selectedFileName {
+        color: var(--text-secondary);
+    }
+    
+    /* Alert styling */
+    [data-theme="dark"] .alert-warning {
+        background-color: #3d3200;
+        border-color: #5c4e00;
+        color: #ffc107;
+    }
+    
+    [data-theme="dark"] .alert-danger {
+        background-color: #3d0a0a;
+        border-color: #5c1010;
+        color: #d6666f;
+    }
+    
+    [data-theme="dark"] .alert-info {
+        background-color: #002752;
+        border-color: #003d7a;
+        color: #6cb2eb;
+    }
+
+    /* Enhanced styles for template download section */
+    .format-info {
+        background: var(--bg-secondary, #f8f9fa);
+        border-radius: 8px;
+        padding: 15px;
+        border-left: 4px solid var(--bs-primary);
+    }
+
+    [data-theme="dark"] .format-info {
+        background: rgba(255, 255, 255, 0.05);
+        border-left-color: #4dabf7;
+    }
+
+    .template-download-section {
+        background: linear-gradient(135deg, rgba(0, 123, 255, 0.1) 0%, rgba(40, 167, 69, 0.1) 100%);
+        border: 1px solid rgba(0, 123, 255, 0.2);
+        border-radius: 8px;
+        margin-bottom: 20px;
+    }
+
+    [data-theme="dark"] .template-download-section {
+        background: linear-gradient(135deg, rgba(0, 123, 255, 0.05) 0%, rgba(40, 167, 69, 0.05) 100%);
+        border-color: rgba(0, 123, 255, 0.1);
+    }
+
+    .template-download-buttons .btn {
+        transition: all 0.2s ease;
+    }
+
+    .template-download-buttons .btn:hover {
+        transform: translateY(-1px);
+        box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
+    }
+
+    .printer-type-badge.prusa {
+        background-color: #28a745;
+        color: white;
+        font-weight: 600;
+    }
+
+    .printer-type-badge.bambu {
+        background-color: #fd7e14;
+        color: white;
+        font-weight: 600;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="container py-4" style="margin-top: 100px;">
+    <div class="card mb-4">
+        <div class="card-body">
+            <h5 class="card-title">Add a New Printer</h5>
+            <form method="post" action="/add_printer">
+                <div class="mb-3">
+                    <label for="printer_type" class="form-label">Printer Type</label>
+                    <select class="form-control" id="printer_type" name="printer_type" onchange="togglePrinterFields()" required>
+                        <option value="prusa">Prusa</option>
+                        <option value="bambu">Bambu</option>
+                    </select>
+                </div>
+                <div class="mb-3">
+                    <label for="name" class="form-label">Printer Name</label>
+                    <input type="text" class="form-control" id="name" name="name" required>
+                </div>
+                <div class="mb-3">
+                    <label for="ip" class="form-label">Printer IP Address</label>
+                    <input type="text" class="form-control" id="ip" name="ip" required>
+                </div>
+                
+                <div id="prusa_fields">
+                    <div class="mb-3">
+                        <label for="api_key" class="form-label">PrusaLink API Key</label>
+                        <input type="text" class="form-control" id="api_key" name="api_key">
+                    </div>
+                </div>
+                
+                <div id="bambu_fields" style="display:none;">
+                    <div class="mb-3">
+                        <label for="device_id" class="form-label">Device ID/Serial Number</label>
+                        <input type="text" class="form-control" id="device_id" name="device_id">
+                        <div class="form-text">Find this in your printer's network settings</div>
+                    </div>
+                    <div class="mb-3">
+                        <label for="access_code" class="form-label">Access Code</label>
+                        <input type="text" class="form-control" id="access_code" name="access_code" maxlength="8">
+                        <div class="form-text">8-digit code displayed on your printer's screen in LAN mode</div>
+                    </div>
+                    <div class="alert alert-info mt-3">
+                        <strong>Note:</strong> PrintQue will automatically upload files to your Bambu printer via FTP. 
+                        Files will be converted to the required <code>.gcode.3mf</code> format during upload.
+                    </div>
+                </div>
+                
+                <div class="mb-3">
+                    <label for="group" class="form-label">Printer Group</label>
+                    <input type="text" class="form-control" id="group" name="group" value="Default" 
+                           placeholder="e.g., Production, Testing, Large Format" 
+                           maxlength="50" 
+                           pattern="[\w\s-]+" 
+                           title="Only letters, numbers, spaces, hyphens and underscores allowed" 
+                           required>
+                    <div class="form-text">Group name for organizing printers (e.g., "Production", "Testing")</div>
+                </div>
+                <button type="submit" class="btn btn-primary">Add Printer</button>
+            </form>
+        </div>
+    </div>
+
+    <div class="card mb-4">
+        <div class="card-body">
+            <h5 class="card-title">Bulk Add Printers</h5>
+            
+            <div class="template-download-section">
+                <h6 class="mb-2">📋 Download CSV Templates</h6>
+                <p class="mb-3">Download pre-formatted CSV templates to ensure proper formatting for bulk printer uploads:</p>
+                <div class="d-flex gap-2 flex-wrap template-download-buttons">
+                    <button type="button" class="btn btn-outline-primary btn-sm" onclick="downloadPrusaTemplate()">
+                        <i class="fas fa-download me-1"></i>
+                        <span class="printer-type-badge prusa me-1">PRUSA</span>
+                        Prusa Template
+                    </button>
+                    <button type="button" class="btn btn-outline-primary btn-sm" onclick="downloadBambuTemplate()">
+                        <i class="fas fa-download me-1"></i>
+                        <span class="printer-type-badge bambu me-1">BAMBU</span>
+                        Bambu Template
+                    </button>
+                    <button type="button" class="btn btn-outline-secondary btn-sm" onclick="downloadMixedTemplate()">
+                        <i class="fas fa-download me-1"></i>
+                        Mixed Template (Both Types)
+                    </button>
+                </div>
+            </div>
+
+            <div class="mb-3">
+                <label class="form-label">Upload Printer List</label>
+                <div class="d-flex gap-3 align-items-center">
+                    <input type="file" class="form-control" id="printerListFile" style="display: none;" accept=".csv,.xlsx,.xls">
+                    <button type="button" class="btn btn-primary" onclick="document.getElementById('printerListFile').click()">
+                        <i class="fas fa-upload me-1"></i>Choose File
+                    </button>
+                    <span id="selectedFileName">No file chosen</span>
+                </div>
+                
+                <div class="mt-3">
+                    <div class="row">
+                        <div class="col-md-6">
+                            <div class="format-info">
+                                <h6 class="text-primary">
+                                    <span class="printer-type-badge prusa me-2">PRUSA</span>
+                                    Prusa Printer Format:
+                                </h6>
+                                <ul class="small mb-0">
+                                    <li><code>name</code> - Printer display name</li>
+                                    <li><code>ip</code> - Printer IP address</li>
+                                    <li><code>api_key</code> - PrusaLink API key</li>
+                                    <li><code>group</code> - Group name (optional, defaults to "Default")</li>
+                                    <li><code>type</code> - Must be "prusa" or leave empty</li>
+                                </ul>
+                            </div>
+                        </div>
+                        <div class="col-md-6">
+                            <div class="format-info">
+                                <h6 class="text-primary">
+                                    <span class="printer-type-badge bambu me-2">BAMBU</span>
+                                    Bambu Printer Format:
+                                </h6>
+                                <ul class="small mb-0">
+                                    <li><code>name</code> - Printer display name</li>
+                                    <li><code>ip</code> - Printer IP address</li>
+                                    <li><code>device_id</code> - Device ID/Serial Number (from printer network settings)</li>
+                                    <li><code>access_code</code> - 8-digit access code</li>
+                                    <li><code>group</code> - Group name (optional, defaults to "Default")</li>
+                                    <li><code>type</code> - Must be "bambu"</li>
+                                </ul>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <div id="uploadStatus" class="mt-3"></div>
+            <div id="previewTable" class="mt-3"></div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.5.1/socket.io.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.3.0/papaparse.min.js"></script>
+<script>
+    function togglePrinterFields() {
+        var printerType = document.getElementById('printer_type').value;
+        var prusaFields = document.getElementById('prusa_fields');
+        var bambuFields = document.getElementById('bambu_fields');
+        var apiKeyInput = document.getElementById('api_key');
+        var deviceIdInput = document.getElementById('device_id');
+        var accessCodeInput = document.getElementById('access_code');
+        
+        if (printerType === 'bambu') {
+            prusaFields.style.display = 'none';
+            bambuFields.style.display = 'block';
+            // Remove required from Prusa fields
+            apiKeyInput.removeAttribute('required');
+            // Add required to Bambu fields
+            deviceIdInput.setAttribute('required', 'required');
+            accessCodeInput.setAttribute('required', 'required');
+        } else {
+            prusaFields.style.display = 'block';
+            bambuFields.style.display = 'none';
+            // Add required to Prusa fields
+            apiKeyInput.setAttribute('required', 'required');
+            // Remove required from Bambu fields
+            deviceIdInput.removeAttribute('required');
+            accessCodeInput.removeAttribute('required');
+        }
+    }
+
+    // Template download functions
+    function downloadPrusaTemplate() {
+        const templateData = [
+            ['name', 'ip', 'api_key', 'group', 'type'],
+            ['Prusa-MK3S-01', '192.168.1.100', 'your-api-key-here', 'Default', 'prusa'],
+            ['Prusa-MK3S-02', '192.168.1.101', 'your-api-key-here', 'Production', 'prusa'],
+            ['Prusa-MINI-01', '192.168.1.102', 'your-api-key-here', 'Testing', 'prusa']
+        ];
+        
+        downloadCSVTemplate(templateData, 'prusa_printers_template.csv');
+    }
+
+    function downloadBambuTemplate() {
+        const templateData = [
+            ['name', 'ip', 'device_id', 'access_code', 'group', 'type'],
+            ['Bambu-X1C-01', '192.168.1.200', '01P00A123B456789', '12345678', 'Default', 'bambu'],
+            ['Bambu-A1-01', '192.168.1.201', '01P00A123B456790', '87654321', 'Production', 'bambu'],
+            ['Bambu-P1S-01', '192.168.1.202', '01P00A123B456791', '11223344', 'Large Format', 'bambu']
+        ];
+        
+        downloadCSVTemplate(templateData, 'bambu_printers_template.csv');
+    }
+
+    function downloadMixedTemplate() {
+        const templateData = [
+            ['name', 'ip', 'api_key', 'device_id', 'access_code', 'group', 'type'],
+            ['Prusa-MK3S-01', '192.168.1.100', 'prusa-api-key-here', '', '', 'Default', 'prusa'],
+            ['Bambu-X1C-01', '192.168.1.200', '', '01P00A123B456789', '12345678', 'Production', 'bambu'],
+            ['Prusa-MINI-01', '192.168.1.101', 'prusa-api-key-here', '', '', 'Testing', 'prusa'],
+            ['Bambu-A1-01', '192.168.1.201', '', '01P00A123B456790', '87654321', 'Large Format', 'bambu']
+        ];
+        
+        downloadCSVTemplate(templateData, 'mixed_printers_template.csv');
+    }
+
+    function downloadCSVTemplate(templateData, filename) {
+        // Properly format CSV with quoted fields that contain commas
+        const csvContent = templateData.map(row => 
+            row.map(field => {
+                const fieldStr = String(field);
+                // Quote fields that contain commas, quotes, or newlines
+                if (fieldStr.includes(',') || fieldStr.includes('"') || fieldStr.includes('\n')) {
+                    return `"${fieldStr.replace(/"/g, '""')}"`;
+                }
+                return fieldStr;
+            }).join(',')
+        ).join('\n');
+
+        const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+        const url = window.URL.createObjectURL(blob);
+        
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = filename;
+        a.click();
+        
+        window.URL.revokeObjectURL(url);
+        
+        // Show success message
+        const statusDiv = document.getElementById('uploadStatus');
+        if (statusDiv) {
+            statusDiv.innerHTML = `
+                <div class="alert alert-success alert-dismissible fade show">
+                    <i class="fas fa-check-circle me-2"></i>
+                    Template downloaded: <strong>${filename}</strong>
+                    <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+                </div>
+            `;
+            
+            // Auto-dismiss after 3 seconds
+            setTimeout(() => {
+                const alert = statusDiv.querySelector('.alert');
+                if (alert) {
+                    alert.remove();
+                }
+            }, 3000);
+        }
+    }
+
+    // Initialize on page load
+    document.addEventListener('DOMContentLoaded', function() {
+        togglePrinterFields();
+    });
+
+    document.getElementById('printerListFile').addEventListener('change', async function(e) {
+        const file = e.target.files[0];
+        if (!file) return;
+        document.getElementById('selectedFileName').textContent = file.name;
+        const statusDiv = document.getElementById('uploadStatus');
+        const previewDiv = document.getElementById('previewTable');
+        try {
+            let printers = [];
+            if (file.name.endsWith('.csv')) {
+                const text = await file.text();
+                const result = Papa.parse(text, { header: true, skipEmptyLines: true });
+                printers = result.data;
+            } else {
+                const data = await file.arrayBuffer();
+                const workbook = XLSX.read(data);
+                printers = XLSX.utils.sheet_to_json(workbook.Sheets[workbook.SheetNames[0]]);
+            }
+            
+            // Normalize column names to handle variations
+            printers = printers.map(printer => {
+                const normalized = {};
+                Object.keys(printer).forEach(key => {
+                    const lowerKey = key.toLowerCase().trim();
+                    const value = printer[key];
+                    
+                    // Map various column name formats to standard names
+                    if (lowerKey === 'name') normalized.name = value;
+                    else if (lowerKey === 'ip') normalized.ip = value;
+                    else if (lowerKey === 'api_key' || lowerKey === 'api key' || lowerKey === 'apikey') normalized.api_key = value;
+                    else if (lowerKey === 'device_id' || lowerKey === 'device id' || lowerKey === 'deviceid') normalized.device_id = value;
+                    else if (lowerKey === 'access_code' || lowerKey === 'access code' || lowerKey === 'accesscode') normalized.access_code = value;
+                    else if (lowerKey === 'group') normalized.group = value;
+                    else if (lowerKey.includes('type')) normalized.type = value ? value.toLowerCase().trim() : 'prusa';
+                });
+                return normalized;
+            });
+            
+            // Validate printers based on type
+            const errors = printers.map((printer, idx) => {
+                // Check if type is specified and valid
+                const type = printer.type ? printer.type.toLowerCase() : 'prusa';
+                
+                if (!printer.name || !printer.ip) {
+                    return `Row ${idx + 1}: Missing name or IP`;
+                }
+                
+                // For Bambu printers, ensure type is set
+                if ((printer.device_id || printer.access_code) && type !== 'bambu') {
+                    return `Row ${idx + 1}: Has Bambu fields but type is not set to 'bambu'`;
+                }
+                
+                if (type === 'prusa' && !printer.api_key) {
+                    return `Row ${idx + 1}: Missing api_key for Prusa printer`;
+                }
+                if (type === 'bambu' && (!printer.device_id || !printer.access_code)) {
+                    return `Row ${idx + 1}: Missing device_id or access_code for Bambu printer`;
+                }
+                return null;
+            }).filter(Boolean);
+            
+            if (errors.length > 0) {
+                statusDiv.innerHTML = `<div class="alert alert-danger"><h6>Validation Errors:</h6><ul>${errors.map(err => `<li>${err}</li>`).join('')}</ul></div>`;
+                previewDiv.innerHTML = '';
+                return;
+            }
+            
+            printers = printers.map(p => ({
+                ...p,
+                type: p.type || 'prusa',
+                group: p.group !== undefined ? String(p.group) : 'Default'
+            }));
+            
+            // Group printers by type for display
+            const prusaPrinters = printers.filter(p => p.type === 'prusa');
+            const bambuPrinters = printers.filter(p => p.type === 'bambu');
+            
+            let previewHTML = '<h6>Preview of printers to be added:</h6>';
+            
+            if (prusaPrinters.length > 0) {
+                previewHTML += `
+                    <h6 class="mt-3">Prusa Printers <span class="printer-type-badge prusa">PRUSA</span></h6>
+                    <table class="table table-sm">
+                        <thead><tr><th>Name</th><th>IP</th><th>API Key</th><th>Group</th></tr></thead>
+                        <tbody>${prusaPrinters.map(p => `<tr><td>${p.name}</td><td>${p.ip}</td><td>${p.api_key}</td><td>${p.group}</td></tr>`).join('')}</tbody>
+                    </table>
+                `;
+            }
+            
+            if (bambuPrinters.length > 0) {
+                previewHTML += `
+                    <h6 class="mt-3">Bambu Printers <span class="printer-type-badge bambu">BAMBU</span></h6>
+                    <table class="table table-sm">
+                        <thead><tr><th>Name</th><th>IP</th><th>Device ID/Serial Number</th><th>Access Code</th><th>Group</th></tr></thead>
+                        <tbody>${bambuPrinters.map(p => `<tr><td>${p.name}</td><td>${p.ip}</td><td>${p.device_id}</td><td>${p.access_code}</td><td>${p.group}</td></tr>`).join('')}</tbody>
+                    </table>
+                `;
+            }
+            
+            previewHTML += `
+                <button class="btn btn-success mt-3" onclick="submitPrinters()">Add ${printers.length} Printers</button>
+                <button class="btn btn-secondary mt-3 ms-2" onclick="clearPreview()">Clear</button>
+            `;
+            
+            previewDiv.innerHTML = previewHTML;
+            statusDiv.innerHTML = `<div class="alert alert-info">Ready to add ${printers.length} printers. Review the preview below and click "Add Printers" to proceed.</div>`;
+            
+            // Store printers data for submission
+            window.printersToAdd = printers;
+            
+        } catch (error) {
+            statusDiv.innerHTML = `<div class="alert alert-danger">Error parsing file: ${error.message}</div>`;
+            previewDiv.innerHTML = '';
+        }
+    });
+
+    async function submitPrinters() {
+        if (!window.printersToAdd) return;
+        
+        const statusDiv = document.getElementById('uploadStatus');
+        const previewDiv = document.getElementById('previewTable');
+        
+        try {
+            statusDiv.innerHTML = `<div class="alert alert-info">Adding printers...</div>`;
+            
+            // Map 'type' field to 'printer_type' for backend compatibility
+            const mappedPrinters = window.printersToAdd.map(p => ({
+                name: p.name,
+                ip: p.ip,
+                api_key: p.api_key,
+                device_id: p.device_id,
+                access_code: p.access_code,
+                group: p.group || 'Default',
+                printer_type: p.type || 'prusa'  // Critical fix - rename 'type' to 'printer_type'
+            }));
+            
+            const response = await fetch('/add_printers_bulk', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ printers: mappedPrinters })
+            });
+            
+            if (response.ok) {
+                const result = await response.json();
+                statusDiv.innerHTML = `
+                    <div class="alert alert-success">
+                        <i class="fas fa-check-circle me-2"></i>
+                        ${result.message}
+                    </div>
+                `;
+                previewDiv.innerHTML = '';
+                document.getElementById('printerListFile').value = '';
+                document.getElementById('selectedFileName').textContent = 'No file chosen';
+                window.printersToAdd = null;
+            } else {
+                const errorText = await response.text();
+                statusDiv.innerHTML = `<div class="alert alert-danger"><i class="fas fa-exclamation-circle me-2"></i>Error: ${errorText}</div>`;
+            }
+        } catch (error) {
+            statusDiv.innerHTML = `<div class="alert alert-danger"><i class="fas fa-exclamation-circle me-2"></i>Error: ${error.message}</div>`;
+        }
+    }
+
+    function clearPreview() {
+        document.getElementById('previewTable').innerHTML = '';
+        document.getElementById('uploadStatus').innerHTML = '';
+        document.getElementById('printerListFile').value = '';
+        document.getElementById('selectedFileName').textContent = 'No file chosen';
+        window.printersToAdd = null;
+    }
+</script>
+{% endblock %}

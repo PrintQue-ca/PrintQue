@@ -1,0 +1,189 @@
+{% extends "base.html" %}
+
+{% block title %}Support - PrintQue{% endblock %}
+
+{% block content %}
+<div class="container">
+    <div class="row justify-content-center">
+        <div class="col-lg-8 col-xl-7">
+            <div class="text-center mb-5">
+                <h1 class="display-5 fw-bold text-primary mb-3">
+                    <i class="fas fa-headset me-3"></i>Support
+                </h1>
+                <p class="lead text-muted">
+                    Need help with PrintQue? We're here to assist you.
+                </p>
+            </div>
+
+            {% if license and license.tier %}
+            <div class="alert alert-info mb-4" role="alert">
+                <div class="d-flex align-items-center">
+                    <i class="fas fa-info-circle me-2"></i>
+                    <div>
+                        <strong>Your License:</strong> {{ license.tier }}
+                        {% if license.tier in ['PROFESSIONAL', 'ENTERPRISE'] %}
+                        <span class="badge bg-success ms-2">Priority Support</span>
+                        {% endif %}
+                    </div>
+                </div>
+            </div>
+            {% endif %}
+
+            <div class="card shadow-sm">
+                <div class="card-body p-5 text-center">
+                    <i class="fas fa-envelope fa-4x text-primary mb-4"></i>
+                    <h3 class="mb-3">Contact Support</h3>
+                    <p class="lead text-muted mb-4">
+                        For any questions, issues, or assistance with PrintQue, please contact us at:
+                    </p>
+                    <div class="email-box">
+                        <h4 class="email-text">
+                            <i class="fas fa-envelope me-2"></i>
+                            info@hartleyprinting.com
+                        </h4>
+                    </div>
+                    <p class="text-muted mt-3">
+                        We typically respond within 24 hours
+                        {% if license and license.tier in ['PROFESSIONAL', 'ENTERPRISE'] %}
+                        <br><span class="badge bg-success mt-2">Priority Support: Within 12 hours</span>
+                        {% endif %}
+                    </p>
+                </div>
+            </div>
+
+            <!-- Add this after the contact support card -->
+            <div class="card shadow-sm mt-4">
+                <div class="card-body p-4">
+                    <div class="row align-items-center">
+                        <div class="col-md-8">
+                            <h5 class="mb-2">
+                                <i class="fas fa-file-download me-2"></i>System Logs
+                            </h5>
+                            <p class="text-muted mb-0">
+                                Download the last 5 minutes of system logs for troubleshooting
+                            </p>
+                        </div>
+                        <div class="col-md-4 text-md-end mt-3 mt-md-0">
+                            <a href="{{ url_for('support.download_logs') }}"
+                                class="btn btn-outline-primary"
+                                onclick="return confirmDownload()">
+                                <i class="fas fa-download me-2"></i>Download Logs
+                            </a>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="row mt-5">
+                <div class="col-md-6">
+                    <div class="card h-100 border-0 bg-light">
+                        <div class="card-body text-center p-4">
+                            <i class="fas fa-clock fa-2x text-primary mb-3"></i>
+                            <h5 class="card-title">Response Time</h5>
+                            <p class="card-text text-muted mb-0">
+                                {% if license and license.tier in ['PROFESSIONAL', 'ENTERPRISE'] %}
+                                <strong class="text-success">Priority Support:</strong><br>
+                                Within 12 hours
+                                {% else %}
+                                Typically within 24 hours
+                                {% endif %}
+                            </p>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-md-6">
+                    <div class="card h-100 border-0 bg-light">
+                        <div class="card-body text-center p-4">
+                            <i class="fas fa-globe fa-2x text-primary mb-3"></i>
+                            <h5 class="card-title">Additional Resources</h5>
+                            <p class="card-text text-muted mb-2">
+                                Visit our website for documentation and FAQs
+                            </p>
+                            <a href="https://www.printque.ca" target="_blank" class="btn btn-outline-primary btn-sm">
+                                <i class="fas fa-external-link-alt me-1"></i>
+                                Visit PrintQue.ca
+                            </a>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+        </div>
+    </div>
+</div>
+
+<style>
+    .card {
+        transition: transform 0.2s ease-in-out;
+    }
+    
+    .card:hover {
+        transform: translateY(-2px);
+    }
+    
+    .form-control:focus, .form-select:focus {
+        border-color: #0d6efd;
+        box-shadow: 0 0 0 0.25rem rgba(13, 110, 253, 0.15);
+    }
+    
+    .btn-primary {
+        background: linear-gradient(135deg, #0d6efd 0%, #0b5ed7 100%);
+        border: none;
+        transition: all 0.3s ease;
+    }
+    
+    .btn-primary:hover {
+        background: linear-gradient(135deg, #0b5ed7 0%, #0a58ca 100%);
+        transform: translateY(-1px);
+        box-shadow: 0 4px 12px rgba(13, 110, 253, 0.3);
+    }
+    
+    .alert-info {
+        background-color: #e7f3ff;
+        border-color: #b8daff;
+        color: #004085;
+    }
+    
+    .badge {
+        font-size: 0.75em;
+    }
+    
+    .bg-light {
+        background-color: #f8f9fa !important;
+    }
+    
+    .text-primary {
+        color: #0d6efd !important;
+    }
+    
+    .fa-headset, .fa-clock, .fa-globe {
+        color: #0d6efd;
+    }
+    
+    /* ADDED CUSTOM EMAIL BOX STYLES (REPLACING CONFLICTING CSS) */
+    .email-box {
+        background-color: #cfe2ff;
+        border: 1px solid #9ec5fe;
+        border-radius: 8px;
+        padding: 20px;
+        margin: 20px 0;
+    }
+    .email-text {
+        color: #084298;
+        font-weight: 600;
+        margin: 0;
+        font-size: 1.5rem;
+    }
+    .email-text i {
+        color: #084298;
+    }
+</style>
+
+<script>
+function confirmDownload() {
+    // Optional: Add a confirmation or loading indicator
+    return true; // Return true to proceed with download
+}
+</script>
+
+{% endblock %}
