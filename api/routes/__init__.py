@@ -1,5 +1,11 @@
 # API Routes Package
+import os
+import copy
+import logging
+import platform
+import json
 from flask import redirect, url_for, flash, jsonify, render_template, request, current_app
+from werkzeug.utils import secure_filename
 from .printers import register_printer_routes
 from .orders import register_order_routes
 from .system import register_misc_routes
@@ -14,10 +20,8 @@ from services.state import (
     save_data, load_data, PRINTERS_FILE, ORDERS_FILE, TOTAL_FILAMENT_FILE,
     encrypt_api_key, sanitize_group_name
 )
-from services.printer_manager import prepare_printer_data_for_broadcast, start_background_distribution
-import copy
-import logging
-import platform
+from services.printer_manager import prepare_printer_data_for_broadcast, start_background_distribution, extract_filament_from_file
+from services.default_settings import load_default_settings, save_default_settings
 
 __all__ = [
     'register_routes',
@@ -124,26 +128,40 @@ def register_routes(app, socketio):
                 total_filament_kg = filament_data.get("total_filament_used_g", 0) / 1000
             
             with ReadLock(printers_rwlock):
-                printer_stats = {
-                    'total': len(PRINTERS),
-                    'online': len([p for p in PRINTERS if p['state'] != 'OFFLINE']),
-                    'printing': len([p for p in PRINTERS if p['state'] == 'PRINTING']),
-                    'ready': len([p for p in PRINTERS if p['state'] == 'READY']),
-                    'finished': len([p for p in PRINTERS if p['state'] == 'FINISHED']),
-                }
+                printers_count = len(PRINTERS)
+                active_prints = len([p for p in PRINTERS if p['state'] == 'PRINTING'])
+                idle_printers = len([p for p in PRINTERS if p['state'] == 'READY'])
             
             with SafeLock(orders_lock):
-                order_stats = {
-                    'total': len(ORDERS),
-                    'active': len([o for o in ORDERS if not o.get('deleted', False)]),
-                    'pending': len([o for o in ORDERS if o.get('status') == 'pending' and not o.get('deleted', False)]),
-                    'fulfilled': len([o for o in ORDERS if o.get('sent', 0) >= o.get('quantity', 1) and not o.get('deleted', False)]),
-                }
+                # Library count: total available files (non-deleted orders)
+                library_count = len([o for o in ORDERS if not o.get('deleted', False)])
+                # In queue: orders actively being printed (sent > 0 but not complete)
+                in_queue_count = len([
+                    o for o in ORDERS 
+                    if not o.get('deleted', False)
+                    and o.get('sent', 0) > 0 
+                    and o.get('sent', 0) < o.get('quantity', 1)
+                ])
+                # Count orders completed today
+                from datetime import datetime
+                today = datetime.now().date()
+                completed_today = len([
+                    o for o in ORDERS 
+                    if o.get('sent', 0) >= o.get('quantity', 1) 
+                    and not o.get('deleted', False)
+                    and o.get('completed_at') 
+                    and datetime.fromisoformat(o.get('completed_at', '').replace('Z', '+00:00')).date() == today
+                ])
             
+            # Return flat structure matching frontend Stats type
             return jsonify({
-                'printers': printer_stats,
-                'orders': order_stats,
-                'filament': {'total_kg': total_filament_kg}
+                'total_filament': total_filament_kg,
+                'printers_count': printers_count,
+                'library_count': library_count,
+                'in_queue_count': in_queue_count,
+                'active_prints': active_prints,
+                'idle_printers': idle_printers,
+                'completed_today': completed_today
             })
         except Exception as e:
             logging.error(f"Error in api_system_stats: {str(e)}")
@@ -382,6 +400,96 @@ def register_routes(app, socketio):
             logging.error(f"Error in api_get_orders: {str(e)}")
             return jsonify({'error': str(e)}), 500
 
+    @app.route('/api/v1/orders', methods=['POST'])
+    def api_create_order():
+        """API: Create a new order"""
+        try:
+            file = request.files.get('file')
+            if not file:
+                return jsonify({'error': 'No file provided'}), 400
+            
+            # Validate file type
+            filename = secure_filename(file.filename)
+            valid_extensions = ['.gcode', '.3mf', '.stl']
+            if not any(filename.lower().endswith(ext) for ext in valid_extensions):
+                return jsonify({'error': 'Invalid file type. Must be .gcode, .3mf, or .stl'}), 400
+            
+            quantity = int(request.form.get('quantity', 1))
+            
+            # Handle groups - can be JSON string or list
+            groups_raw = request.form.get('groups', '[]')
+            try:
+                groups = json.loads(groups_raw) if groups_raw else []
+            except json.JSONDecodeError:
+                groups = [groups_raw] if groups_raw else []
+            
+            # Sanitize group names  
+            groups = [sanitize_group_name(str(g)) for g in groups if g]
+            if not groups:
+                groups = ['Default']
+            
+            # Load default settings
+            default_settings = load_default_settings()
+            
+            # Handle ejection settings
+            ejection_enabled = request.form.get('ejection_enabled', 'false').lower() == 'true'
+            end_gcode = request.form.get('end_gcode', '').strip()
+            
+            # Use default if ejection enabled but no custom gcode provided
+            if ejection_enabled and not end_gcode:
+                end_gcode = default_settings.get('default_end_gcode', '')
+            
+            # Save file
+            upload_folder = current_app.config.get('UPLOAD_FOLDER', 'uploads')
+            os.makedirs(upload_folder, exist_ok=True)
+            filepath = os.path.join(upload_folder, filename)
+            file.save(filepath)
+            
+            # Extract filament usage
+            filament_g = extract_filament_from_file(filepath)
+            
+            with SafeLock(orders_lock):
+                # Find next available ID
+                existing_int_ids = []
+                for order in ORDERS:
+                    try:
+                        int_id = int(order['id'])
+                        existing_int_ids.append(int_id)
+                    except (ValueError, TypeError):
+                        pass
+                
+                order_id = max(existing_int_ids, default=0) + 1
+                
+                order = {
+                    'id': order_id,
+                    'filename': filename,
+                    'filepath': filepath,
+                    'quantity': quantity,
+                    'sent': 0,
+                    'status': 'pending',
+                    'filament_g': filament_g,
+                    'groups': groups,
+                    'ejection_enabled': ejection_enabled,
+                    'end_gcode': end_gcode,
+                    'from_new_orders': True
+                }
+                ORDERS.append(order)
+                save_data(ORDERS_FILE, ORDERS)
+                logging.info(f"API: Created order {order_id}: {filename}, qty={quantity}, ejection={ejection_enabled}")
+            
+            # Trigger distribution
+            start_background_distribution(socketio, app)
+            
+            return jsonify({
+                'success': True,
+                'message': f'Order created for {quantity} print(s) of {filename}',
+                'order_id': order_id
+            })
+            
+        except Exception as e:
+            logging.error(f"Error creating order via API: {str(e)}")
+            return jsonify({'error': str(e)}), 500
+
     @app.route('/api/v1/orders/<int:order_id>', methods=['GET'])
     def api_get_order(order_id):
         """API: Get a specific order"""
@@ -453,4 +561,49 @@ def register_routes(app, socketio):
             
             return jsonify({'success': True})
         except Exception as e:
+            return jsonify({'error': str(e)}), 500
+
+    # Default ejection settings routes
+    @app.route('/api/v1/settings/default-ejection', methods=['GET'])
+    def api_get_default_ejection():
+        """API: Get default ejection settings"""
+        try:
+            settings = load_default_settings()
+            return jsonify({
+                'ejection_enabled': settings.get('default_ejection_enabled', False),
+                'end_gcode': settings.get('default_end_gcode', '')
+            })
+        except Exception as e:
+            logging.error(f"Error getting default ejection settings: {str(e)}")
+            return jsonify({'error': str(e)}), 500
+
+    @app.route('/api/v1/settings/default-ejection', methods=['POST'])
+    def api_save_default_ejection():
+        """API: Save default ejection settings"""
+        try:
+            data = request.get_json()
+            
+            # Load current settings
+            current_settings = load_default_settings()
+            
+            # Update settings
+            if 'ejection_enabled' in data:
+                current_settings['default_ejection_enabled'] = bool(data['ejection_enabled'])
+            if 'end_gcode' in data:
+                current_settings['default_end_gcode'] = data['end_gcode'].strip()
+            
+            # Save settings
+            success = save_default_settings(current_settings)
+            
+            if success:
+                logging.info(f"API: Saved default ejection settings: enabled={current_settings.get('default_ejection_enabled')}")
+                return jsonify({
+                    'success': True,
+                    'message': 'Default ejection settings saved'
+                })
+            else:
+                return jsonify({'error': 'Failed to save settings'}), 500
+                
+        except Exception as e:
+            logging.error(f"Error saving default ejection settings: {str(e)}")
             return jsonify({'error': str(e)}), 500

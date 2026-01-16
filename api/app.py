@@ -1,9 +1,12 @@
+# Monkey-patch for eventlet - MUST be at the very top before other imports
+import eventlet
+eventlet.monkey_patch()
+
 import os
 import uuid
 from flask import Flask, send_from_directory
 from flask_socketio import SocketIO
 from flask_cors import CORS
-from concurrent.futures import ThreadPoolExecutor
 from routes import register_routes
 from services.state import initialize_state
 from services.printer_manager import start_background_tasks, close_connection_pool, get_minutes_since_finished
@@ -58,9 +61,6 @@ def verify_license():
     logging.info(f"Max printers: {license_info['max_printers']}")
     return license_info
 
-# Create a custom thread pool
-executor = ThreadPoolExecutor(max_workers=20)
-
 # Initialize the app with static and templates folders
 static_folder = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'static')
 template_folder = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'templates')
@@ -77,7 +77,7 @@ CORS(app, resources={
     r"/socket.io/*": {"origins": ["http://localhost:3000", "http://127.0.0.1:3000", "http://localhost:5173", "http://127.0.0.1:5173"]}
 })
 
-socketio = SocketIO(app, async_mode='threading', thread_pool=executor, cors_allowed_origins=["http://localhost:3000", "http://127.0.0.1:3000", "http://localhost:5173", "http://127.0.0.1:5173"])
+socketio = SocketIO(app, async_mode='eventlet', cors_allowed_origins=["http://localhost:3000", "http://127.0.0.1:3000", "http://localhost:5173", "http://127.0.0.1:5173"])
 
 # Initialize state
 initialize_state()
@@ -186,4 +186,4 @@ if __name__ == '__main__':
 
     # Run the Flask app
     # Added app.config['DEBUG'] for the debug flag
-    socketio.run(app, host='0.0.0.0', port=Config.PORT, debug=app.config['DEBUG'], allow_unsafe_werkzeug=True)
+    socketio.run(app, host='0.0.0.0', port=Config.PORT, debug=app.config.get('DEBUG', False))
