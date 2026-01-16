@@ -1,20 +1,24 @@
+# Monkey-patch for eventlet - MUST be at the very top before other imports
+import eventlet
+eventlet.monkey_patch()
+
 import os
 import uuid
 from flask import Flask, send_from_directory
 from flask_socketio import SocketIO
-from concurrent.futures import ThreadPoolExecutor
+from flask_cors import CORS
 from routes import register_routes
-from state import initialize_state
-from printer_manager import start_background_tasks, close_connection_pool, get_minutes_since_finished
-from config import Config
+from services.state import initialize_state
+from services.printer_manager import start_background_tasks, close_connection_pool, get_minutes_since_finished
+from utils.config import Config
 import asyncio
 import logging
-from license_validator import verify_license_startup
+from utils.license_validator import verify_license_startup
 import webbrowser
 import threading
 import time
 import atexit
-from console_capture import console_capture # Added import
+from utils.console_capture import console_capture
 
 # Set up logging to a user-writable directory
 LOG_DIR = os.path.join(os.getenv('DATA_DIR', os.path.expanduser("~")), "PrintQueData")
@@ -57,19 +61,23 @@ def verify_license():
     logging.info(f"Max printers: {license_info['max_printers']}")
     return license_info
 
-# Create a custom thread pool
-executor = ThreadPoolExecutor(max_workers=20)
-
-# Initialize the app with static folder
+# Initialize the app with static and templates folders
 static_folder = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'static')
+template_folder = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'templates')
 os.makedirs(static_folder, exist_ok=True)
 
-app = Flask(__name__, static_folder=static_folder, static_url_path='/static')
+app = Flask(__name__, static_folder=static_folder, static_url_path='/static', template_folder=template_folder)
 app.config['SECRET_KEY'] = Config.SECRET_KEY
 app.config['UPLOAD_FOLDER'] = os.path.join(LOG_DIR, "uploads")  # Writable upload folder
 app.config['LOG_DIR'] = LOG_DIR
 
-socketio = SocketIO(app, async_mode='threading', thread_pool=executor)
+# Enable CORS for React frontend development
+CORS(app, resources={
+    r"/api/*": {"origins": ["http://localhost:3000", "http://127.0.0.1:3000", "http://localhost:5173", "http://127.0.0.1:5173"]},
+    r"/socket.io/*": {"origins": ["http://localhost:3000", "http://127.0.0.1:3000", "http://localhost:5173", "http://127.0.0.1:5173"]}
+})
+
+socketio = SocketIO(app, async_mode='eventlet', cors_allowed_origins=["http://localhost:3000", "http://127.0.0.1:3000", "http://localhost:5173", "http://127.0.0.1:5173"])
 
 # Initialize state
 initialize_state()
@@ -178,4 +186,4 @@ if __name__ == '__main__':
 
     # Run the Flask app
     # Added app.config['DEBUG'] for the debug flag
-    socketio.run(app, host='0.0.0.0', port=Config.PORT, debug=app.config['DEBUG'], allow_unsafe_werkzeug=True)
+    socketio.run(app, host='0.0.0.0', port=Config.PORT, debug=app.config.get('DEBUG', False))

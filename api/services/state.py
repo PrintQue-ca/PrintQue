@@ -5,7 +5,7 @@ import threading
 import logging
 import time
 from cryptography.fernet import Fernet
-from config import Config
+from utils.config import Config
 import copy
 import uuid
 import paho.mqtt.client as mqtt
@@ -1049,7 +1049,7 @@ def initialize_state():
     logger.debug(f"State initialized: {len(PRINTERS)} printers, {len(ORDERS)} orders, {TOTAL_FILAMENT_CONSUMPTION}g filament, ejection_paused={EJECTION_PAUSED}")
     
     # Initialize Bambu connections
-    from bambu_handler import connect_bambu_printer
+    from services.bambu_handler import connect_bambu_printer
     for printer in PRINTERS:
         if printer.get('type') == 'bambu':
             try:
@@ -1140,7 +1140,7 @@ threading.Thread(target=reap_threads, daemon=True).start()
 
 def cleanup_mqtt_connections():
     """Clean up MQTT connections on shutdown"""
-    from bambu_handler import disconnect_all_bambu_printers
+    from services.bambu_handler import disconnect_all_bambu_printers
     try:
         disconnect_all_bambu_printers()
     except Exception as e:

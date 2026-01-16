@@ -1,5 +1,5 @@
 from flask import Blueprint, render_template, request, flash, redirect, url_for, jsonify, current_app
-from license_validator import get_license_info, update_license
+from utils.license_validator import get_license_info, update_license
 
 # Create a Blueprint for license-related routes
 license_bp = Blueprint('license', __name__, url_prefix='/license')
@@ -32,7 +32,7 @@ def license_page():
         expires_at_str = "N/A"
     
     # Add printer usage information
-    from state import PRINTERS, printers_rwlock, ReadLock
+    from services.state import PRINTERS, printers_rwlock, ReadLock
     with ReadLock(printers_rwlock):
         current_printer_count = len(PRINTERS)
     

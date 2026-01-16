@@ -11,9 +11,9 @@ import time
 import threading
 from datetime import datetime
 from typing import Dict, Any, Optional, Tuple
-from state import MQTT_CLIENTS, logging, encrypt_api_key, decrypt_api_key
-from config import Config
-from bambu_ftp import upload_to_bambu, prepare_gcode_for_bambu
+from services.state import MQTT_CLIENTS, logging, encrypt_api_key, decrypt_api_key
+from utils.config import Config
+from services.bambu_ftp import upload_to_bambu, prepare_gcode_for_bambu
 
 # Bambu Lab CA Certificate
 BAMBU_CA_CERT = """-----BEGIN CERTIFICATE-----
@@ -238,7 +238,7 @@ def on_disconnect(client, userdata, rc):
 
 def reconnect_bambu_printer(printer_name: str) -> None:
     """Attempt to reconnect a Bambu printer"""
-    from state import PRINTERS, printers_rwlock, ReadLock
+    from services.state import PRINTERS, printers_rwlock, ReadLock
     
     with ReadLock(printers_rwlock):
         printer = next((p for p in PRINTERS if p['name'] == printer_name and p.get('type') == 'bambu'), None)
@@ -1029,7 +1029,7 @@ def maintain_bambu_connections():
                 if not check_bambu_connection(printer_name):
                     logging.info(f"Bambu printer {printer_name} connection lost, attempting reconnect")
                     # Get printer info from state
-                    from state import PRINTERS, printers_rwlock, ReadLock
+                    from services.state import PRINTERS, printers_rwlock, ReadLock
                     with ReadLock(printers_rwlock):
                         printer = next((p for p in PRINTERS if p['name'] == printer_name), None)
                     

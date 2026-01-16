@@ -9,34 +9,34 @@ import re
 from datetime import datetime
 import tempfile
 from threading import Lock
-from state import (
+from services.state import (
     PRINTERS_FILE, TOTAL_FILAMENT_FILE, ORDERS_FILE,
     PRINTERS, TOTAL_FILAMENT_CONSUMPTION, ORDERS,
     save_data, load_data, encrypt_api_key, decrypt_api_key,
     logging, orders_lock, filament_lock, printers_rwlock, SafeLock, ReadLock, WriteLock,
     get_order_lock, acquire_locks, increment_order_sent_count,
     reconcile_order_counts, create_print_transaction, update_print_transaction, get_print_transaction,
-    get_ejection_paused,  # Import the ejection state function
+    get_ejection_paused,
     set_printer_ejection_state, get_printer_ejection_state, clear_printer_ejection_state,
     is_ejection_in_progress_enhanced, get_ejection_lock, release_ejection_lock
 )
-from config import Config
-from retry_utils import retry_async
+from utils.config import Config
+from utils.retry_utils import retry_async
 from contextlib import asynccontextmanager
 import copy
-from logger import (
+from utils.logger import (
     log_state_transition,
     log_distribution_event,
     log_job_lifecycle,
     log_api_poll_event,
     log_manual_action
 )
-# Bambu printer support - UPDATED IMPORT
-from bambu_handler import (
+# Bambu printer support
+from services.bambu_handler import (
     connect_bambu_printer, get_bambu_status, send_bambu_print_command,
     stop_bambu_print, pause_bambu_print, resume_bambu_print,
-    send_bambu_ejection_gcode,  # Add this import
-    BAMBU_PRINTER_STATES, bambu_states_lock  # Import the Bambu states
+    send_bambu_ejection_gcode,
+    BAMBU_PRINTER_STATES, bambu_states_lock
 )
 
 thread_local = threading.local()
@@ -624,7 +624,7 @@ async def close_connection_pool():
             logging.error(f"Error closing connection pool: {e}")
     
     # Clean up Bambu MQTT connections
-    from state import cleanup_mqtt_connections
+    from services.state import cleanup_mqtt_connections
     cleanup_mqtt_connections()
 
 async def async_send_ejection_gcode(session, printer, headers, ejection_url, gcode_content, gcode_file_name):
@@ -1600,7 +1600,7 @@ async def get_printer_status_async(socketio, app, batch_index=None, batch_size=N
                 # Method 4: Bambu-specific detection
                 elif printer_type == 'bambu':
                     try:
-                        from bambu_handler import BAMBU_PRINTER_STATES, bambu_states_lock
+                        from services.bambu_handler import BAMBU_PRINTER_STATES, bambu_states_lock
                         with bambu_states_lock:
                             if printer_name in BAMBU_PRINTER_STATES:
                                 bambu_state = BAMBU_PRINTER_STATES[printer_name]
@@ -2443,7 +2443,7 @@ def detect_ejection_completion(printer, api_state, current_api_file):
     # Method 3: Bambu-specific completion detection
     if printer.get('type') == 'bambu':
         try:
-            from bambu_handler import BAMBU_PRINTER_STATES, bambu_states_lock
+            from services.bambu_handler import BAMBU_PRINTER_STATES, bambu_states_lock
             with bambu_states_lock:
                 if printer_name in BAMBU_PRINTER_STATES:
                     bambu_state = BAMBU_PRINTER_STATES[printer_name]
