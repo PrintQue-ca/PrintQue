@@ -36,6 +36,11 @@ total_filament.json
 # Keep default_settings.json
 !default_settings.json
 
+# Keep package.json and package-lock.json
+!package.json
+!package-lock.json
+!tsconfig.json
+
 # OS
 .DS_Store
 Thumbs.db
@@ -43,3 +48,14 @@ Thumbs.db
 # Temporary files
 *.tmp
 *.bak
+
+# Node.js
+node_modules/
+*.local
+.env
+.nitro
+.tanstack
+.wrangler
+.output
+.vinxi
+dist-ssr/
