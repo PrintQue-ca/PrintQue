@@ -28,13 +28,21 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Input } from '@/components/ui/input'
-import { GripVertical, Trash2, Plus, Minus } from 'lucide-react'
+import { GripVertical, Trash2, Plus, Minus, Zap, ZapOff } from 'lucide-react'
 import type { Order } from '@/types'
-import { useDeleteOrder, useReorderOrder, useUpdateQuantity } from '@/hooks'
+import { useDeleteOrder, useReorderOrder, useUpdateQuantity, useUpdateOrderEjection, useEjectionCodes } from '@/hooks'
 import { useState, useEffect } from 'react'
+import { toast } from 'sonner'
 
 interface OrdersTableProps {
   orders: Order[]
@@ -99,6 +107,8 @@ export function OrdersTable({ orders }: OrdersTableProps) {
   const deleteOrder = useDeleteOrder()
   const reorderOrder = useReorderOrder()
   const updateQuantity = useUpdateQuantity()
+  const updateOrderEjection = useUpdateOrderEjection()
+  const { data: ejectionCodes } = useEjectionCodes()
   const [editingQuantity, setEditingQuantity] = useState<number | null>(null)
   const [quantityValue, setQuantityValue] = useState<number>(0)
   
@@ -109,6 +119,47 @@ export function OrdersTable({ orders }: OrdersTableProps) {
   useEffect(() => {
     setLocalOrders(orders)
   }, [orders])
+
+  const handleEjectionChange = async (orderId: number, codeId: string, currentOrder: Order) => {
+    try {
+      let ejectionEnabled = true
+      let ejectionCodeId: string | undefined = undefined
+      let ejectionCodeName: string | undefined = undefined
+      let endGcode: string | undefined = undefined
+
+      if (codeId === 'none') {
+        ejectionEnabled = false
+        ejectionCodeName = undefined
+        endGcode = ''
+      } else if (codeId === 'custom') {
+        // Keep current gcode, just mark as custom
+        ejectionCodeName = 'Custom'
+        endGcode = currentOrder.end_gcode
+      } else {
+        // Find the selected ejection code
+        const selectedCode = ejectionCodes?.find(code => code.id === codeId)
+        if (selectedCode) {
+          ejectionCodeId = selectedCode.id
+          ejectionCodeName = selectedCode.name
+          endGcode = selectedCode.gcode
+        }
+      }
+
+      await updateOrderEjection.mutateAsync({
+        id: orderId,
+        ejectionEnabled,
+        ejectionCodeId,
+        ejectionCodeName,
+        endGcode
+      })
+      
+      toast.success(ejectionEnabled 
+        ? `Ejection set to "${ejectionCodeName}"` 
+        : 'Ejection disabled')
+    } catch {
+      toast.error('Failed to update ejection settings')
+    }
+  }
 
   const sensors = useSensors(
     useSensor(PointerSensor, {
@@ -173,12 +224,24 @@ export function OrdersTable({ orders }: OrdersTableProps) {
       ),
     }),
     columnHelper.accessor('filename', {
-      header: 'File',
-      cell: (info) => (
-        <span className="truncate max-w-[200px] block" title={info.getValue()}>
-          {info.getValue()}
-        </span>
-      ),
+      header: 'Name',
+      cell: (info) => {
+        const name = info.row.original.name
+        const filename = info.getValue()
+        const displayName = name || filename
+        return (
+          <div className="flex flex-col">
+            <span className="truncate max-w-[200px] block" title={displayName}>
+              {displayName}
+            </span>
+            {name && (
+              <span className="text-xs text-muted-foreground truncate max-w-[200px] block" title={filename}>
+                {filename}
+              </span>
+            )}
+          </div>
+        )
+      },
     }),
     columnHelper.accessor('quantity', {
       header: 'Qty',
@@ -254,6 +317,82 @@ export function OrdersTable({ orders }: OrdersTableProps) {
               </Badge>
             ))}
           </div>
+        )
+      },
+    }),
+    columnHelper.display({
+      id: 'ejection',
+      header: 'Ejection',
+      cell: (info) => {
+        const order = info.row.original
+        const isEnabled = order.ejection_enabled
+        const codeName = order.ejection_code_name
+        const codeId = order.ejection_code_id
+        
+        // Determine current value for select
+        let currentValue = 'none'
+        if (isEnabled) {
+          if (codeId && ejectionCodes?.find(c => c.id === codeId)) {
+            currentValue = codeId
+          } else if (codeName === 'Custom' || (!codeId && order.end_gcode)) {
+            currentValue = 'custom'
+          } else {
+            currentValue = 'custom'
+          }
+        }
+
+        return (
+          <Select
+            value={currentValue}
+            onValueChange={(value) => handleEjectionChange(order.id, value, order)}
+          >
+            <SelectTrigger className="w-[130px] h-8 text-xs">
+              <SelectValue>
+                <span className="flex items-center gap-1">
+                  {isEnabled ? (
+                    <>
+                      <Zap className="h-3 w-3 text-yellow-500" />
+                      <span className="truncate">{codeName || 'Custom'}</span>
+                    </>
+                  ) : (
+                    <>
+                      <ZapOff className="h-3 w-3 text-muted-foreground" />
+                      <span>Off</span>
+                    </>
+                  )}
+                </span>
+              </SelectValue>
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="none">
+                <span className="flex items-center gap-2">
+                  <ZapOff className="h-3 w-3" />
+                  Off
+                </span>
+              </SelectItem>
+              <SelectItem value="custom">
+                <span className="flex items-center gap-2">
+                  <Zap className="h-3 w-3" />
+                  Custom
+                </span>
+              </SelectItem>
+              {ejectionCodes && ejectionCodes.length > 0 && (
+                <>
+                  <div className="px-2 py-1 text-xs font-semibold text-muted-foreground border-t mt-1">
+                    Saved Codes
+                  </div>
+                  {ejectionCodes.map((code) => (
+                    <SelectItem key={code.id} value={code.id}>
+                      <span className="flex items-center gap-2">
+                        <Zap className="h-3 w-3" />
+                        {code.name}
+                      </span>
+                    </SelectItem>
+                  ))}
+                </>
+              )}
+            </SelectContent>
+          </Select>
         )
       },
     }),

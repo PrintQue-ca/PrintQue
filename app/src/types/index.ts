@@ -37,6 +37,7 @@ export type OrderStatus = 'active' | 'completed' | 'paused'
 export interface Order {
   id: number
   filename: string
+  name?: string  // Optional custom name for the order
   quantity: number
   sent: number
   priority: number
@@ -44,6 +45,10 @@ export interface Order {
   status: OrderStatus
   created_at?: string
   filepath?: string
+  ejection_enabled?: boolean
+  ejection_code_id?: string  // Reference to saved ejection code
+  ejection_code_name?: string  // Name of the ejection code (for display)
+  end_gcode?: string  // The actual G-code content
 }
 
 export interface OrderFormData {
@@ -85,6 +90,16 @@ export interface License {
 export interface EjectionStatus {
   paused: boolean
   status: 'paused' | 'active'
+}
+
+// Ejection Code (stored G-code preset for auto-ejection)
+export interface EjectionCode {
+  id: string
+  name: string
+  gcode: string
+  source_filename?: string
+  created_at: string
+  updated_at?: string
 }
 
 // API Response types

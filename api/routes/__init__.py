@@ -12,6 +12,7 @@ from .system import register_misc_routes
 from .license import register_license_routes
 from .support import register_support_routes
 from .history import register_history_routes
+from .ejection_codes import register_ejection_codes_routes
 from services.state import (
     get_ejection_paused, set_ejection_paused,
     PRINTERS, ORDERS, TOTAL_FILAMENT_CONSUMPTION,
@@ -31,6 +32,7 @@ __all__ = [
     'register_license_routes',
     'register_support_routes',
     'register_history_routes',
+    'register_ejection_codes_routes',
 ]
 
 def register_routes(app, socketio):
@@ -40,6 +42,7 @@ def register_routes(app, socketio):
     register_license_routes(app, socketio)
     register_support_routes(app, socketio)
     register_history_routes(app, socketio)
+    register_ejection_codes_routes(app, socketio)
     
     # Ejection control routes
     @app.route('/pause_ejection', methods=['POST'])
@@ -441,6 +444,9 @@ def register_routes(app, socketio):
             
             quantity = int(request.form.get('quantity', 1))
             
+            # Handle optional order name
+            order_name = request.form.get('name', '').strip()
+            
             # Handle groups - can be JSON string or list
             groups_raw = request.form.get('groups', '[]')
             try:
@@ -459,6 +465,8 @@ def register_routes(app, socketio):
             # Handle ejection settings
             ejection_enabled = request.form.get('ejection_enabled', 'false').lower() == 'true'
             end_gcode = request.form.get('end_gcode', '').strip()
+            ejection_code_id = request.form.get('ejection_code_id', '').strip() or None
+            ejection_code_name = request.form.get('ejection_code_name', '').strip() or None
             
             # Use default if ejection enabled but no custom gcode provided
             if ejection_enabled and not end_gcode:
@@ -488,6 +496,7 @@ def register_routes(app, socketio):
                 order = {
                     'id': order_id,
                     'filename': filename,
+                    'name': order_name if order_name else None,
                     'filepath': filepath,
                     'quantity': quantity,
                     'sent': 0,
@@ -495,12 +504,14 @@ def register_routes(app, socketio):
                     'filament_g': filament_g,
                     'groups': groups,
                     'ejection_enabled': ejection_enabled,
+                    'ejection_code_id': ejection_code_id,
+                    'ejection_code_name': ejection_code_name,
                     'end_gcode': end_gcode,
                     'from_new_orders': True
                 }
                 ORDERS.append(order)
                 save_data(ORDERS_FILE, ORDERS)
-                logging.info(f"API: Created order {order_id}: {filename}, qty={quantity}, ejection={ejection_enabled}")
+                logging.info(f"API: Created order {order_id}: {order_name or filename}, qty={quantity}, ejection={ejection_enabled}")
             
             # Trigger distribution
             start_background_distribution(socketio, app)
@@ -539,6 +550,8 @@ def register_routes(app, socketio):
                             order['quantity'] = int(data['quantity'])
                         if 'groups' in data:
                             order['groups'] = data['groups']
+                        if 'name' in data:
+                            order['name'] = data['name'].strip() if data['name'] else None
                         save_data(ORDERS_FILE, ORDERS)
                         return jsonify({'success': True})
             return jsonify({'error': 'Order not found'}), 404
@@ -557,6 +570,30 @@ def register_routes(app, socketio):
                         return jsonify({'success': True, 'message': 'Order deleted'})
             return jsonify({'error': 'Order not found'}), 404
         except Exception as e:
+            return jsonify({'error': str(e)}), 500
+
+    @app.route('/api/v1/orders/<int:order_id>/ejection', methods=['PATCH'])
+    def api_update_order_ejection(order_id):
+        """API: Update order ejection settings"""
+        try:
+            data = request.get_json()
+            with SafeLock(orders_lock):
+                for order in ORDERS:
+                    if order.get('id') == order_id:
+                        if 'ejection_enabled' in data:
+                            order['ejection_enabled'] = bool(data['ejection_enabled'])
+                        if 'ejection_code_id' in data:
+                            order['ejection_code_id'] = data['ejection_code_id']
+                        if 'ejection_code_name' in data:
+                            order['ejection_code_name'] = data['ejection_code_name']
+                        if 'end_gcode' in data:
+                            order['end_gcode'] = data['end_gcode']
+                        save_data(ORDERS_FILE, ORDERS)
+                        logging.info(f"Updated ejection settings for order {order_id}: enabled={order.get('ejection_enabled')}, code={order.get('ejection_code_name')}")
+                        return jsonify({'success': True, 'order': order})
+            return jsonify({'error': 'Order not found'}), 404
+        except Exception as e:
+            logging.error(f"Error updating order ejection: {str(e)}")
             return jsonify({'error': str(e)}), 500
 
     @app.route('/api/v1/orders/<int:order_id>/move', methods=['POST'])

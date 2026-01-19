@@ -32,11 +32,13 @@ USER_DATA_DIR = LOG_DIR  # Use the same directory for consistency
 PRINTERS_FILE = os.path.join(LOG_DIR, "printers.json")
 TOTAL_FILAMENT_FILE = os.path.join(LOG_DIR, "total_filament.json")
 ORDERS_FILE = os.path.join(LOG_DIR, "orders.json")
+EJECTION_CODES_FILE = os.path.join(LOG_DIR, "ejection_codes.json")
 
 # Global state variables
 PRINTERS = []
 TOTAL_FILAMENT_CONSUMPTION = 0
 ORDERS = []
+EJECTION_CODES = []  # List of stored ejection code presets
 _STATE_INITIALIZED = False  # ← ADDED THIS LINE
 
 # Global ejection control
@@ -95,7 +97,8 @@ LOCK_ACQUISITION_ORDER = {
     "lock_owners_lock": 7,
     "print_transactions_lock": 8,
     "ejection_states_lock": 9,
-    "ejection_locks_lock": 10
+    "ejection_locks_lock": 10,
+    "ejection_codes_lock": 11
 }
 
 class NamedLock:
@@ -325,6 +328,7 @@ orders_lock = NamedLock("orders_lock")
 printers_rwlock = ReadWriteLock(name="printers_rwlock")
 tasks_lock = NamedLock("tasks_lock")
 print_transactions_lock = NamedLock("print_transactions_lock")
+ejection_codes_lock = NamedLock("ejection_codes_lock")
 
 # Order-specific locks
 order_locks = {}
@@ -339,7 +343,8 @@ lock_stats = {
     "order_locks_lock": {"acquire_count": 0, "total_time": 0, "max_time": 0},
     "print_transactions_lock": {"acquire_count": 0, "total_time": 0, "max_time": 0},
     "ejection_states_lock": {"acquire_count": 0, "total_time": 0, "max_time": 0},
-    "ejection_locks_lock": {"acquire_count": 0, "total_time": 0, "max_time": 0}
+    "ejection_locks_lock": {"acquire_count": 0, "total_time": 0, "max_time": 0},
+    "ejection_codes_lock": {"acquire_count": 0, "total_time": 0, "max_time": 0}
 }
 lock_stats_lock = NamedLock("lock_stats_lock")
 lock_owners = {}
@@ -974,7 +979,7 @@ def reap_threads():
 
 def initialize_state():
     """Initialize application state from disk"""
-    global PRINTERS, ORDERS, TOTAL_FILAMENT_CONSUMPTION, EJECTION_PAUSED, _STATE_INITIALIZED        # CRITICAL: Prevent re-initialization to avoid duplicates
+    global PRINTERS, ORDERS, TOTAL_FILAMENT_CONSUMPTION, EJECTION_PAUSED, EJECTION_CODES, _STATE_INITIALIZED        # CRITICAL: Prevent re-initialization to avoid duplicates
     if _STATE_INITIALIZED:
         logging.warning("⚠️ BLOCKED RE-INITIALIZATION - State already loaded. This prevents duplicates.")
         return        
@@ -1040,13 +1045,18 @@ def initialize_state():
     # Load ejection paused state
     EJECTION_PAUSED = load_data(EJECTION_PAUSED_FILE, False)
     
+    # Load ejection codes
+    with SafeLock(ejection_codes_lock):
+        EJECTION_CODES.extend(load_data(EJECTION_CODES_FILE, []))
+        logger.debug(f"Loaded {len(EJECTION_CODES)} ejection codes")
+    
     # Clean up all ejection states on startup
     cleanup_all_ejection_states()
     
     # Emergency reset on startup
     reset_all_ejection_states()
     
-    logger.debug(f"State initialized: {len(PRINTERS)} printers, {len(ORDERS)} orders, {TOTAL_FILAMENT_CONSUMPTION}g filament, ejection_paused={EJECTION_PAUSED}")
+    logger.debug(f"State initialized: {len(PRINTERS)} printers, {len(ORDERS)} orders, {len(EJECTION_CODES)} ejection codes, {TOTAL_FILAMENT_CONSUMPTION}g filament, ejection_paused={EJECTION_PAUSED}")
     
     # Initialize Bambu connections
     from services.bambu_handler import connect_bambu_printer

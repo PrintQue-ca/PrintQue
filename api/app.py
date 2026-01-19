@@ -14,8 +14,6 @@ from utils.config import Config
 import asyncio
 import logging
 from utils.license_validator import verify_license_startup
-import webbrowser
-import threading
 import time
 import atexit
 from utils.console_capture import console_capture
@@ -33,16 +31,6 @@ logging.basicConfig(
         logging.StreamHandler()
     ]
 )
-
-# Function to open web browser
-def open_browser():
-    """Open browser after a short delay"""
-    time.sleep(3)  # Wait for Flask to start
-    try:
-        webbrowser.open(f'http://localhost:{Config.PORT}')
-        logging.info(f"Opened web browser to http://localhost:{Config.PORT}")
-    except Exception as e:
-        logging.error(f"Failed to open web browser: {e}")
 
 # Verify license and get license information
 def verify_license():
@@ -68,14 +56,19 @@ os.makedirs(static_folder, exist_ok=True)
 
 app = Flask(__name__, static_folder=static_folder, static_url_path='/static', template_folder=template_folder)
 app.config['SECRET_KEY'] = Config.SECRET_KEY
-app.config['APP_VERSION'] = Config.APP_VERSION
 app.config['UPLOAD_FOLDER'] = os.path.join(LOG_DIR, "uploads")  # Writable upload folder
 app.config['LOG_DIR'] = LOG_DIR
 
 # Enable CORS for React frontend development
 CORS(app, resources={
-    r"/api/*": {"origins": ["http://localhost:3000", "http://127.0.0.1:3000", "http://localhost:5173", "http://127.0.0.1:5173"]},
-    r"/socket.io/*": {"origins": ["http://localhost:3000", "http://127.0.0.1:3000", "http://localhost:5173", "http://127.0.0.1:5173"]}
+    r"/api/*": {
+        "origins": ["http://localhost:3000", "http://127.0.0.1:3000", "http://localhost:5173", "http://127.0.0.1:5173"],
+        "methods": ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+        "allow_headers": ["Content-Type", "Authorization", "X-Requested-With"]
+    },
+    r"/socket.io/*": {
+        "origins": ["http://localhost:3000", "http://127.0.0.1:3000", "http://localhost:5173", "http://127.0.0.1:5173"]
+    }
 })
 
 socketio = SocketIO(app, async_mode='eventlet', cors_allowed_origins=["http://localhost:3000", "http://127.0.0.1:3000", "http://localhost:5173", "http://127.0.0.1:5173"])
@@ -182,8 +175,23 @@ if __name__ == '__main__':
     # Start the application without password check
     start_background_tasks(socketio, app)
 
-    # Start browser in a new thread
-    threading.Thread(target=open_browser, daemon=True).start()
+    # Log server startup message
+    logging.info("")
+    logging.info("=" * 60)
+    logging.info("=" * 60)
+    logging.info("")
+    logging.info("    ╔═══════════════════════════════════════════════╗")
+    logging.info("    ║                                               ║")
+    logging.info("    ║           PRINTQUE SERVER ONLINE              ║")
+    logging.info("    ║                                               ║")
+    logging.info("    ╚═══════════════════════════════════════════════╝")
+    logging.info("")
+    logging.info(f"    Server running at: http://localhost:{Config.PORT}")
+    logging.info(f"    Network access:    http://0.0.0.0:{Config.PORT}")
+    logging.info("")
+    logging.info("=" * 60)
+    logging.info("=" * 60)
+    logging.info("")
 
     # Run the Flask app
     # Added app.config['DEBUG'] for the debug flag

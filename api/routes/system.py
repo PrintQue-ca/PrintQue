@@ -178,13 +178,14 @@ def register_misc_routes(app, socketio):
             writer = csv.writer(output)
             
             # Write headers
-            writer.writerow(['ID', 'Filename', 'Quantity', 'Sent', 'Groups', 'Status', 'Created At'])
+            writer.writerow(['ID', 'Name', 'Filename', 'Quantity', 'Sent', 'Groups', 'Status', 'Created At'])
             
             # Write order data
             with SafeLock(orders_lock, 'export_orders'):
                 for order in ORDERS:
                     writer.writerow([
                         order['id'],
+                        order.get('name', ''),
                         order['filename'],
                         order['quantity'],
                         order.get('sent', 0),

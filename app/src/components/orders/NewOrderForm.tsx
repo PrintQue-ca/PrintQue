@@ -12,17 +12,19 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import { Upload, Plus, FileCode, Save, Trash2, ChevronDown, ChevronUp } from 'lucide-react'
-import { useCreateOrder, useGroups, useDefaultEjectionSettings, useSaveDefaultEjectionSettings } from '@/hooks'
+import { Upload, Plus, FileCode, Save, Trash2, ChevronDown, ChevronUp, FolderOpen } from 'lucide-react'
+import { useCreateOrder, useGroups, useDefaultEjectionSettings, useSaveDefaultEjectionSettings, useEjectionCodes } from '@/hooks'
 import { toast } from 'sonner'
 
 export function NewOrderForm() {
   const [file, setFile] = useState<File | null>(null)
+  const [orderName, setOrderName] = useState('')
   const [quantity, setQuantity] = useState(1)
   const [selectedGroups, setSelectedGroups] = useState<number[]>([])
   const [ejectionEnabled, setEjectionEnabled] = useState(false)
   const [endGcode, setEndGcode] = useState('')
   const [showEjectionSection, setShowEjectionSection] = useState(false)
+  const [selectedEjectionCodeId, setSelectedEjectionCodeId] = useState<string>('custom')
   const fileInputRef = useRef<HTMLInputElement>(null)
   const gcodeFileInputRef = useRef<HTMLInputElement>(null)
   
@@ -30,6 +32,7 @@ export function NewOrderForm() {
   const { data: groups } = useGroups()
   const { data: defaultSettings } = useDefaultEjectionSettings()
   const saveDefaultSettings = useSaveDefaultEjectionSettings()
+  const { data: ejectionCodes } = useEjectionCodes()
 
   // Load default settings when they change
   useEffect(() => {
@@ -38,6 +41,29 @@ export function NewOrderForm() {
       setEndGcode(defaultSettings.end_gcode)
     }
   }, [defaultSettings])
+
+  // Handle ejection code selection
+  const handleEjectionCodeSelect = (codeId: string) => {
+    setSelectedEjectionCodeId(codeId)
+    
+    if (codeId === 'custom') {
+      // Keep custom/current gcode, just switch mode
+      return
+    }
+    
+    if (codeId === 'default') {
+      // Load default settings
+      setEndGcode(defaultSettings?.end_gcode || '')
+      return
+    }
+    
+    // Find and load the selected ejection code
+    const selectedCode = ejectionCodes?.find(code => code.id === codeId)
+    if (selectedCode) {
+      setEndGcode(selectedCode.gcode)
+      toast.success(`Loaded "${selectedCode.name}" ejection code`)
+    }
+  }
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const selectedFile = e.target.files?.[0]
@@ -130,6 +156,9 @@ export function NewOrderForm() {
     const formData = new FormData()
     formData.append('file', file)
     formData.append('quantity', quantity.toString())
+    if (orderName.trim()) {
+      formData.append('name', orderName.trim())
+    }
     if (selectedGroups.length > 0) {
       formData.append('groups', JSON.stringify(selectedGroups))
     }
@@ -137,12 +166,27 @@ export function NewOrderForm() {
     if (ejectionEnabled && endGcode) {
       formData.append('end_gcode', endGcode)
     }
+    // Save ejection code reference
+    if (ejectionEnabled && selectedEjectionCodeId && selectedEjectionCodeId !== 'custom') {
+      formData.append('ejection_code_id', selectedEjectionCodeId)
+      if (selectedEjectionCodeId === 'default') {
+        formData.append('ejection_code_name', 'Default')
+      } else {
+        const selectedCode = ejectionCodes?.find(code => code.id === selectedEjectionCodeId)
+        if (selectedCode) {
+          formData.append('ejection_code_name', selectedCode.name)
+        }
+      }
+    } else if (ejectionEnabled) {
+      formData.append('ejection_code_name', 'Custom')
+    }
 
     try {
       await createOrder.mutateAsync(formData)
       toast.success('Order added to library')
       // Reset form
       setFile(null)
+      setOrderName('')
       setQuantity(1)
       setSelectedGroups([])
       if (fileInputRef.current) {
@@ -201,6 +245,20 @@ export function NewOrderForm() {
                 Click or drag to upload .gcode, .3mf, or .stl
               </p>
             )}
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="orderName">Order Name (optional)</Label>
+            <Input
+              id="orderName"
+              type="text"
+              placeholder="e.g., Test with ejection v2"
+              value={orderName}
+              onChange={(e) => setOrderName(e.target.value)}
+            />
+            <p className="text-xs text-muted-foreground">
+              Custom name to identify this order. If empty, filename is used.
+            </p>
           </div>
 
           <div className="grid grid-cols-2 gap-4">
@@ -273,8 +331,50 @@ export function NewOrderForm() {
 
             {ejectionEnabled && showEjectionSection && (
               <div className="space-y-3">
+                {/* Ejection Code Selector */}
                 <div className="space-y-2">
-                  <Label>Custom End G-code</Label>
+                  <Label>Select Ejection Code</Label>
+                  <Select
+                    value={selectedEjectionCodeId}
+                    onValueChange={handleEjectionCodeSelect}
+                  >
+                    <SelectTrigger>
+                      <SelectValue placeholder="Select an ejection code" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="default">
+                        <div className="flex items-center">
+                          <FolderOpen className="h-4 w-4 mr-2 text-muted-foreground" />
+                          Default Settings
+                        </div>
+                      </SelectItem>
+                      <SelectItem value="custom">
+                        <div className="flex items-center">
+                          <FileCode className="h-4 w-4 mr-2 text-muted-foreground" />
+                          Custom (enter below)
+                        </div>
+                      </SelectItem>
+                      {ejectionCodes && ejectionCodes.length > 0 && (
+                        <>
+                          <div className="px-2 py-1.5 text-xs font-semibold text-muted-foreground border-t mt-1 pt-1">
+                            Saved Ejection Codes
+                          </div>
+                          {ejectionCodes.map((code) => (
+                            <SelectItem key={code.id} value={code.id}>
+                              {code.name}
+                            </SelectItem>
+                          ))}
+                        </>
+                      )}
+                    </SelectContent>
+                  </Select>
+                  <p className="text-xs text-muted-foreground">
+                    Choose a saved ejection code or enter custom G-code below.
+                  </p>
+                </div>
+
+                <div className="space-y-2">
+                  <Label>End G-code</Label>
                   <div className="flex gap-2">
                     <Button
                       type="button"
@@ -283,7 +383,7 @@ export function NewOrderForm() {
                       onClick={() => gcodeFileInputRef.current?.click()}
                     >
                       <FileCode className="h-4 w-4 mr-1" />
-                      Upload
+                      Upload File
                     </Button>
                     <input
                       ref={gcodeFileInputRef}
@@ -295,7 +395,10 @@ export function NewOrderForm() {
                   </div>
                   <Textarea
                     value={endGcode}
-                    onChange={(e) => setEndGcode(e.target.value)}
+                    onChange={(e) => {
+                      setEndGcode(e.target.value)
+                      setSelectedEjectionCodeId('custom')
+                    }}
                     onDrop={handleGcodeDrop}
                     onDragOver={(e) => e.preventDefault()}
                     placeholder="G28 X Y&#10;M84"

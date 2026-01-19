@@ -1,6 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { api } from '@/lib/api'
-import type { Stats, EjectionStatus, License, SystemInfo, Group, ApiResponse } from '@/types'
+import type { Stats, EjectionStatus, License, SystemInfo, Group, ApiResponse, EjectionCode } from '@/types'
 
 export function useStats() {
   return useQuery({
@@ -113,6 +113,83 @@ export function useSaveDefaultEjectionSettings() {
       api.post<ApiResponse>('/settings/default-ejection', data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['settings', 'default-ejection'] })
+    },
+  })
+}
+
+// Ejection Codes (stored G-code presets)
+interface EjectionCodesResponse {
+  success: boolean
+  ejection_codes: EjectionCode[]
+}
+
+interface CreateEjectionCodeResponse {
+  success: boolean
+  ejection_code: EjectionCode
+  message: string
+}
+
+export function useEjectionCodes() {
+  return useQuery({
+    queryKey: ['ejection-codes'],
+    queryFn: async () => {
+      const response = await api.get<EjectionCodesResponse>('/ejection-codes')
+      return response.ejection_codes
+    },
+    staleTime: 30000,
+  })
+}
+
+export function useEjectionCode(id: string) {
+  return useQuery({
+    queryKey: ['ejection-codes', id],
+    queryFn: async () => {
+      const response = await api.get<{ success: boolean; ejection_code: EjectionCode }>(`/ejection-codes/${id}`)
+      return response.ejection_code
+    },
+    enabled: !!id,
+  })
+}
+
+export function useCreateEjectionCode() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (data: { name: string; gcode: string }) =>
+      api.post<CreateEjectionCodeResponse>('/ejection-codes', data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['ejection-codes'] })
+    },
+  })
+}
+
+export function useUploadEjectionCode() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (formData: FormData) =>
+      api.upload<CreateEjectionCodeResponse>('/ejection-codes/upload', formData),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['ejection-codes'] })
+    },
+  })
+}
+
+export function useUpdateEjectionCode() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, data }: { id: string; data: Partial<{ name: string; gcode: string }> }) =>
+      api.patch<CreateEjectionCodeResponse>(`/ejection-codes/${id}`, data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['ejection-codes'] })
+    },
+  })
+}
+
+export function useDeleteEjectionCode() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (id: string) => api.delete<ApiResponse>(`/ejection-codes/${id}`),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['ejection-codes'] })
     },
   })
 }

@@ -108,3 +108,25 @@ export function useReorderOrder() {
     // No onSettled/onSuccess - trust the optimistic update, don't refetch
   })
 }
+
+export function useUpdateOrderEjection() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, ejectionEnabled, ejectionCodeId, ejectionCodeName, endGcode }: { 
+      id: number
+      ejectionEnabled: boolean
+      ejectionCodeId?: string
+      ejectionCodeName?: string
+      endGcode?: string
+    }) =>
+      api.patch<ApiResponse>(`/orders/${id}/ejection`, { 
+        ejection_enabled: ejectionEnabled,
+        ejection_code_id: ejectionCodeId,
+        ejection_code_name: ejectionCodeName,
+        end_gcode: endGcode
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['orders'] })
+    },
+  })
+}

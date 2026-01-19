@@ -2,6 +2,7 @@ import { createFileRoute } from '@tanstack/react-router'
 import { useSystemInfo } from '@/hooks'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { Loader2, Server, Cpu, HardDrive, Clock } from 'lucide-react'
+import { EjectionCodesManager } from '@/components/orders/EjectionCodesManager'
 
 export const Route = createFileRoute('/system')({ component: SystemPage })
 
@@ -127,6 +128,9 @@ function SystemPage() {
           </dl>
         </CardContent>
       </Card>
+
+      {/* Ejection Codes Manager */}
+      <EjectionCodesManager />
 
       <Card>
         <CardHeader>
