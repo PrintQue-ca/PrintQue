@@ -8,7 +8,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
-import { MoreVertical, Play, Pause, Square, CheckCircle, Thermometer, AlertTriangle, RefreshCw } from 'lucide-react'
+import { MoreVertical, Play, Pause, Square, CheckCircle, Thermometer, AlertTriangle, RefreshCw, Snowflake } from 'lucide-react'
 import type { Printer } from '@/types'
 import { useStopPrint, usePausePrint, useResumePrint, useMarkReady, useClearError } from '@/hooks'
 
@@ -23,6 +23,7 @@ const statusColors: Record<string, string> = {
   FINISHED: 'bg-yellow-500',
   ERROR: 'bg-red-500',
   EJECTING: 'bg-purple-500',
+  COOLING: 'bg-cyan-500',
   PAUSED: 'bg-orange-500',
   OFFLINE: 'bg-gray-500',
 }
@@ -34,6 +35,7 @@ const statusLabels: Record<string, string> = {
   FINISHED: 'Finished',
   ERROR: 'Error',
   EJECTING: 'Ejecting',
+  COOLING: 'Cooling',
   PAUSED: 'Paused',
   OFFLINE: 'Offline',
 }
@@ -56,6 +58,8 @@ export function PrinterCard({ printer }: PrinterCardProps) {
   const isFinished = printer.status === 'FINISHED'
   const isOffline = printer.status === 'OFFLINE'
   const isError = printer.status === 'ERROR'
+  const isCooling = printer.status === 'COOLING'
+  const isEjecting = printer.status === 'EJECTING'
 
   // Show temperatures for all online printers
   const showTemps = !isOffline
@@ -128,6 +132,37 @@ export function PrinterCard({ printer }: PrinterCardProps) {
               Mark Ready
             </Button>
           </div>
+        ) : isCooling ? (
+          <div className="space-y-3">
+            <div className="rounded-lg bg-gradient-to-r from-cyan-500/20 to-blue-500/20 border border-cyan-500/30 p-3">
+              <div className="flex items-center gap-2 mb-2">
+                <Snowflake className="h-5 w-5 text-cyan-500 animate-pulse" />
+                <span className="font-medium text-cyan-700 dark:text-cyan-300">Cooling Down</span>
+              </div>
+              <p className="text-sm text-muted-foreground">
+                Waiting for bed to cool before ejection...
+              </p>
+              <div className="flex items-center gap-2 mt-2 text-sm">
+                <Thermometer className="h-4 w-4 text-cyan-500" />
+                <span>Bed: {(printer.bed_temp ?? 0).toFixed(1)}°C</span>
+              </div>
+            </div>
+            <Button size="sm" variant="outline" onClick={handleMarkReady}>
+              <CheckCircle className="h-4 w-4 mr-1" />
+              Skip Cooldown
+            </Button>
+          </div>
+        ) : isEjecting ? (
+          <div className="space-y-2">
+            <div className="rounded-lg bg-purple-500/20 border border-purple-500/30 p-3">
+              <div className="flex items-center gap-2">
+                <div className="h-2 w-2 bg-purple-500 rounded-full animate-pulse" />
+                <span className="text-sm font-medium text-purple-700 dark:text-purple-300">
+                  Running ejection sequence...
+                </span>
+              </div>
+            </div>
+          </div>
         ) : isError ? (
           <div className="space-y-3">
             {/* Error Alert Box */}
@@ -197,10 +232,10 @@ export function PrinterCard({ printer }: PrinterCardProps) {
           <div className="flex items-center gap-4 mt-3 pt-3 border-t text-xs text-muted-foreground">
             <div className="flex items-center gap-1">
               <Thermometer className="h-3 w-3" />
-              <span>Nozzle: {printer.nozzle_temp ?? 0}°C</span>
+              <span>Nozzle: {(printer.nozzle_temp ?? 0).toFixed(1)}°C</span>
             </div>
             <div className="flex items-center gap-1">
-              <span>Bed: {printer.bed_temp ?? 0}°C</span>
+              <span>Bed: {(printer.bed_temp ?? 0).toFixed(1)}°C</span>
             </div>
           </div>
         )}

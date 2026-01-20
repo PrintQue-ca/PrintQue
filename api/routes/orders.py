@@ -59,6 +59,18 @@ def register_order_routes(app, socketio):
         if ejection_enabled and not end_gcode:
             end_gcode = default_settings.get('default_end_gcode', '')
 
+        # Cooldown temperature for Bambu printers (optional)
+        # If set, PrintQue will wait for bed to cool to this temp before running ejection
+        cooldown_temp_str = request.form.get('cooldown_temp', '').strip()
+        cooldown_temp = None
+        if cooldown_temp_str:
+            try:
+                cooldown_temp = int(cooldown_temp_str)
+                if cooldown_temp < 0 or cooldown_temp > 100:
+                    cooldown_temp = None  # Invalid range, ignore
+            except ValueError:
+                cooldown_temp = None  # Invalid value, ignore
+
         filename = secure_filename(file.filename)
         filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
         os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
@@ -91,6 +103,7 @@ def register_order_routes(app, socketio):
                 'groups': groups,  # Now contains sanitized strings instead of integers
                 'ejection_enabled': ejection_enabled,
                 'end_gcode': end_gcode,
+                'cooldown_temp': cooldown_temp,  # Bed temp to wait for before ejection (Bambu only)
                 'from_new_orders': True
             }
             ORDERS.append(order)

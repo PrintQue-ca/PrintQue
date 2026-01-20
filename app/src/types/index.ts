@@ -1,6 +1,6 @@
 // Printer types
 export type PrinterType = 'bambu' | 'prusa' | 'octoprint'
-export type PrinterStatus = 'IDLE' | 'READY' | 'PRINTING' | 'FINISHED' | 'ERROR' | 'EJECTING' | 'PAUSED' | 'OFFLINE'
+export type PrinterStatus = 'IDLE' | 'READY' | 'PRINTING' | 'FINISHED' | 'ERROR' | 'EJECTING' | 'COOLING' | 'PAUSED' | 'OFFLINE'
 
 export interface Printer {
   name: string
@@ -52,6 +52,7 @@ export interface Order {
   ejection_code_id?: string  // Reference to saved ejection code
   ejection_code_name?: string  // Name of the ejection code (for display)
   end_gcode?: string  // The actual G-code content
+  cooldown_temp?: number  // Bed temperature to wait for before ejection (Bambu only)
 }
 
 export interface OrderFormData {

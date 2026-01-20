@@ -495,7 +495,8 @@ def get_event_loop_for_thread():
 state_map = {
     'IDLE': 'Ready', 'PRINTING': 'Printing', 'PAUSED': 'Paused', 'ERROR': 'Error',
     'FINISHED': 'Finished', 'READY': 'Ready', 'STOPPED': 'Stopped', 'ATTENTION': 'Attention',
-    'EJECTING': 'Ejecting', 'PREPARE': 'Preparing', 'OFFLINE': 'Offline'
+    'EJECTING': 'Ejecting', 'PREPARE': 'Preparing', 'OFFLINE': 'Offline',
+    'COOLING': 'Cooling'  # Waiting for bed to cool before ejection (Bambu printers)
 }
 
 CONNECTION_POOL = None
@@ -1772,6 +1773,80 @@ async def get_printer_status_async(socketio, app, batch_index=None, batch_size=N
                     if elapsed_minutes > 5:  # Only log if ejection has been running for more than 5 minutes
                         logging.info(f"Ejection still in progress for {printer_name}: {elapsed_minutes:.1f} minutes elapsed, api_state={api_state}, waiting for completion signal")
         
+        # COOLING STATE MONITORING - For Bambu printers waiting for bed to cool
+        for i, printer in enumerate(PRINTERS):
+            if printer.get('state') == 'COOLING':
+                printer_name = printer['name']
+                cooldown_target = printer.get('cooldown_target_temp', 0)
+                cooldown_order_id = printer.get('cooldown_order_id')
+                
+                # Get current bed temperature from Bambu MQTT state
+                current_bed_temp = 0
+                try:
+                    with bambu_states_lock:
+                        if printer_name in BAMBU_PRINTER_STATES:
+                            current_bed_temp = BAMBU_PRINTER_STATES[printer_name].get('bed_temp', 0)
+                except Exception as e:
+                    logging.warning(f"Could not get bed temp for {printer_name}: {e}")
+                
+                # Update status with current temperature
+                printer['status'] = f'Cooling ({current_bed_temp}°C → {cooldown_target}°C)'
+                
+                if current_bed_temp <= cooldown_target:
+                    logging.info(f"COOLING->EJECTING: {printer_name} (bed temp {current_bed_temp}°C <= target {cooldown_target}°C)")
+                    
+                    # Get the order for ejection gcode
+                    with SafeLock(orders_lock):
+                        order = next((o for o in ORDERS if o['id'] == cooldown_order_id), None)
+                    
+                    if order and order.get('ejection_enabled', False):
+                        gcode_content = order.get('end_gcode', '').strip()
+                        if not gcode_content:
+                            gcode_content = "G28 X Y\nM84"  # Default ejection
+                        
+                        # Transition to EJECTING and send ejection gcode
+                        printer.update({
+                            "state": 'EJECTING',
+                            "status": 'Ejecting',
+                            "ejection_start_time": time.time(),
+                            "ejection_processed": True,
+                            "ejection_in_progress": True,
+                            "manually_set": False,
+                            "cooldown_target_temp": None,
+                            "cooldown_order_id": None
+                        })
+                        
+                        # Send ejection gcode to Bambu printer
+                        success = send_bambu_ejection_gcode(printer, gcode_content)
+                        if not success:
+                            logging.error(f"Bambu ejection failed for {printer_name} after cooling")
+                            # Transition to READY on failure
+                            printer.update({
+                                "state": 'READY',
+                                "status": 'Ready',
+                                "ejection_processed": False,
+                                "ejection_in_progress": False,
+                                "manually_set": True
+                            })
+                    else:
+                        # No order found or ejection not enabled - go to READY
+                        logging.warning(f"COOLING->READY: {printer_name} (order not found or ejection not enabled)")
+                        printer.update({
+                            "state": 'READY',
+                            "status": 'Ready',
+                            "progress": 0,
+                            "time_remaining": 0,
+                            "manually_set": True,
+                            "cooldown_target_temp": None,
+                            "cooldown_order_id": None
+                        })
+                else:
+                    # Still cooling - log periodically
+                    finish_time = printer.get('finish_time', time.time())
+                    cooling_minutes = (time.time() - finish_time) / 60.0
+                    if int(cooling_minutes) % 2 == 0 and cooling_minutes > 0:  # Log every 2 minutes
+                        logging.debug(f"COOLING: {printer_name} at {current_bed_temp}°C, target {cooldown_target}°C ({cooling_minutes:.1f}min elapsed)")
+        
         # No automatic safety timeout - ejections run until natural completion
         
         save_data(PRINTERS_FILE, PRINTERS)
@@ -2643,6 +2718,38 @@ def handle_finished_state_ejection(printer, printer_name, current_file, current_
             "finish_time": time.time()
         })
         return
+
+    # BAMBU COOLDOWN FEATURE: Check if we need to wait for bed to cool before ejection
+    # This applies only to Bambu printers when cooldown_temp is set on the order
+    if printer.get('type') == 'bambu' and order.get('cooldown_temp') is not None:
+        cooldown_temp = order.get('cooldown_temp')
+        
+        # Get current bed temperature from Bambu MQTT state
+        current_bed_temp = 0
+        try:
+            with bambu_states_lock:
+                if printer_name in BAMBU_PRINTER_STATES:
+                    current_bed_temp = BAMBU_PRINTER_STATES[printer_name].get('bed_temp', 0)
+        except Exception as e:
+            logging.warning(f"Could not get bed temp for {printer_name}: {e}")
+        
+        if current_bed_temp > cooldown_temp:
+            logging.info(f"FINISHED->COOLING: {printer_name} (bed temp {current_bed_temp}°C > target {cooldown_temp}°C)")
+            updates.update({
+                "state": 'COOLING',
+                "status": f'Cooling ({current_bed_temp}°C → {cooldown_temp}°C)',
+                "progress": 100,
+                "time_remaining": 0,
+                "manually_set": False,
+                "ejection_in_progress": False,
+                "ejection_processed": False,  # Not processed yet - still cooling
+                "cooldown_target_temp": cooldown_temp,
+                "cooldown_order_id": current_order_id,
+                "finish_time": printer.get('finish_time') or time.time()
+            })
+            return
+        else:
+            logging.info(f"FINISHED->EJECTING: {printer_name} (bed temp {current_bed_temp}°C <= target {cooldown_temp}°C, proceeding to ejection)")
 
     # Try to acquire ejection lock
     ejection_lock = get_ejection_lock(printer_name)

@@ -12,7 +12,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import { Upload, Plus, FileCode, Save, Trash2, ChevronDown, ChevronUp, FolderOpen } from 'lucide-react'
+import { Upload, Plus, FileCode, Save, Trash2, ChevronDown, ChevronUp, FolderOpen, Thermometer } from 'lucide-react'
 import { useCreateOrder, useGroups, useDefaultEjectionSettings, useSaveDefaultEjectionSettings, useEjectionCodes } from '@/hooks'
 import { toast } from 'sonner'
 
@@ -25,6 +25,7 @@ export function NewOrderForm() {
   const [endGcode, setEndGcode] = useState('')
   const [showEjectionSection, setShowEjectionSection] = useState(false)
   const [selectedEjectionCodeId, setSelectedEjectionCodeId] = useState<string>('custom')
+  const [cooldownTemp, setCooldownTemp] = useState<string>('')
   const fileInputRef = useRef<HTMLInputElement>(null)
   const gcodeFileInputRef = useRef<HTMLInputElement>(null)
   
@@ -180,6 +181,14 @@ export function NewOrderForm() {
     } else if (ejectionEnabled) {
       formData.append('ejection_code_name', 'Custom')
     }
+    
+    // Add cooldown temperature if set (for Bambu printers)
+    if (ejectionEnabled && cooldownTemp) {
+      const tempValue = parseInt(cooldownTemp)
+      if (!isNaN(tempValue) && tempValue >= 0 && tempValue <= 100) {
+        formData.append('cooldown_temp', tempValue.toString())
+      }
+    }
 
     try {
       await createOrder.mutateAsync(formData)
@@ -189,6 +198,7 @@ export function NewOrderForm() {
       setOrderName('')
       setQuantity(1)
       setSelectedGroups([])
+      setCooldownTemp('')
       if (fileInputRef.current) {
         fileInputRef.current.value = ''
       }
@@ -430,6 +440,29 @@ export function NewOrderForm() {
                     <Trash2 className="h-4 w-4 mr-1" />
                     Clear
                   </Button>
+                </div>
+
+                {/* Cooldown Temperature (Bambu printers only) */}
+                <div className="mt-4 p-3 border rounded-lg bg-muted/50">
+                  <div className="flex items-center gap-2 mb-2">
+                    <Thermometer className="h-4 w-4 text-cyan-500" />
+                    <Label className="text-sm font-medium">Cooldown Temperature (Bambu only)</Label>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Input
+                      type="number"
+                      min={0}
+                      max={100}
+                      placeholder="Optional"
+                      value={cooldownTemp}
+                      onChange={(e) => setCooldownTemp(e.target.value)}
+                      className="w-24"
+                    />
+                    <span className="text-sm text-muted-foreground">°C</span>
+                  </div>
+                  <p className="text-xs text-muted-foreground mt-2">
+                    If set, PrintQue will wait for the bed to cool to this temperature before running the ejection G-code on Bambu printers.
+                  </p>
                 </div>
               </div>
             )}

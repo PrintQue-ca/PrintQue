@@ -468,6 +468,17 @@ def register_routes(app, socketio):
             ejection_code_id = request.form.get('ejection_code_id', '').strip() or None
             ejection_code_name = request.form.get('ejection_code_name', '').strip() or None
             
+            # Handle cooldown temperature (Bambu printers only)
+            cooldown_temp_str = request.form.get('cooldown_temp', '').strip()
+            cooldown_temp = None
+            if cooldown_temp_str:
+                try:
+                    cooldown_temp = int(cooldown_temp_str)
+                    if cooldown_temp < 0 or cooldown_temp > 100:
+                        cooldown_temp = None  # Invalid range
+                except ValueError:
+                    cooldown_temp = None  # Invalid value
+            
             # Use default if ejection enabled but no custom gcode provided
             if ejection_enabled and not end_gcode:
                 end_gcode = default_settings.get('default_end_gcode', '')
@@ -507,6 +518,7 @@ def register_routes(app, socketio):
                     'ejection_code_id': ejection_code_id,
                     'ejection_code_name': ejection_code_name,
                     'end_gcode': end_gcode,
+                    'cooldown_temp': cooldown_temp,  # Bed temp to wait for before ejection (Bambu only)
                     'from_new_orders': True
                 }
                 ORDERS.append(order)
