@@ -193,3 +193,10 @@ export function useDeleteEjectionCode() {
     },
   })
 }
+
+export function useTestEjectionCode() {
+  return useMutation({
+    mutationFn: ({ codeId, printerName }: { codeId: string; printerName: string }) =>
+      api.post<ApiResponse>(`/ejection-codes/${codeId}/test`, { printer_name: printerName }),
+  })
+}

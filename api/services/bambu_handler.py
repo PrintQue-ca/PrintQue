@@ -189,6 +189,13 @@ def on_connect(client, userdata, flags, rc):
             BAMBU_PRINTER_STATES[printer_name]['connected'] = True
             BAMBU_PRINTER_STATES[printer_name]['last_seen'] = time.time()
             BAMBU_PRINTER_STATES[printer_name]['connection_time'] = time.time()
+            # Clear any previous disconnect reason
+            BAMBU_PRINTER_STATES[printer_name].pop('disconnect_reason', None)
+            BAMBU_PRINTER_STATES[printer_name].pop('last_error', None)
+            # If state was OFFLINE due to disconnect, we'll wait for status update to set proper state
+            # Don't automatically set to READY - let the printer report its actual state
+            if BAMBU_PRINTER_STATES[printer_name].get('state') == 'OFFLINE':
+                logging.info(f"Bambu printer {printer_name} reconnected, waiting for status update")
             
         # Reset retry count on successful connection
         with retry_lock:
@@ -204,9 +211,11 @@ def on_connect(client, userdata, flags, rc):
         }.get(rc, f"Unknown error code: {rc}")
         logging.error(f"Bambu printer {printer_name} connection failed: {error_msg}")
         with bambu_states_lock:
-            if printer_name in BAMBU_PRINTER_STATES:
-                BAMBU_PRINTER_STATES[printer_name]['connected'] = False
-                BAMBU_PRINTER_STATES[printer_name]['last_error'] = error_msg
+            if printer_name not in BAMBU_PRINTER_STATES:
+                BAMBU_PRINTER_STATES[printer_name] = {}
+            BAMBU_PRINTER_STATES[printer_name]['connected'] = False
+            BAMBU_PRINTER_STATES[printer_name]['state'] = 'OFFLINE'
+            BAMBU_PRINTER_STATES[printer_name]['last_error'] = error_msg
 
 def on_disconnect(client, userdata, rc):
     """MQTT disconnection callback"""
@@ -219,6 +228,13 @@ def on_disconnect(client, userdata, rc):
     with bambu_states_lock:
         if printer_name in BAMBU_PRINTER_STATES:
             BAMBU_PRINTER_STATES[printer_name]['connected'] = False
+            # CRITICAL FIX: Update state to OFFLINE when connection is lost unexpectedly
+            # This prevents the UI from showing "READY" when the printer can't receive commands
+            if rc != 0:
+                previous_state = BAMBU_PRINTER_STATES[printer_name].get('state', 'UNKNOWN')
+                BAMBU_PRINTER_STATES[printer_name]['state'] = 'OFFLINE'
+                BAMBU_PRINTER_STATES[printer_name]['disconnect_reason'] = f"Connection lost (rc={rc})"
+                logging.warning(f"Bambu printer {printer_name} state changed from {previous_state} to OFFLINE due to disconnect")
             # Calculate connection duration
             if 'connection_time' in BAMBU_PRINTER_STATES[printer_name]:
                 duration = time.time() - BAMBU_PRINTER_STATES[printer_name]['connection_time']
@@ -267,9 +283,22 @@ def on_message(client, userdata, msg):
                 
                 # Command responses
                 if "command" in print_data and "result" in print_data:
-                    logging.debug(f"Bambu {printer_name} response: {print_data['command']} = {print_data['result']}")
-                    if "reason" in print_data:
-                        logging.warning(f"Bambu {printer_name} reason: {print_data['reason']}")
+                    cmd = print_data['command']
+                    result = print_data['result']
+                    param = print_data.get('param', '')
+                    reason = print_data.get('reason', '')
+                    
+                    # Log gcode_line responses at INFO level for debugging
+                    if cmd == 'gcode_line':
+                        if result == 'success':
+                            logging.info(f"[GCODE_RESPONSE] {printer_name}: '{param}' -> SUCCESS")
+                        else:
+                            logging.warning(f"[GCODE_RESPONSE] {printer_name}: '{param}' -> {result} (reason: {reason})")
+                    else:
+                        logging.debug(f"Bambu {printer_name} response: {cmd} = {result}")
+                    
+                    if reason and cmd != 'gcode_line':
+                        logging.warning(f"Bambu {printer_name} reason: {reason}")
     
                     # Check for M400 completion if we're waiting for it
                     if (BAMBU_PRINTER_STATES[printer_name].get('waiting_for_m400', False) and
@@ -604,6 +633,11 @@ def get_bambu_status(printer: Dict[str, Any]) -> Tuple[Dict[str, Any], Optional[
     # Ensure connected
     if printer_name not in MQTT_CLIENTS or not MQTT_CLIENTS[printer_name].is_connected():
         if not connect_bambu_printer(printer):
+            # CRITICAL FIX: Also update cached state to OFFLINE when connection fails
+            with bambu_states_lock:
+                if printer_name in BAMBU_PRINTER_STATES:
+                    BAMBU_PRINTER_STATES[printer_name]['state'] = 'OFFLINE'
+                    BAMBU_PRINTER_STATES[printer_name]['connected'] = False
             return printer, {
                 "printer": {
                     "state": "OFFLINE",
@@ -620,16 +654,38 @@ def get_bambu_status(printer: Dict[str, Any]) -> Tuple[Dict[str, Any], Optional[
             BAMBU_PRINTER_STATES[printer_name] = {
                 'state': 'OFFLINE',
                 'gcode_state': 'UNKNOWN',
-                'last_seen': 0
+                'last_seen': 0,
+                'connected': False
             }
         
         state_data = BAMBU_PRINTER_STATES[printer_name].copy()
     
     # Check if data is stale (more than 30 seconds old)
     last_seen = state_data.get('last_seen', 0)
-    if time.time() - last_seen > 30:
+    time_since_seen = time.time() - last_seen
+    
+    if time_since_seen > 30:
         request_bambu_status(printer)
-        # Don't return OFFLINE immediately - use cached data but request update
+    
+    # CRITICAL FIX: If data is very stale (60+ seconds) AND we haven't received any updates,
+    # the printer is likely offline or unreachable
+    if time_since_seen > 60 and not state_data.get('connected', False):
+        logging.warning(f"Bambu printer {printer_name} data is stale ({time_since_seen:.0f}s) and not connected, marking OFFLINE")
+        with bambu_states_lock:
+            BAMBU_PRINTER_STATES[printer_name]['state'] = 'OFFLINE'
+        state_data['state'] = 'OFFLINE'
+    
+    # CRITICAL FIX: Also check the connected flag - if disconnected, state should be OFFLINE
+    if not state_data.get('connected', False) and state_data.get('state') not in ['OFFLINE', 'EJECTING']:
+        # Double-check if we're actually connected
+        if printer_name in MQTT_CLIENTS and MQTT_CLIENTS[printer_name].is_connected():
+            # We are connected, update the flag
+            with bambu_states_lock:
+                BAMBU_PRINTER_STATES[printer_name]['connected'] = True
+        else:
+            # Not connected, force OFFLINE state
+            logging.debug(f"Bambu printer {printer_name} shows {state_data.get('state')} but is not connected, returning OFFLINE")
+            state_data['state'] = 'OFFLINE'
     
     # Format response similar to Prusa
     status = {
@@ -741,6 +797,12 @@ def send_bambu_print_command(printer: Dict[str, Any], filename: str, filepath: s
     if printer_name not in MQTT_CLIENTS or not MQTT_CLIENTS[printer_name].is_connected():
         if not connect_bambu_printer(printer):
             logging.error(f"Cannot send print command - Bambu printer {printer_name} not connected")
+            # CRITICAL FIX: Update cached state to OFFLINE when connection fails
+            with bambu_states_lock:
+                if printer_name in BAMBU_PRINTER_STATES:
+                    BAMBU_PRINTER_STATES[printer_name]['state'] = 'OFFLINE'
+                    BAMBU_PRINTER_STATES[printer_name]['connected'] = False
+                    BAMBU_PRINTER_STATES[printer_name]['disconnect_reason'] = 'Failed to connect for print command'
             return False
     
     client = MQTT_CLIENTS[printer_name]
@@ -767,6 +829,10 @@ def send_bambu_print_command(printer: Dict[str, Any], filename: str, filepath: s
             return True
         else:
             logging.error(f"Failed to send print command to Bambu printer {printer_name}: {result.rc}")
+            # Update state on publish failure
+            with bambu_states_lock:
+                if printer_name in BAMBU_PRINTER_STATES:
+                    BAMBU_PRINTER_STATES[printer_name]['disconnect_reason'] = f'Publish failed (rc={result.rc})'
             return False
             
     except Exception as e:
@@ -774,45 +840,104 @@ def send_bambu_print_command(printer: Dict[str, Any], filename: str, filepath: s
         return False
 
 def send_bambu_gcode_command(printer: Dict[str, Any], gcode: str) -> bool:
-    """Send raw G-code command to Bambu printer"""
+    """Send raw G-code command to Bambu printer
+    
+    Filters out comment-only lines and sends actual G-code commands via MQTT.
+    Uses QoS 1 for reliable delivery and longer delays between commands.
+    """
     printer_name = printer['name']
+    serial_number = printer.get('serial_number', '')
+    
+    logging.info(f"[GCODE_TEST] Starting G-code send to Bambu printer {printer_name} (serial: {serial_number})")
     
     # Ensure connected
     if printer_name not in MQTT_CLIENTS or not MQTT_CLIENTS[printer_name].is_connected():
+        logging.info(f"[GCODE_TEST] Printer {printer_name} not connected, attempting connection...")
         if not connect_bambu_printer(printer):
-            logging.error(f"Cannot send G-code - Bambu printer {printer_name} not connected")
+            logging.error(f"[GCODE_TEST] Cannot send G-code - Bambu printer {printer_name} not connected")
+            # CRITICAL FIX: Update cached state to OFFLINE when connection fails
+            with bambu_states_lock:
+                if printer_name in BAMBU_PRINTER_STATES:
+                    BAMBU_PRINTER_STATES[printer_name]['state'] = 'OFFLINE'
+                    BAMBU_PRINTER_STATES[printer_name]['connected'] = False
+                    BAMBU_PRINTER_STATES[printer_name]['disconnect_reason'] = 'Failed to connect for G-code command'
             return False
+        # Wait for connection to stabilize
+        time.sleep(2)
     
     client = MQTT_CLIENTS[printer_name]
     
+    # Verify connection is actually established
+    if not client.is_connected():
+        logging.error(f"[GCODE_TEST] MQTT client reports not connected for {printer_name}")
+        # CRITICAL FIX: Update cached state to OFFLINE
+        with bambu_states_lock:
+            if printer_name in BAMBU_PRINTER_STATES:
+                BAMBU_PRINTER_STATES[printer_name]['state'] = 'OFFLINE'
+                BAMBU_PRINTER_STATES[printer_name]['connected'] = False
+                BAMBU_PRINTER_STATES[printer_name]['disconnect_reason'] = 'MQTT client not connected'
+        return False
+    
+    logging.info(f"[GCODE_TEST] MQTT connection confirmed for {printer_name}")
+    
     try:
-        # Split G-code into lines and send each one
-        gcode_lines = [line.strip() for line in gcode.strip().split('\n') if line.strip()]
+        # Parse G-code lines, removing comments and empty lines
+        gcode_lines = []
+        for line in gcode.strip().split('\n'):
+            # Remove comments (everything after ;) and whitespace
+            clean_line = line.split(';')[0].strip()
+            if clean_line:  # Only add non-empty lines (actual G-code commands)
+                gcode_lines.append(clean_line)
         
-        for line in gcode_lines:
+        if not gcode_lines:
+            logging.warning(f"[GCODE_TEST] No valid G-code commands to send to Bambu printer {printer_name}")
+            return False
+        
+        logging.info(f"[GCODE_TEST] Parsed {len(gcode_lines)} G-code commands for {printer_name}")
+        logging.info(f"[GCODE_TEST] First 5 commands: {gcode_lines[:5]}")
+        
+        topic = f"device/{serial_number}/request"
+        logging.info(f"[GCODE_TEST] Publishing to topic: {topic}")
+        
+        sent_count = 0
+        for i, line in enumerate(gcode_lines):
+            seq_id = get_next_sequence_id(printer_name)
             command = {
                 "print": {
                     "command": "gcode_line",
-                    "sequence_id": get_next_sequence_id(printer_name),
+                    "sequence_id": seq_id,
                     "param": line
                 }
             }
             
-            topic = f"device/{printer['serial_number']}/request"
-            result = client.publish(topic, json.dumps(command), qos=0)
+            # Use QoS 1 for acknowledgment
+            result = client.publish(topic, json.dumps(command), qos=1)
             
             if result.rc != mqtt.MQTT_ERR_SUCCESS:
-                logging.error(f"Failed to send G-code line '{line}' to Bambu printer {printer_name}: {result.rc}")
+                logging.error(f"[GCODE_TEST] MQTT publish failed for '{line}': rc={result.rc}")
                 return False
             
-            # Small delay between commands to avoid overwhelming the printer
-            time.sleep(0.1)
+            sent_count += 1
+            
+            # Log every 10th command or first few
+            if i < 3 or i % 10 == 0:
+                logging.info(f"[GCODE_TEST] Sent ({i+1}/{len(gcode_lines)}): {line} [seq={seq_id}]")
+            
+            # Longer delay between commands to ensure printer processes each one
+            time.sleep(0.15)
         
-        logging.info(f"Sent {len(gcode_lines)} G-code lines to Bambu printer {printer_name}")
+        logging.info(f"[GCODE_TEST] Successfully sent {sent_count}/{len(gcode_lines)} G-code commands to {printer_name}")
+        
+        # Request status update to see if printer state changed
+        time.sleep(0.5)
+        request_bambu_status(printer)
+        
         return True
         
     except Exception as e:
-        logging.error(f"Error sending G-code to Bambu printer {printer_name}: {str(e)}")
+        logging.error(f"[GCODE_TEST] Error sending G-code to Bambu printer {printer_name}: {str(e)}")
+        import traceback
+        logging.error(f"[GCODE_TEST] Traceback: {traceback.format_exc()}")
         return False
 
 def send_bambu_ejection_gcode(printer: Dict[str, Any], end_gcode: str) -> bool:
@@ -840,7 +965,12 @@ def send_bambu_ejection_gcode(printer: Dict[str, Any], end_gcode: str) -> bool:
     if printer_name not in MQTT_CLIENTS or not MQTT_CLIENTS[printer_name].is_connected():
         logging.error(f"Cannot send ejection G-code - Bambu printer {printer_name} not connected")
         with bambu_states_lock:
-            BAMBU_PRINTER_STATES[printer_name]['ejection_in_progress'] = False
+            if printer_name in BAMBU_PRINTER_STATES:
+                BAMBU_PRINTER_STATES[printer_name]['ejection_in_progress'] = False
+                # CRITICAL FIX: Update state to OFFLINE when connection fails
+                BAMBU_PRINTER_STATES[printer_name]['state'] = 'OFFLINE'
+                BAMBU_PRINTER_STATES[printer_name]['connected'] = False
+                BAMBU_PRINTER_STATES[printer_name]['disconnect_reason'] = 'Not connected for ejection G-code'
         return False
     
     client = MQTT_CLIENTS[printer_name]
