@@ -59,3 +59,4 @@ node_modules/
 .output
 .vinxi
 dist-ssr/
+nul
