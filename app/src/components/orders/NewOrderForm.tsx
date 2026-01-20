@@ -4,7 +4,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Switch } from '@/components/ui/switch'
-import { Textarea } from '@/components/ui/textarea'
+import { GcodeEditor } from '@/components/ui/gcode-editor'
 import {
   Select,
   SelectContent,
@@ -384,39 +384,37 @@ export function NewOrderForm() {
                 </div>
 
                 <div className="space-y-2">
-                  <Label>End G-code</Label>
-                  <div className="flex gap-2">
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      onClick={() => gcodeFileInputRef.current?.click()}
-                    >
-                      <FileCode className="h-4 w-4 mr-1" />
-                      Upload File
-                    </Button>
-                    <input
-                      ref={gcodeFileInputRef}
-                      type="file"
-                      accept=".txt,.gcode,.gc,.nc"
-                      onChange={handleGcodeFileChange}
-                      className="hidden"
-                    />
+                  <div className="flex items-center justify-between">
+                    <Label>End G-code</Label>
+                    <div className="flex gap-2">
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={() => gcodeFileInputRef.current?.click()}
+                      >
+                        <FileCode className="h-4 w-4 mr-1" />
+                        Upload File
+                      </Button>
+                      <input
+                        ref={gcodeFileInputRef}
+                        type="file"
+                        accept=".txt,.gcode,.gc,.nc"
+                        onChange={handleGcodeFileChange}
+                        className="hidden"
+                      />
+                    </div>
                   </div>
-                  <Textarea
+                  <GcodeEditor
                     value={endGcode}
-                    onChange={(e) => {
-                      setEndGcode(e.target.value)
+                    onChange={(value) => {
+                      setEndGcode(value)
                       setSelectedEjectionCodeId('custom')
                     }}
-                    onDrop={handleGcodeDrop}
-                    onDragOver={(e) => e.preventDefault()}
                     placeholder="G28 X Y&#10;M84"
-                    rows={4}
-                    className="font-mono text-xs"
                   />
                   <p className="text-xs text-muted-foreground">
-                    This G-code runs after print completion. Drag and drop a file or type directly.
+                    This G-code runs after print completion. Click a line to see what it does.
                   </p>
                 </div>
 

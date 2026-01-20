@@ -1,0 +1,70 @@
+<!DOCTYPE html><html lang="en" class="dark"><head><meta charSet="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1"/><title>PrintQue - Print Queue Management</title><link rel="modulepreload" href="/assets/main-CnV8hLU_.js"/><link rel="icon" href="/favicon.ico"/><link rel="stylesheet" href="/assets/styles-CLoPa6hY.css"/><script>
+  (function() {
+    const stored = localStorage.getItem('printque-theme');
+    const theme = stored === 'light' ? 'light' : 'dark';
+    if (theme === 'dark') {
+      document.documentElement.classList.add('dark');
+    }
+  })();
+</script></head><body class="min-h-screen bg-background text-foreground"><nav class="border-b bg-card"><div class="container mx-auto px-4"><div class="flex h-14 items-center justify-between"><div class="flex items-center gap-6"><a class="text-xl font-bold text-primary active" href="/" data-status="active" aria-current="page">PrintQue</a><div class="flex items-center gap-4"><a class="text-sm font-medium transition-colors hover:text-primary [&amp;.active]:text-primary [&amp;.active]:font-semibold active" href="/" data-status="active" aria-current="page">Dashboard</a><a href="/printers" class="text-sm font-medium transition-colors hover:text-primary [&amp;.active]:text-primary [&amp;.active]:font-semibold">Printers</a><a href="/stats" class="text-sm font-medium transition-colors hover:text-primary [&amp;.active]:text-primary [&amp;.active]:font-semibold">Stats</a><a href="/license" class="text-sm font-medium transition-colors hover:text-primary [&amp;.active]:text-primary [&amp;.active]:font-semibold">License</a><a href="/system" class="text-sm font-medium transition-colors hover:text-primary [&amp;.active]:text-primary [&amp;.active]:font-semibold">System</a></div></div><button data-slot="button" data-variant="ghost" data-size="icon" class="inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md text-sm font-medium transition-all cursor-pointer disabled:pointer-events-none disabled:opacity-50 [&amp;_svg]:pointer-events-none [&amp;_svg:not([class*=&#x27;size-&#x27;])]:size-4 shrink-0 [&amp;_svg]:shrink-0 outline-none focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px] aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40 aria-invalid:border-destructive hover:bg-accent hover:text-accent-foreground dark:hover:bg-accent/50 size-9 h-9 w-9" aria-label="Switch to light mode"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="h-5 w-5"><circle cx="12" cy="12" r="4"></circle><path d="M12 2v2"></path><path d="M12 20v2"></path><path d="m4.93 4.93 1.41 1.41"></path><path d="m17.66 17.66 1.41 1.41"></path><path d="M2 12h2"></path><path d="M20 12h2"></path><path d="m6.34 17.66-1.41 1.41"></path><path d="m19.07 4.93-1.41 1.41"></path></svg></button></div></div></nav><main class="container mx-auto p-4"><!--$--><!--$--><!--/$--><script></script><script>(function restoreScroll({
+  storageKey: storageKey2,
+  key,
+  behavior,
+  shouldScrollRestoration,
+  scrollToTopSelectors,
+  location
+}) {
+  let byKey;
+  try {
+    byKey = JSON.parse(sessionStorage.getItem(storageKey2) || "{}");
+  } catch (error) {
+    console.error(error);
+    return;
+  }
+  const resolvedKey = key || window.history.state?.__TSR_key;
+  const elementEntries = byKey[resolvedKey];
+  ignoreScroll = true;
+  scroll: {
+    if (shouldScrollRestoration && elementEntries && Object.keys(elementEntries).length > 0) {
+      for (const elementSelector in elementEntries) {
+        const entry = elementEntries[elementSelector];
+        if (elementSelector === "window") {
+          window.scrollTo({
+            top: entry.scrollY,
+            left: entry.scrollX,
+            behavior
+          });
+        } else if (elementSelector) {
+          const element = document.querySelector(elementSelector);
+          if (element) {
+            element.scrollLeft = entry.scrollX;
+            element.scrollTop = entry.scrollY;
+          }
+        }
+      }
+      break scroll;
+    }
+    const hash = (location ?? window.location).hash.split("#", 2)[1];
+    if (hash) {
+      const hashScrollIntoViewOptions = window.history.state?.__hashScrollIntoViewOptions ?? true;
+      if (hashScrollIntoViewOptions) {
+        const el = document.getElementById(hash);
+        if (el) {
+          el.scrollIntoView(hashScrollIntoViewOptions);
+        }
+      }
+      break scroll;
+    }
+    const scrollOptions = { top: 0, left: 0, behavior };
+    window.scrollTo(scrollOptions);
+    if (scrollToTopSelectors) {
+      for (const selector of scrollToTopSelectors) {
+        if (selector === "window") continue;
+        const element = typeof selector === "function" ? selector() : document.querySelector(selector);
+        if (element) element.scrollTo(scrollOptions);
+      }
+    }
+  }
+  ignoreScroll = false;
+})({"storageKey":"tsr-scroll-restoration-v1_3","shouldScrollRestoration":true});document.currentScript.remove()</script><!--/$--></main><section aria-label="Notifications alt+T" tabindex="-1" aria-live="polite" aria-relevant="additions text" aria-atomic="false"></section><script class="$tsr" id="$tsr-stream-barrier">(self.$R=self.$R||{})["tsr"]=[];self.$_TSR={h(){this.hydrated=!0,this.c()},e(){this.streamEnded=!0,this.c()},c(){this.hydrated&&this.streamEnded&&(delete self.$_TSR,delete self.$R.tsr)},p(e){this.initialized?e():this.buffer.push(e)},buffer:[]};
+;$_TSR.router=($R=>$R[0]={manifest:$R[1]={routes:$R[2]={__root__:$R[3]={preloads:$R[4]=["/assets/main-CnV8hLU_.js"],assets:$R[5]=[$R[6]={tag:"script",attrs:$R[7]={type:"module",async:!0},children:"import('/assets/main-CnV8hLU_.js')"}]}}},matches:$R[8]=[$R[9]={i:"__root__/",u:1768891070099,s:"success",ssr:!0}],lastMatchId:"__root__/"})($R["tsr"]);$_TSR.e();document.currentScript.remove()</script><script type="module" async="">import('/assets/main-CnV8hLU_.js')</script></body></html>

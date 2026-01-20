@@ -3,7 +3,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
-import { Textarea } from '@/components/ui/textarea'
+import { GcodeEditor } from '@/components/ui/gcode-editor'
 import {
   Dialog,
   DialogContent,
@@ -233,7 +233,7 @@ export function EjectionCodesManager() {
                 New
               </Button>
             </DialogTrigger>
-            <DialogContent className="max-w-lg">
+            <DialogContent className="w-[90vw] max-w-6xl max-h-[90vh]">
               <DialogHeader>
                 <DialogTitle>Create Ejection Code</DialogTitle>
                 <DialogDescription>
@@ -253,31 +253,31 @@ export function EjectionCodesManager() {
                 </div>
 
                 <div className="space-y-2">
-                  <Label>G-code Content</Label>
-                  <div className="flex gap-2 mb-2">
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      onClick={() => fileInputRef.current?.click()}
-                    >
-                      <Upload className="h-4 w-4 mr-1" />
-                      Upload File
-                    </Button>
-                    <input
-                      ref={fileInputRef}
-                      type="file"
-                      accept=".txt,.gcode,.gc,.nc"
-                      onChange={handleFileUpload}
-                      className="hidden"
-                    />
+                  <div className="flex items-center justify-between">
+                    <Label>G-code Content</Label>
+                    <div className="flex gap-2">
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={() => fileInputRef.current?.click()}
+                      >
+                        <Upload className="h-4 w-4 mr-1" />
+                        Upload File
+                      </Button>
+                      <input
+                        ref={fileInputRef}
+                        type="file"
+                        accept=".txt,.gcode,.gc,.nc"
+                        onChange={handleFileUpload}
+                        className="hidden"
+                      />
+                    </div>
                   </div>
-                  <Textarea
+                  <GcodeEditor
                     value={newGcode}
-                    onChange={(e) => setNewGcode(e.target.value)}
+                    onChange={setNewGcode}
                     placeholder="; Ejection sequence&#10;G28 X Y&#10;M84"
-                    rows={8}
-                    className="font-mono text-xs"
                   />
                 </div>
               </div>
@@ -358,7 +358,7 @@ export function EjectionCodesManager() {
 
       {/* View/Edit Dialog */}
       <Dialog open={isViewOpen} onOpenChange={setIsViewOpen}>
-        <DialogContent className="max-w-3xl max-h-[90vh] flex flex-col">
+        <DialogContent className="w-[90vw] max-w-6xl h-[85vh] flex flex-col">
           <DialogHeader>
             <DialogTitle>Edit Ejection Code</DialogTitle>
             <DialogDescription>
@@ -380,28 +380,29 @@ export function EjectionCodesManager() {
             <div className="space-y-2 flex-1 flex flex-col min-h-0">
               <div className="flex items-center justify-between">
                 <Label>G-code Content</Label>
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  onClick={() => editFileInputRef.current?.click()}
-                >
-                  <Upload className="h-4 w-4 mr-1" />
-                  Upload File
-                </Button>
-                <input
-                  ref={editFileInputRef}
-                  type="file"
-                  accept=".txt,.gcode,.gc,.nc"
-                  onChange={handleEditFileUpload}
-                  className="hidden"
-                />
+                <div className="flex gap-2">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => editFileInputRef.current?.click()}
+                  >
+                    <Upload className="h-4 w-4 mr-1" />
+                    Upload File
+                  </Button>
+                  <input
+                    ref={editFileInputRef}
+                    type="file"
+                    accept=".txt,.gcode,.gc,.nc"
+                    onChange={handleEditFileUpload}
+                    className="hidden"
+                  />
+                </div>
               </div>
-              <Textarea
+              <GcodeEditor
                 value={editedGcode}
-                onChange={(e) => setEditedGcode(e.target.value)}
+                onChange={setEditedGcode}
                 placeholder="; Ejection sequence&#10;G28 X Y&#10;M84"
-                className="font-mono text-xs flex-1 min-h-[400px] resize-none"
               />
             </div>
           </div>

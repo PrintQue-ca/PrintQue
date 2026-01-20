@@ -3,8 +3,11 @@ import eventlet
 eventlet.monkey_patch()
 
 import os
+import sys
 import uuid
-from flask import Flask, send_from_directory
+import webbrowser
+import threading
+from flask import Flask, send_from_directory, send_file
 from flask_socketio import SocketIO
 from flask_cors import CORS
 from routes import register_routes
@@ -50,8 +53,17 @@ def verify_license():
     return license_info
 
 # Initialize the app with static and templates folders
-static_folder = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'static')
-template_folder = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'templates')
+# Handle both development and packaged (PyInstaller) environments
+if getattr(sys, 'frozen', False):
+    # Running as compiled executable
+    base_dir = sys._MEIPASS
+else:
+    # Running as script
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+
+static_folder = os.path.join(base_dir, 'static')
+template_folder = os.path.join(base_dir, 'templates')
+frontend_folder = os.path.join(base_dir, 'frontend_dist')
 os.makedirs(static_folder, exist_ok=True)
 
 app = Flask(__name__, static_folder=static_folder, static_url_path='/static', template_folder=template_folder)
@@ -59,19 +71,26 @@ app.config['SECRET_KEY'] = Config.SECRET_KEY
 app.config['UPLOAD_FOLDER'] = os.path.join(LOG_DIR, "uploads")  # Writable upload folder
 app.config['LOG_DIR'] = LOG_DIR
 
-# Enable CORS for React frontend development
+# Enable CORS for React frontend development and packaged builds
+allowed_origins = [
+    "http://localhost:3000", "http://127.0.0.1:3000",
+    "http://localhost:5173", "http://127.0.0.1:5173",
+    "http://localhost:5000", "http://127.0.0.1:5000",  # Same-origin for packaged builds
+    "*"  # Allow all for packaged single-executable builds
+]
+
 CORS(app, resources={
     r"/api/*": {
-        "origins": ["http://localhost:3000", "http://127.0.0.1:3000", "http://localhost:5173", "http://127.0.0.1:5173"],
+        "origins": allowed_origins,
         "methods": ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
         "allow_headers": ["Content-Type", "Authorization", "X-Requested-With"]
     },
     r"/socket.io/*": {
-        "origins": ["http://localhost:3000", "http://127.0.0.1:3000", "http://localhost:5173", "http://127.0.0.1:5173"]
+        "origins": allowed_origins
     }
 })
 
-socketio = SocketIO(app, async_mode='eventlet', cors_allowed_origins=["http://localhost:3000", "http://127.0.0.1:3000", "http://localhost:5173", "http://127.0.0.1:5173"])
+socketio = SocketIO(app, async_mode='eventlet', cors_allowed_origins="*")
 
 # Initialize state
 initialize_state()
@@ -88,14 +107,87 @@ if 'days_remaining' in license_info:
 # Register all routes
 register_routes(app, socketio)
 
+# ==================== Frontend Serving ====================
+# Serve React frontend from frontend_dist folder (for packaged builds)
+
+@app.route('/assets/<path:filename>')
+def serve_frontend_assets(filename):
+    """Serve frontend asset files (JS, CSS, etc.)"""
+    assets_folder = os.path.join(frontend_folder, 'assets')
+    if os.path.exists(assets_folder):
+        return send_from_directory(assets_folder, filename)
+    return '', 404
+
+@app.route('/', defaults={'path': ''})
+@app.route('/<path:path>')
+def serve_frontend(path):
+    """Serve React frontend - SPA catch-all route"""
+    # Skip API routes and socket.io
+    if path.startswith('api/') or path.startswith('socket.io'):
+        return '', 404
+    
+    # Skip static files
+    if path.startswith('static/'):
+        return send_from_directory(static_folder, path[7:])
+    
+    # Check if frontend_dist exists (packaged build)
+    if os.path.exists(frontend_folder):
+        # Try to serve the exact file first
+        file_path = os.path.join(frontend_folder, path)
+        if path and os.path.exists(file_path) and os.path.isfile(file_path):
+            return send_from_directory(frontend_folder, path)
+        
+        # For SPA routing, return the main HTML file
+        # TanStack Start uses _shell.html, standard builds use index.html
+        for html_file in ['index.html', '_shell.html']:
+            html_path = os.path.join(frontend_folder, html_file)
+            if os.path.exists(html_path):
+                return send_file(html_path)
+    
+    # Fallback: Return a simple status page if no frontend is available
+    return '''
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>PrintQue API</title>
+        <style>
+            body { font-family: system-ui, sans-serif; max-width: 600px; margin: 100px auto; padding: 20px; }
+            h1 { color: #2196F3; }
+            code { background: #f0f0f0; padding: 2px 6px; border-radius: 4px; }
+        </style>
+    </head>
+    <body>
+        <h1>PrintQue API Server</h1>
+        <p>The API server is running. Available endpoints:</p>
+        <ul>
+            <li><code>GET /api/v1/printers</code> - List printers</li>
+            <li><code>GET /api/v1/orders</code> - List orders</li>
+            <li><code>GET /api/v1/system/stats</code> - System statistics</li>
+        </ul>
+        <p>For the full web interface, ensure the frontend is built and included.</p>
+    </body>
+    </html>
+    ''', 200
+
 # Enhanced favicon route with fallback
 @app.route('/favicon.ico')
 def favicon():
     """Serve favicon with proper caching and fallback"""
     try:
+        # Try frontend_dist first (built frontend assets)
+        frontend_favicon_path = os.path.join(frontend_folder, 'favicon.ico')
+        if os.path.exists(frontend_favicon_path):
+            response = send_from_directory(
+                frontend_folder,
+                'favicon.ico',
+                mimetype='image/vnd.microsoft.icon'
+            )
+            response.headers['Cache-Control'] = 'public, max-age=86400'
+            return response
+
         static_folder_path = app.static_folder or 'static'
 
-        # Try to serve actual favicon.ico first
+        # Fallback: Try static folder favicon.ico
         favicon_path = os.path.join(static_folder_path, 'favicon.ico')
         if os.path.exists(favicon_path):
             response = send_from_directory(
@@ -168,6 +260,16 @@ def cleanup_on_exit():
 # Register the cleanup function
 atexit.register(cleanup_on_exit)
 
+def open_browser():
+    """Open the default web browser after a short delay"""
+    time.sleep(2)  # Wait for server to start
+    url = f"http://localhost:{Config.PORT}"
+    try:
+        webbrowser.open(url)
+        logging.info(f"Opened browser to {url}")
+    except Exception as e:
+        logging.warning(f"Could not open browser: {e}")
+
 if __name__ == '__main__':
     # Start console capture
     console_capture.start()
@@ -192,6 +294,11 @@ if __name__ == '__main__':
     logging.info("=" * 60)
     logging.info("=" * 60)
     logging.info("")
+
+    # Open browser automatically (only for packaged builds or when explicitly requested)
+    if getattr(sys, 'frozen', False) or os.environ.get('OPEN_BROWSER', '').lower() == 'true':
+        browser_thread = threading.Thread(target=open_browser, daemon=True)
+        browser_thread.start()
 
     # Run the Flask app
     # Added app.config['DEBUG'] for the debug flag

@@ -4,6 +4,7 @@ import { StatsCards } from '@/components/layout/StatsCards'
 import { PrinterCard } from '@/components/printers/PrinterCard'
 import { OrdersTable } from '@/components/orders/OrdersTable'
 import { NewOrderForm } from '@/components/orders/NewOrderForm'
+import { EjectionCodesManager } from '@/components/orders/EjectionCodesManager'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Loader2 } from 'lucide-react'
 
@@ -72,6 +73,7 @@ function Dashboard() {
         {/* New Order Form - Sidebar */}
         <div className="space-y-4">
           <NewOrderForm />
+          <EjectionCodesManager />
         </div>
       </div>
     </div>

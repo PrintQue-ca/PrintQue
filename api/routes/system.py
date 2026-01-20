@@ -22,7 +22,26 @@ def register_misc_routes(app, socketio):
     
     @app.route("/")
     def index():
-        """Main dashboard page"""
+        """Main dashboard page - serves React frontend or legacy templates"""
+        import sys
+        from flask import send_file
+        
+        # Determine base directory for packaged vs development mode
+        if getattr(sys, 'frozen', False):
+            base_dir = sys._MEIPASS
+        else:
+            base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        
+        # Check if React frontend exists (packaged build)
+        frontend_folder = os.path.join(base_dir, 'frontend_dist')
+        if os.path.exists(frontend_folder):
+            # Serve React frontend - try index.html or _shell.html (TanStack)
+            for html_file in ['index.html', '_shell.html']:
+                html_path = os.path.join(frontend_folder, html_file)
+                if os.path.exists(html_path):
+                    return send_file(html_path)
+        
+        # Fallback to legacy template rendering
         # Get filament data
         with SafeLock(filament_lock):
             filament_data = load_data(TOTAL_FILAMENT_FILE, {"total_filament_used_g": 0})
