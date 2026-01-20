@@ -51,6 +51,10 @@ export const Route = createRootRouteWithContext<{
         rel: 'icon',
         href: '/favicon.ico',
       },
+      {
+        rel: 'apple-touch-icon',
+        href: '/apple-touch-icon.png',
+      },
     ],
   }),
 
@@ -110,11 +114,12 @@ function ThemeToggle() {
 function Navigation() {
   return (
     <nav className="border-b bg-card">
+      <div className="h-1 bg-linear-to-r from-primary via-primary/80 to-primary/60" />
       <div className="container mx-auto px-4">
         <div className="flex h-14 items-center justify-between">
           <div className="flex items-center gap-6">
-            <Link to="/" className="text-xl font-bold text-primary">
-              PrintQue
+            <Link to="/" className="flex items-center hover:opacity-80 transition-opacity">
+              <img src="/logo192.png" alt="PrintQue" className="h-8 w-auto" />
             </Link>
             <div className="flex items-center gap-4">
               <Link
@@ -157,6 +162,24 @@ function Navigation() {
   )
 }
 
+function Footer() {
+  return (
+    <footer className="border-t bg-card mt-auto">
+      <div className="container mx-auto px-4 py-4">
+        <div className="flex items-center justify-between text-sm text-muted-foreground">
+          <div className="flex items-center gap-2">
+            <img src="/logo192.png" alt="PrintQue" className="h-5 w-auto opacity-60" />
+            <span>PrintQue - Print Queue Management</span>
+          </div>
+          <div className="flex items-center gap-4">
+            <span>3D Print Farm Automation</span>
+          </div>
+        </div>
+      </div>
+    </footer>
+  )
+}
+
 function RootComponent() {
   const { theme } = useTheme()
   
@@ -168,10 +191,13 @@ function RootComponent() {
   return (
     <QueryClientProvider client={queryClient}>
       <RootDocument>
-        <Navigation />
-        <main className="container mx-auto p-4">
-          <Outlet />
-        </main>
+        <div className="flex flex-col min-h-screen">
+          <Navigation />
+          <main className="container mx-auto p-4 flex-1">
+            <Outlet />
+          </main>
+          <Footer />
+        </div>
         <Toaster position="bottom-right" theme={theme} />
       </RootDocument>
       <ReactQueryDevtools buttonPosition="bottom-left" />
