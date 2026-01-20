@@ -154,8 +154,45 @@ def prepare_printer_data_for_broadcast(printers):
     """Prepare printer data with calculated fields for broadcasting"""
     printers_copy = copy.deepcopy(printers)
     
-    # Add minutes since finished for each printer
     for printer in printers_copy:
+        # Map backend field names to frontend expected names
+        # 'file' -> 'current_file' (what's currently printing)
+        if 'file' in printer:
+            printer['current_file'] = printer.get('file')
+        
+        # 'state' -> 'status' (the frontend uses 'status' for the printer state)
+        if 'state' in printer:
+            printer['status'] = printer.get('state')
+        
+        # Extract temperature values - check multiple possible sources
+        # 1. Nested 'temps' object (Prusa format)
+        temps = printer.get('temps', {})
+        nozzle_temp = temps.get('nozzle', 0) if temps else 0
+        bed_temp = temps.get('bed', 0) if temps else 0
+        
+        # 2. Direct nozzle_temp/bed_temp fields (might be set directly for Bambu)
+        if 'nozzle_temp' in printer and printer['nozzle_temp']:
+            nozzle_temp = printer['nozzle_temp']
+        if 'bed_temp' in printer and printer['bed_temp']:
+            bed_temp = printer['bed_temp']
+            
+        # 3. Check Bambu MQTT state directly for real-time temps
+        if printer.get('type') == 'bambu':
+            printer_name = printer.get('name')
+            if printer_name:
+                with bambu_states_lock:
+                    if printer_name in BAMBU_PRINTER_STATES:
+                        bambu_state = BAMBU_PRINTER_STATES[printer_name]
+                        if bambu_state.get('nozzle_temp') is not None:
+                            nozzle_temp = bambu_state.get('nozzle_temp', 0)
+                        if bambu_state.get('bed_temp') is not None:
+                            bed_temp = bambu_state.get('bed_temp', 0)
+        
+        # Always set the temps for frontend
+        printer['nozzle_temp'] = nozzle_temp
+        printer['bed_temp'] = bed_temp
+        
+        # Add minutes since finished for FINISHED printers
         if printer.get('state') == 'FINISHED':
             minutes = get_minutes_since_finished(printer)
             if minutes is not None:

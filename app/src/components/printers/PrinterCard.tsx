@@ -8,7 +8,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
-import { MoreVertical, Play, Pause, Square, CheckCircle } from 'lucide-react'
+import { MoreVertical, Play, Pause, Square, CheckCircle, Thermometer } from 'lucide-react'
 import type { Printer } from '@/types'
 import { useStopPrint, usePausePrint, useResumePrint, useMarkReady } from '@/hooks'
 
@@ -50,6 +50,10 @@ export function PrinterCard({ printer }: PrinterCardProps) {
   const isPrinting = printer.status === 'PRINTING'
   const isPaused = printer.status === 'PAUSED'
   const isFinished = printer.status === 'FINISHED'
+  const isOffline = printer.status === 'OFFLINE'
+
+  // Show temperatures for all online printers
+  const showTemps = !isOffline
 
   return (
     <Card className="relative">
@@ -133,6 +137,19 @@ export function PrinterCard({ printer }: PrinterCardProps) {
                 <DropdownMenuItem className="text-destructive">Delete</DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
+          </div>
+        )}
+        
+        {/* Temperature display */}
+        {showTemps && (
+          <div className="flex items-center gap-4 mt-3 pt-3 border-t text-xs text-muted-foreground">
+            <div className="flex items-center gap-1">
+              <Thermometer className="h-3 w-3" />
+              <span>Nozzle: {printer.nozzle_temp ?? 0}°C</span>
+            </div>
+            <div className="flex items-center gap-1">
+              <span>Bed: {printer.bed_temp ?? 0}°C</span>
+            </div>
           </div>
         )}
       </CardContent>
