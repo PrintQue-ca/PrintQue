@@ -1,6 +1,6 @@
 // Printer types
 export type PrinterType = 'bambu' | 'prusa' | 'octoprint'
-export type PrinterStatus = 'IDLE' | 'PRINTING' | 'FINISHED' | 'ERROR' | 'EJECTING' | 'PAUSED' | 'OFFLINE'
+export type PrinterStatus = 'IDLE' | 'READY' | 'PRINTING' | 'FINISHED' | 'ERROR' | 'EJECTING' | 'PAUSED' | 'OFFLINE'
 
 export interface Printer {
   name: string
@@ -20,6 +20,9 @@ export interface Printer {
   bed_temp?: number
   nozzle_temp?: number
   enabled?: boolean
+  // Error state information
+  error_message?: string
+  hms_alerts?: string[]  // Bambu HMS (Health Management System) alerts
 }
 
 export interface PrinterFormData {

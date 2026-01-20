@@ -176,7 +176,7 @@ def prepare_printer_data_for_broadcast(printers):
         if 'bed_temp' in printer and printer['bed_temp']:
             bed_temp = printer['bed_temp']
             
-        # 3. Check Bambu MQTT state directly for real-time temps
+        # 3. Check Bambu MQTT state directly for real-time temps and error info
         if printer.get('type') == 'bambu':
             printer_name = printer.get('name')
             if printer_name:
@@ -187,6 +187,29 @@ def prepare_printer_data_for_broadcast(printers):
                             nozzle_temp = bambu_state.get('nozzle_temp', 0)
                         if bambu_state.get('bed_temp') is not None:
                             bed_temp = bambu_state.get('bed_temp', 0)
+                        
+                        # Add error information for ERROR state
+                        if bambu_state.get('state') == 'ERROR' or printer.get('state') == 'ERROR':
+                            error_msg = bambu_state.get('error')
+                            hms_alerts = bambu_state.get('hms_alerts', [])
+                            
+                            if error_msg:
+                                printer['error_message'] = error_msg
+                            elif hms_alerts:
+                                printer['error_message'] = '; '.join(hms_alerts)
+                            else:
+                                printer['error_message'] = 'Unknown error'
+                            
+                            # Include HMS alerts separately for detailed view
+                            if hms_alerts:
+                                printer['hms_alerts'] = hms_alerts
+        
+        # For Prusa printers in ERROR state, try to get error details
+        elif printer.get('type') == 'prusa' and printer.get('state') == 'ERROR':
+            # Prusa error info is usually in the state response
+            # Set a generic message if no specific error is stored
+            if not printer.get('error_message'):
+                printer['error_message'] = printer.get('error', 'Printer reported an error - check printer display')
         
         # Always set the temps for frontend
         printer['nozzle_temp'] = nozzle_temp
@@ -201,6 +224,70 @@ def prepare_printer_data_for_broadcast(printers):
                 # If we can't calculate minutes, but printer is FINISHED, set to 0
                 printer['minutes_since_finished'] = 0
                 logging.warning(f"FINISHED printer {printer.get('name')} has no valid timer, setting to 0")
+        
+        # Calculate print_stage for timeline display
+        state = printer.get('state', 'OFFLINE')
+        print_stage = 'idle'  # Default
+        stage_detail = None
+        
+        if state == 'OFFLINE':
+            print_stage = 'offline'
+            stage_detail = 'Printer is offline'
+        elif state in ['IDLE', 'READY']:
+            print_stage = 'idle'
+            stage_detail = 'Ready for next job'
+        elif state == 'PRINTING':
+            print_stage = 'printing'
+            progress = printer.get('progress', 0)
+            time_remaining = printer.get('time_remaining', 0)
+            if time_remaining and time_remaining > 0:
+                mins = int(time_remaining / 60)
+                stage_detail = f'{progress}% complete, ~{mins}m remaining'
+            else:
+                stage_detail = f'{progress}% complete'
+        elif state == 'PAUSED':
+            print_stage = 'paused'
+            stage_detail = 'Print paused'
+        elif state == 'FINISHED':
+            # Determine if waiting to cool or ready for ejection
+            status = printer.get('status', '')
+            ejection_in_progress = printer.get('ejection_in_progress', False)
+            
+            # Check if bed needs to cool down (threshold: 45°C for safe part removal)
+            cooling_threshold = 45
+            is_cooling = bed_temp > cooling_threshold
+            
+            if 'Paused' in status or 'Ejection Paused' in status:
+                print_stage = 'ejection_paused'
+                stage_detail = 'Ejection paused globally'
+            elif 'Queued' in status:
+                print_stage = 'ejection_queued'
+                stage_detail = 'Waiting for ejection slot'
+            elif is_cooling:
+                print_stage = 'cooling'
+                stage_detail = f'Cooling down (bed: {bed_temp}°C → {cooling_threshold}°C)'
+            else:
+                print_stage = 'print_complete'
+                stage_detail = 'Print complete, ready for ejection'
+        elif state == 'EJECTING':
+            print_stage = 'ejecting'
+            ejection_start = printer.get('ejection_start_time')
+            if ejection_start:
+                elapsed = int((time.time() - ejection_start) / 60)
+                stage_detail = f'Ejection in progress ({elapsed}m elapsed)'
+            else:
+                stage_detail = 'Ejection in progress'
+        elif state == 'ERROR':
+            print_stage = 'error'
+            stage_detail = printer.get('error_message', 'Printer error')
+        
+        printer['print_stage'] = print_stage
+        printer['stage_detail'] = stage_detail
+        
+        # Add timestamps for timeline tracking
+        printer['print_started_at'] = printer.get('print_started_at')
+        printer['finish_time'] = printer.get('finish_time')
+        printer['ejection_start_time'] = printer.get('ejection_start_time')
     
     return printers_copy
 

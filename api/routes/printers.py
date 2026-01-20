@@ -1395,6 +1395,90 @@ def delete_printer_by_name():
     flash(f"Printer {printer_name} not found")
     return redirect(url_for('index'))
 
+@printer_bp.route('/clear_error/<int:printer_id>', methods=['POST'])
+def clear_error(printer_id):
+    """Clear error state for a printer and optionally mark it as ready"""
+    socketio = get_socketio()
+    app = get_app()
+    
+    try:
+        printer_copy = None
+        printer_name = None
+        printer_type = None
+        
+        with ReadLock(printers_rwlock):
+            if 0 <= printer_id < len(PRINTERS):
+                printer_copy = copy.deepcopy(PRINTERS[printer_id])
+                printer_name = printer_copy['name']
+                printer_type = printer_copy.get('type', 'prusa')
+            else:
+                return jsonify({"success": False, "message": "Printer not found"}), 404
+        
+        if not printer_copy:
+            return jsonify({"success": False, "message": "Could not retrieve printer data"}), 500
+        
+        # Clear error based on printer type
+        if printer_type == 'bambu':
+            from services.bambu_handler import clear_bambu_error
+            clear_bambu_error(printer_copy)
+        
+        # Update printer state to READY
+        with WriteLock(printers_rwlock):
+            if 0 <= printer_id < len(PRINTERS):
+                PRINTERS[printer_id]["state"] = "READY"
+                PRINTERS[printer_id]["status"] = "Ready"
+                PRINTERS[printer_id]["error"] = None
+                PRINTERS[printer_id]["error_message"] = None
+                PRINTERS[printer_id]["manually_set"] = True
+                PRINTERS[printer_id]["manual_timeout"] = time.time() + 3600  # 1 hour timeout
+                PRINTERS[printer_id]["progress"] = 0
+                PRINTERS[printer_id]["time_remaining"] = 0
+                PRINTERS[printer_id]["file"] = None
+                save_data(PRINTERS_FILE, PRINTERS)
+        
+        logging.info(f"Cleared error state for printer {printer_name}")
+        
+        # Emit status update
+        with SafeLock(filament_lock):
+            total_filament = TOTAL_FILAMENT_CONSUMPTION / 1000
+        with SafeLock(orders_lock):
+            orders_data = ORDERS.copy()
+        with ReadLock(printers_rwlock):
+            printers_copy = prepare_printer_data_for_broadcast(PRINTERS)
+        
+        socketio.emit('status_update', {
+            'printers': printers_copy,
+            'total_filament': total_filament,
+            'orders': orders_data
+        })
+        
+        # Trigger distribution to potentially assign new jobs
+        start_background_distribution(socketio, app)
+        
+        return jsonify({
+            "success": True,
+            "message": f"Error cleared for {printer_name}. Printer is now ready."
+        })
+        
+    except Exception as e:
+        logging.error(f"Error clearing printer error: {str(e)}")
+        return jsonify({"success": False, "message": f"Error: {str(e)}"}), 500
+
+@printer_bp.route('/clear_error_by_name', methods=['POST'])
+def clear_error_by_name():
+    """Clear error state for a printer by name"""
+    printer_name = request.form.get('printer_name') or request.json.get('printer_name') if request.is_json else None
+    
+    if not printer_name:
+        return jsonify({"success": False, "message": "Printer name not provided"}), 400
+    
+    with ReadLock(printers_rwlock):
+        for i, printer in enumerate(PRINTERS):
+            if printer['name'] == printer_name:
+                return clear_error(i)
+    
+    return jsonify({"success": False, "message": f"Printer {printer_name} not found"}), 404
+
 def register_printer_routes(app, socketio):
     """Register the printer routes blueprint with the app"""
     global _app, _socketio

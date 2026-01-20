@@ -8,9 +8,9 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
-import { MoreVertical, Play, Pause, Square, CheckCircle, Thermometer } from 'lucide-react'
+import { MoreVertical, Play, Pause, Square, CheckCircle, Thermometer, AlertTriangle, RefreshCw } from 'lucide-react'
 import type { Printer } from '@/types'
-import { useStopPrint, usePausePrint, useResumePrint, useMarkReady } from '@/hooks'
+import { useStopPrint, usePausePrint, useResumePrint, useMarkReady, useClearError } from '@/hooks'
 
 interface PrinterCardProps {
   printer: Printer
@@ -18,6 +18,7 @@ interface PrinterCardProps {
 
 const statusColors: Record<string, string> = {
   IDLE: 'bg-green-500',
+  READY: 'bg-green-500',
   PRINTING: 'bg-blue-500',
   FINISHED: 'bg-yellow-500',
   ERROR: 'bg-red-500',
@@ -28,6 +29,7 @@ const statusColors: Record<string, string> = {
 
 const statusLabels: Record<string, string> = {
   IDLE: 'Idle',
+  READY: 'Ready',
   PRINTING: 'Printing',
   FINISHED: 'Finished',
   ERROR: 'Error',
@@ -41,16 +43,19 @@ export function PrinterCard({ printer }: PrinterCardProps) {
   const pausePrint = usePausePrint()
   const resumePrint = useResumePrint()
   const markReady = useMarkReady()
+  const clearError = useClearError()
 
   const handleStop = () => stopPrint.mutate(printer.name)
   const handlePause = () => pausePrint.mutate(printer.name)
   const handleResume = () => resumePrint.mutate(printer.name)
   const handleMarkReady = () => markReady.mutate(printer.name)
+  const handleClearError = () => clearError.mutate(printer.name)
 
   const isPrinting = printer.status === 'PRINTING'
   const isPaused = printer.status === 'PAUSED'
   const isFinished = printer.status === 'FINISHED'
   const isOffline = printer.status === 'OFFLINE'
+  const isError = printer.status === 'ERROR'
 
   // Show temperatures for all online printers
   const showTemps = !isOffline
@@ -122,6 +127,53 @@ export function PrinterCard({ printer }: PrinterCardProps) {
               <CheckCircle className="h-4 w-4 mr-1" />
               Mark Ready
             </Button>
+          </div>
+        ) : isError ? (
+          <div className="space-y-3">
+            {/* Error Alert Box */}
+            <div className="rounded-md bg-red-50 dark:bg-red-950/50 border border-red-200 dark:border-red-800 p-3">
+              <div className="flex items-start gap-2">
+                <AlertTriangle className="h-5 w-5 text-red-500 shrink-0 mt-0.5" />
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-medium text-red-800 dark:text-red-200">
+                    Printer Error
+                  </p>
+                  <p className="text-sm text-red-700 dark:text-red-300 mt-1 break-all">
+                    {printer.error_message || 'Unknown error - check printer display'}
+                  </p>
+                  {/* Show HMS alerts if available (Bambu printers) */}
+                  {printer.hms_alerts && printer.hms_alerts.length > 0 && (
+                    <div className="mt-2 space-y-1">
+                      <p className="text-xs font-medium text-red-600 dark:text-red-400">
+                        HMS Alerts:
+                      </p>
+                      <ul className="text-xs text-red-600 dark:text-red-400 list-disc list-inside">
+                        {printer.hms_alerts.map((alert, index) => (
+                          <li key={index} className="break-all">{alert}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+            
+            {/* Action Buttons */}
+            <div className="flex gap-2">
+              <Button 
+                size="sm" 
+                variant="outline"
+                onClick={handleClearError}
+                disabled={clearError.isPending}
+                className="flex-1"
+              >
+                <RefreshCw className={`h-4 w-4 mr-1 ${clearError.isPending ? 'animate-spin' : ''}`} />
+                {clearError.isPending ? 'Clearing...' : 'Clear Error'}
+              </Button>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              Clear error to mark printer as ready and resume queue processing
+            </p>
           </div>
         ) : (
           <div className="flex items-center justify-between">

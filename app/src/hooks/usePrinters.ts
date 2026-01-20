@@ -107,3 +107,14 @@ export function useMarkReady() {
     },
   })
 }
+
+export function useClearError() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (printerName: string) =>
+      api.post<ApiResponse>(`/clear_error_by_name`, { printer_name: printerName }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['printers'] })
+    },
+  })
+}
