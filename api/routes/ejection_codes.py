@@ -277,6 +277,7 @@ def test_ejection_code(code_id):
     
     Expects JSON body with:
     - printer_name: Name of the printer to send the G-code to
+    - force_reconnect: (optional) If true, force reconnect MQTT before sending (helps with stuck state)
     """
     try:
         data = request.get_json()
@@ -287,6 +288,8 @@ def test_ejection_code(code_id):
             }), 400
         
         printer_name = data.get('printer_name', '').strip()
+        force_reconnect = data.get('force_reconnect', False)
+        
         if not printer_name:
             return jsonify({
                 'success': False,
@@ -323,23 +326,71 @@ def test_ejection_code(code_id):
                 'error': f'Printer "{printer_name}" not found'
             }), 404
         
-        # Check printer state - allow testing on IDLE, READY, or FINISHED printers
-        allowed_states = ['IDLE', 'READY', 'FINISHED', 'OPERATIONAL']
-        if printer_copy.get('state', '').upper() not in allowed_states:
-            return jsonify({
-                'success': False,
-                'error': f'Printer "{printer_name}" is not ready for testing. Current state: {printer_copy.get("state", "UNKNOWN")}. Allowed states: {", ".join(allowed_states)}'
-            }), 400
-        
         gcode = ejection_code['gcode']
         printer_type = printer_copy.get('type', 'prusa')
+        
+        # For Bambu printers, skip strict state checking for test commands
+        # M400 in G-code causes the printer to report RUNNING/PRINTING state briefly
+        # which would block subsequent test commands. For debugging, allow more states.
+        printer_state = printer_copy.get('state', '').upper()
+        
+        if printer_type == 'bambu':
+            from services.bambu_handler import BAMBU_PRINTER_STATES, bambu_states_lock
+            
+            # Log state for debugging but don't block based on it
+            with bambu_states_lock:
+                if printer_name in BAMBU_PRINTER_STATES:
+                    bambu_state = BAMBU_PRINTER_STATES[printer_name]
+                    actual_state = bambu_state.get('state', 'UNKNOWN').upper()
+                    gcode_state = bambu_state.get('gcode_state', 'UNKNOWN').upper()
+                    waiting_m400 = bambu_state.get('waiting_for_m400', False)
+                    ejection_in_progress = bambu_state.get('ejection_in_progress', False)
+                    
+                    logging.info(f"[TEST] {printer_name} states - PRINTERS: {printer_state}, BAMBU: {actual_state}, gcode_state: {gcode_state}, waiting_m400: {waiting_m400}, ejection_in_progress: {ejection_in_progress}")
+                    
+                    # Only block if printer is actively PRINTING a job (not just processing G-code commands)
+                    # RUNNING/PRINTING from M400 should not block test commands
+                    if actual_state == 'PRINTING' and gcode_state == 'RUNNING':
+                        # Check if there's actually a print job vs just command processing
+                        has_print_job = bool(bambu_state.get('current_file'))
+                        if has_print_job:
+                            return jsonify({
+                                'success': False,
+                                'error': f'Printer "{printer_name}" is currently printing a job. Wait for print to complete.',
+                                'state': actual_state,
+                                'gcode_state': gcode_state
+                            }), 400
+                        else:
+                            logging.info(f"[TEST] {printer_name} is in {actual_state}/{gcode_state} but no print job - allowing test command")
+                    
+                    # Clear stuck M400 waiting state if it's been too long (over 5 minutes)
+                    if waiting_m400:
+                        ejection_start = bambu_state.get('ejection_start_time', 0)
+                        if ejection_start and (time.time() - ejection_start > 300):
+                            logging.warning(f"[TEST] Clearing stuck waiting_for_m400 flag for {printer_name} (over 5 minutes)")
+                            bambu_state['waiting_for_m400'] = False
+                            bambu_state['ejection_in_progress'] = False
+                else:
+                    logging.info(f"[TEST] No BAMBU_PRINTER_STATES for {printer_name}, proceeding with test")
+        else:
+            # For non-Bambu printers, check state normally
+            allowed_states = ['IDLE', 'READY', 'FINISHED', 'OPERATIONAL']
+            if printer_state not in allowed_states:
+                return jsonify({
+                    'success': False,
+                    'error': f'Printer "{printer_name}" is not ready for testing. Current state: {printer_state}. Allowed states: {", ".join(allowed_states)}'
+                }), 400
         
         # Count actual G-code commands (excluding comments)
         actual_commands = [line.split(';')[0].strip() for line in gcode.split('\n')]
         actual_commands = [line for line in actual_commands if line]
         command_count = len(actual_commands)
         
-        logging.info(f"Testing ejection code '{ejection_code['name']}' on {printer_type} printer {printer_name} ({command_count} commands)")
+        # Check if M400 is in the G-code (causes printer to wait for moves to complete)
+        has_m400 = any('M400' in cmd.upper() for cmd in actual_commands)
+        has_temp_wait = any(cmd.upper().startswith(('M109', 'M190')) for cmd in actual_commands)
+        
+        logging.info(f"Testing ejection code '{ejection_code['name']}' on {printer_type} printer {printer_name} ({command_count} commands, M400: {has_m400}, temp_wait: {has_temp_wait})")
         
         # Send the G-code based on printer type
         if printer_type == 'bambu':
@@ -361,18 +412,34 @@ def test_ejection_code(code_id):
                         'error': f'Could not establish MQTT connection to Bambu printer {printer_name}'
                     }), 500
             
-            success = send_bambu_gcode_command(printer_copy, gcode)
+            # Send with force_reconnect if requested
+            success = send_bambu_gcode_command(printer_copy, gcode, force_reconnect=force_reconnect)
             
             if success:
                 logging.info(f"Test ejection code '{ejection_code['name']}' sent to Bambu printer {printer_name} ({command_count} commands)")
-                return jsonify({
+                
+                # Build response message with warnings about blocking commands
+                message = f'Ejection code "{ejection_code["name"]}" sent to {printer_name} ({command_count} G-code commands)'
+                warnings = []
+                if has_m400:
+                    warnings.append('M400 detected - printer will wait for moves to complete before accepting new commands')
+                if has_temp_wait:
+                    warnings.append('Temperature wait commands detected (M109/M190) - may take time to complete')
+                
+                response = {
                     'success': True,
-                    'message': f'Ejection code "{ejection_code["name"]}" sent to {printer_name} ({command_count} G-code commands)'
-                })
+                    'message': message
+                }
+                if warnings:
+                    response['warnings'] = warnings
+                    response['note'] = 'You can send another test immediately - the printer will queue commands'
+                
+                return jsonify(response)
             else:
                 return jsonify({
                     'success': False,
-                    'error': f'Failed to send G-code to Bambu printer {printer_name}. Check that the printer is connected and not busy.'
+                    'error': f'Failed to send G-code to Bambu printer {printer_name}. Check that the printer is connected and not busy.',
+                    'hint': 'Try with force_reconnect: true if MQTT seems stuck'
                 }), 500
         else:
             # For Prusa/OctoPrint printers, use HTTP API
@@ -514,7 +581,8 @@ def test_printer_connection(printer_name):
         }
         
         logging.info(f"[CONNECTION_TEST] Sending M400 to {printer_name} on topic {topic}")
-        result = client.publish(topic, json.dumps(test_command), qos=1)
+        # Use QoS 0 (fire and forget) to prevent message queuing issues
+        result = client.publish(topic, json.dumps(test_command), qos=0)
         
         if result.rc != mqtt.MQTT_ERR_SUCCESS:
             return jsonify({
@@ -537,6 +605,151 @@ def test_printer_connection(printer_name):
         logging.error(f"[CONNECTION_TEST] Error: {str(e)}")
         import traceback
         logging.error(f"[CONNECTION_TEST] Traceback: {traceback.format_exc()}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+
+@ejection_codes_bp.route('/reset-ejection-state/<printer_name>', methods=['POST'])
+def reset_ejection_state(printer_name):
+    """Reset ejection state for a specific printer (for debugging)
+    
+    Clears any stuck ejection flags that might be preventing repeated ejection tests.
+    
+    Optional JSON body:
+    - reconnect: If true, also force reconnect the MQTT client
+    """
+    try:
+        from services.bambu_handler import BAMBU_PRINTER_STATES, bambu_states_lock, MQTT_CLIENTS, connect_bambu_printer
+        
+        # Check if reconnect is requested
+        data = request.get_json() or {}
+        should_reconnect = data.get('reconnect', False)
+        
+        # Find the printer
+        printer_copy = None
+        with ReadLock(printers_rwlock):
+            for printer in PRINTERS:
+                if printer['name'] == printer_name:
+                    printer_copy = copy.deepcopy(printer)
+                    break
+        
+        if not printer_copy:
+            return jsonify({
+                'success': False,
+                'error': f'Printer "{printer_name}" not found'
+            }), 404
+        
+        cleared_flags = []
+        
+        # Force reconnect MQTT if requested
+        if should_reconnect and printer_copy.get('type') == 'bambu':
+            logging.info(f"Force reconnecting MQTT for {printer_name}...")
+            if printer_name in MQTT_CLIENTS:
+                try:
+                    old_client = MQTT_CLIENTS[printer_name]
+                    old_client.loop_stop()
+                    old_client.disconnect()
+                except Exception as e:
+                    logging.warning(f"Error disconnecting: {e}")
+                del MQTT_CLIENTS[printer_name]
+                cleared_flags.append('mqtt_client (disconnected)')
+            
+            time.sleep(1)
+            
+            if connect_bambu_printer(printer_copy):
+                cleared_flags.append('mqtt_client (reconnected)')
+            else:
+                cleared_flags.append('mqtt_client (reconnect FAILED)')
+        
+        with bambu_states_lock:
+            if printer_name in BAMBU_PRINTER_STATES:
+                state = BAMBU_PRINTER_STATES[printer_name]
+                
+                # Clear ejection in progress flag
+                if state.get('ejection_in_progress', False):
+                    state['ejection_in_progress'] = False
+                    cleared_flags.append('ejection_in_progress')
+                
+                # Clear last ejection time (removes cooldown)
+                if state.get('last_ejection_time'):
+                    old_time = state['last_ejection_time']
+                    state['last_ejection_time'] = 0
+                    cleared_flags.append(f'last_ejection_time (was {time.time() - old_time:.1f}s ago)')
+                
+                # Clear waiting for M400 flag
+                if state.get('waiting_for_m400', False):
+                    state['waiting_for_m400'] = False
+                    cleared_flags.append('waiting_for_m400')
+                
+                # Clear ejection start time
+                if state.get('ejection_start_time'):
+                    state['ejection_start_time'] = None
+                    cleared_flags.append('ejection_start_time')
+                
+                # If state is EJECTING, set to READY
+                if state.get('state') == 'EJECTING':
+                    state['state'] = 'READY'
+                    cleared_flags.append('state (EJECTING -> READY)')
+                
+                logging.info(f"Reset ejection state for {printer_name}: {cleared_flags}")
+            else:
+                if not cleared_flags:
+                    return jsonify({
+                        'success': True,
+                        'message': f'No ejection state found for {printer_name} (nothing to reset)',
+                        'cleared_flags': []
+                    })
+        
+        return jsonify({
+            'success': True,
+            'message': f'Ejection state reset for {printer_name}',
+            'cleared_flags': cleared_flags
+        })
+        
+    except Exception as e:
+        logging.error(f"Error resetting ejection state for {printer_name}: {str(e)}")
+        import traceback
+        logging.error(f"Traceback: {traceback.format_exc()}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+
+@ejection_codes_bp.route('/debug-state/<printer_name>', methods=['GET'])
+def debug_ejection_state(printer_name):
+    """Get current ejection state for debugging"""
+    try:
+        from services.bambu_handler import BAMBU_PRINTER_STATES, bambu_states_lock
+        
+        with bambu_states_lock:
+            if printer_name in BAMBU_PRINTER_STATES:
+                state = BAMBU_PRINTER_STATES[printer_name].copy()
+                
+                # Calculate time since last ejection
+                if state.get('last_ejection_time'):
+                    state['seconds_since_last_ejection'] = time.time() - state['last_ejection_time']
+                
+                # Calculate ejection duration if in progress
+                if state.get('ejection_start_time'):
+                    state['ejection_duration_seconds'] = time.time() - state['ejection_start_time']
+                
+                return jsonify({
+                    'success': True,
+                    'printer_name': printer_name,
+                    'state': state
+                })
+            else:
+                return jsonify({
+                    'success': True,
+                    'printer_name': printer_name,
+                    'state': None,
+                    'message': 'No state found for this printer'
+                })
+                
+    except Exception as e:
         return jsonify({
             'success': False,
             'error': str(e)

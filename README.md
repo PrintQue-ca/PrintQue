@@ -2,6 +2,40 @@
 
 PrintQue is a powerful and easy-to-use management system designed for 3D print farms. It provides centralized control, monitoring, and queue management for multiple 3D printers, helping you maximize efficiency and productivity.
 
+## Quick Start
+
+### Backend (API Server)
+
+```bash
+# Install
+cd api
+python -m venv .venv
+# Windows (Command Prompt):
+.venv\Scripts\activate
+# Windows (Git Bash) / macOS / Linux:
+source .venv/Scripts/activate  # Git Bash
+source .venv/bin/activate      # macOS/Linux
+pip install -r requirements.txt
+
+# Start
+python app.py
+```
+
+The API server runs on **http://localhost:5000**
+
+### Frontend (React App)
+
+```bash
+# Install
+cd app
+npm install
+
+# Start
+npm run dev
+```
+
+The frontend runs on **http://localhost:3000**
+
 ## Tech Stack
 
 ### Frontend

@@ -485,6 +485,15 @@ def connect_bambu_printer(printer: Dict[str, Any]) -> bool:
             server_name=printer['serial_number']
         )
         
+        # CRITICAL: Disable message queuing to prevent old commands from replaying
+        # This prevents the "stuck commands replaying on restart" issue
+        try:
+            client.max_queued_messages_set(0)  # Don't queue messages
+            client.max_inflight_messages_set(1)  # Only 1 message in flight at a time
+        except AttributeError:
+            # Older paho-mqtt versions might not have these
+            logging.warning(f"Could not set MQTT queue limits for {printer_name}")
+        
         # Set up userdata for callbacks
         client.user_data_set({
             'printer_name': printer_name,
@@ -556,7 +565,7 @@ def connect_bambu_printer(printer: Dict[str, Any]) -> bool:
         return False
 
 def disconnect_bambu_printer(printer_name: str) -> None:
-    """Disconnect a Bambu printer"""
+    """Disconnect a Bambu printer and clear any queued messages"""
     if printer_name not in MQTT_CLIENTS:
         logging.debug(f"Bambu printer {printer_name} not in MQTT_CLIENTS, nothing to disconnect")
         return
@@ -565,6 +574,15 @@ def disconnect_bambu_printer(printer_name: str) -> None:
         client = MQTT_CLIENTS[printer_name]
         # Remove from dict first to prevent double disconnect
         del MQTT_CLIENTS[printer_name]
+        
+        # Clear any pending/queued messages to prevent replay on reconnect
+        try:
+            # Reinitialize the message queue to clear it
+            client._out_messages = []
+            client._out_message_mutex = threading.Lock() if not hasattr(client, '_out_message_mutex') else client._out_message_mutex
+            logging.debug(f"Cleared message queue for {printer_name}")
+        except Exception as e:
+            logging.debug(f"Could not clear message queue for {printer_name}: {e}")
         
         # Then stop the client
         try:
@@ -839,23 +857,40 @@ def send_bambu_print_command(printer: Dict[str, Any], filename: str, filepath: s
         logging.error(f"Error sending print command to Bambu printer {printer_name}: {str(e)}")
         return False
 
-def send_bambu_gcode_command(printer: Dict[str, Any], gcode: str) -> bool:
+def send_bambu_gcode_command(printer: Dict[str, Any], gcode: str, force_reconnect: bool = False) -> bool:
     """Send raw G-code command to Bambu printer
     
     Filters out comment-only lines and sends actual G-code commands via MQTT.
-    Uses QoS 1 for reliable delivery and longer delays between commands.
+    Uses QoS 0 (fire and forget) for reliable repeated testing.
+    
+    Args:
+        printer: Printer dictionary
+        gcode: G-code commands to send
+        force_reconnect: If True, disconnect and reconnect before sending (helps clear stuck state)
     """
     printer_name = printer['name']
     serial_number = printer.get('serial_number', '')
     
     logging.info(f"[GCODE_TEST] Starting G-code send to Bambu printer {printer_name} (serial: {serial_number})")
     
+    # Force reconnect if requested (helps clear stuck MQTT state)
+    if force_reconnect and printer_name in MQTT_CLIENTS:
+        logging.info(f"[GCODE_TEST] Force reconnecting {printer_name} to clear MQTT state...")
+        try:
+            old_client = MQTT_CLIENTS[printer_name]
+            old_client.loop_stop()
+            old_client.disconnect()
+        except Exception as e:
+            logging.warning(f"[GCODE_TEST] Error disconnecting old client: {e}")
+        if printer_name in MQTT_CLIENTS:
+            del MQTT_CLIENTS[printer_name]
+        time.sleep(1)
+    
     # Ensure connected
     if printer_name not in MQTT_CLIENTS or not MQTT_CLIENTS[printer_name].is_connected():
         logging.info(f"[GCODE_TEST] Printer {printer_name} not connected, attempting connection...")
         if not connect_bambu_printer(printer):
             logging.error(f"[GCODE_TEST] Cannot send G-code - Bambu printer {printer_name} not connected")
-            # CRITICAL FIX: Update cached state to OFFLINE when connection fails
             with bambu_states_lock:
                 if printer_name in BAMBU_PRINTER_STATES:
                     BAMBU_PRINTER_STATES[printer_name]['state'] = 'OFFLINE'
@@ -870,7 +905,6 @@ def send_bambu_gcode_command(printer: Dict[str, Any], gcode: str) -> bool:
     # Verify connection is actually established
     if not client.is_connected():
         logging.error(f"[GCODE_TEST] MQTT client reports not connected for {printer_name}")
-        # CRITICAL FIX: Update cached state to OFFLINE
         with bambu_states_lock:
             if printer_name in BAMBU_PRINTER_STATES:
                 BAMBU_PRINTER_STATES[printer_name]['state'] = 'OFFLINE'
@@ -900,6 +934,8 @@ def send_bambu_gcode_command(printer: Dict[str, Any], gcode: str) -> bool:
         logging.info(f"[GCODE_TEST] Publishing to topic: {topic}")
         
         sent_count = 0
+        failed_count = 0
+        
         for i, line in enumerate(gcode_lines):
             seq_id = get_next_sequence_id(printer_name)
             command = {
@@ -910,12 +946,15 @@ def send_bambu_gcode_command(printer: Dict[str, Any], gcode: str) -> bool:
                 }
             }
             
-            # Use QoS 1 for acknowledgment
-            result = client.publish(topic, json.dumps(command), qos=1)
+            # Use QoS 0 (fire and forget) to avoid message queue buildup
+            # QoS 1 was causing messages to queue and block subsequent sends
+            result = client.publish(topic, json.dumps(command), qos=0)
             
             if result.rc != mqtt.MQTT_ERR_SUCCESS:
                 logging.error(f"[GCODE_TEST] MQTT publish failed for '{line}': rc={result.rc}")
-                return False
+                failed_count += 1
+                # Don't return immediately - try to send remaining commands
+                continue
             
             sent_count += 1
             
@@ -923,16 +962,19 @@ def send_bambu_gcode_command(printer: Dict[str, Any], gcode: str) -> bool:
             if i < 3 or i % 10 == 0:
                 logging.info(f"[GCODE_TEST] Sent ({i+1}/{len(gcode_lines)}): {line} [seq={seq_id}]")
             
-            # Longer delay between commands to ensure printer processes each one
-            time.sleep(0.15)
+            # Small delay between commands
+            time.sleep(0.1)
         
-        logging.info(f"[GCODE_TEST] Successfully sent {sent_count}/{len(gcode_lines)} G-code commands to {printer_name}")
+        if failed_count > 0:
+            logging.warning(f"[GCODE_TEST] Sent {sent_count}/{len(gcode_lines)} commands, {failed_count} failed for {printer_name}")
+        else:
+            logging.info(f"[GCODE_TEST] Successfully sent {sent_count}/{len(gcode_lines)} G-code commands to {printer_name}")
         
         # Request status update to see if printer state changed
-        time.sleep(0.5)
+        time.sleep(0.3)
         request_bambu_status(printer)
         
-        return True
+        return sent_count > 0
         
     except Exception as e:
         logging.error(f"[GCODE_TEST] Error sending G-code to Bambu printer {printer_name}: {str(e)}")
@@ -940,8 +982,14 @@ def send_bambu_gcode_command(printer: Dict[str, Any], gcode: str) -> bool:
         logging.error(f"[GCODE_TEST] Traceback: {traceback.format_exc()}")
         return False
 
-def send_bambu_ejection_gcode(printer: Dict[str, Any], end_gcode: str) -> bool:
-    """Send ejection G-code commands directly to Bambu printer via MQTT"""
+def send_bambu_ejection_gcode(printer: Dict[str, Any], end_gcode: str, force: bool = False) -> bool:
+    """Send ejection G-code commands directly to Bambu printer via MQTT
+    
+    Args:
+        printer: Printer dictionary
+        end_gcode: G-code commands to send
+        force: If True, bypass cooldown and in-progress checks (for debugging)
+    """
     printer_name = printer['name']
     
     # CRITICAL: Check if we're already ejecting or have recently ejected
@@ -949,14 +997,24 @@ def send_bambu_ejection_gcode(printer: Dict[str, Any], end_gcode: str) -> bool:
         if printer_name in BAMBU_PRINTER_STATES:
             # Check if ejection is already in progress
             if BAMBU_PRINTER_STATES[printer_name].get('ejection_in_progress', False):
-                logging.warning(f"Ejection already in progress for Bambu printer {printer_name} - skipping")
-                return False
+                if force:
+                    logging.warning(f"Force-clearing ejection_in_progress flag for Bambu printer {printer_name}")
+                    BAMBU_PRINTER_STATES[printer_name]['ejection_in_progress'] = False
+                else:
+                    logging.warning(f"Ejection already in progress for Bambu printer {printer_name} - skipping (use force=True to override)")
+                    return False
             
-            # Check if we recently completed ejection (within last 60 seconds)
+            # Check if we recently completed ejection (within last 10 seconds for safety, reduced from 60)
+            # This prevents rapid double-triggering but allows reasonable re-testing
+            cooldown_seconds = 10
             last_ejection = BAMBU_PRINTER_STATES[printer_name].get('last_ejection_time', 0)
-            if time.time() - last_ejection < 60:
-                logging.warning(f"Ejection recently completed for Bambu printer {printer_name} - skipping")
-                return False
+            time_since_last = time.time() - last_ejection
+            if time_since_last < cooldown_seconds:
+                if force:
+                    logging.warning(f"Force-bypassing {cooldown_seconds}s cooldown for Bambu printer {printer_name} (last ejection {time_since_last:.1f}s ago)")
+                else:
+                    logging.warning(f"Ejection cooldown active for Bambu printer {printer_name} - {cooldown_seconds - time_since_last:.1f}s remaining (use force=True to override)")
+                    return False
             
             # Mark ejection as in progress
             BAMBU_PRINTER_STATES[printer_name]['ejection_in_progress'] = True
