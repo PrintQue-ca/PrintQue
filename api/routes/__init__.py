@@ -9,7 +9,6 @@ from werkzeug.utils import secure_filename
 from .printers import register_printer_routes
 from .orders import register_order_routes
 from .system import register_misc_routes
-from .license import register_license_routes
 from .support import register_support_routes
 from .history import register_history_routes
 from .ejection_codes import register_ejection_codes_routes
@@ -29,7 +28,6 @@ __all__ = [
     'register_printer_routes',
     'register_order_routes', 
     'register_misc_routes',
-    'register_license_routes',
     'register_support_routes',
     'register_history_routes',
     'register_ejection_codes_routes',
@@ -39,7 +37,6 @@ def register_routes(app, socketio):
     register_printer_routes(app, socketio)
     register_order_routes(app, socketio)
     register_misc_routes(app, socketio)
-    register_license_routes(app, socketio)
     register_support_routes(app, socketio)
     register_history_routes(app, socketio)
     register_ejection_codes_routes(app, socketio)
@@ -183,17 +180,14 @@ def register_routes(app, socketio):
 
     @app.route('/api/v1/system/license', methods=['GET'])
     def api_system_license():
-        """API: Get license information"""
-        try:
-            return jsonify({
-                'tier': app.config.get('LICENSE_TIER', 'free'),
-                'valid': app.config.get('LICENSE_VALID', False),
-                'max_printers': app.config.get('MAX_PRINTERS', 3),
-                'features': app.config.get('LICENSE_FEATURES', []),
-                'days_remaining': app.config.get('LICENSE_DAYS_REMAINING', None)
-            })
-        except Exception as e:
-            return jsonify({'error': str(e)}), 500
+        """API: Get license information - Open Source Edition"""
+        return jsonify({
+            'tier': 'OPEN_SOURCE',
+            'valid': True,
+            'max_printers': -1,  # Unlimited
+            'features': ['all'],
+            'message': 'PrintQue Open Source Edition - All features enabled'
+        })
 
     @app.route('/api/v1/system/info', methods=['GET'])
     def api_system_info():

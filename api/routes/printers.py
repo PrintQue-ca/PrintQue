@@ -200,17 +200,6 @@ def add_printer():
     if not name or not ip:
         flash("Name and IP address are required!")
         return redirect(url_for('index'))
-    
-    # Check license limits
-    with ReadLock(printers_rwlock):
-        current_printer_count = len(PRINTERS)
-    
-    max_printers = app.config.get('MAX_PRINTERS', 3)
-    license_tier = app.config.get('LICENSE_TIER', 'free')
-    
-    if current_printer_count >= max_printers:
-        flash(f"You have reached your printer limit ({max_printers}). Please upgrade your license to add more printers.")
-        return redirect(url_for('index'))
 
     # Create new printer based on type
     new_printer = {
@@ -274,25 +263,7 @@ def add_printers_bulk():
         if not data or 'printers' not in data:
             return jsonify({"success": False, "message": "No printer data provided"}), 400
         
-        # Check current printer count and license limits
-        with ReadLock(printers_rwlock):
-            current_printer_count = len(PRINTERS)
-        
-        max_printers = app.config.get('MAX_PRINTERS', 3)
-        license_tier = app.config.get('LICENSE_TIER', 'free')
-        
-        # Calculate how many we can add
-        available_slots = max_printers - current_printer_count
-        printers_to_add = data['printers'][:available_slots]
-        
-        if not printers_to_add:
-            return jsonify({
-                "success": False, 
-                "message": f"You have reached your printer limit ({max_printers}). Please upgrade your license to add more printers.",
-                "license_tier": license_tier,
-                "max_printers": max_printers,
-                "current_count": current_printer_count
-            }), 403
+        printers_to_add = data['printers']
         
         new_printers = []
         for printer_data in printers_to_add:

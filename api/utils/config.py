@@ -102,13 +102,6 @@ class Config:
     MAX_FILENAME_LENGTH = 255
     TEMP_FILE_CLEANUP_HOURS = 24  # Hours before cleaning up temp files
     
-    # LICENSE CONFIGURATION (if applicable)
-    LICENSE_CHECK_INTERVAL = 3600  # Seconds between license checks
-    MAX_PRINTERS_FREE = 99
-    MAX_PRINTERS_STANDARD = 5
-    MAX_PRINTERS_PROFESSIONAL = 15
-    MAX_PRINTERS_ENTERPRISE = 999
-    
     @classmethod
     def validate_config(cls):
         """Validate configuration settings"""

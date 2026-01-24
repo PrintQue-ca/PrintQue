@@ -61,12 +61,7 @@ def register_misc_routes(app, socketio):
         default_end_gcode = default_settings.get('default_end_gcode', '')
         default_ejection_enabled = default_settings.get('default_ejection_enabled', False)
         
-        # Get license information
-        license_tier = app.config.get('LICENSE_TIER', 'free')
-        license_valid = app.config.get('LICENSE_VALID', False)
-        max_printers = app.config.get('MAX_PRINTERS', 3)
-        
-        # Count printers to show limit usage
+        # Count printers
         with ReadLock(printers_rwlock):
             printer_count = len(PRINTERS)
         
@@ -80,27 +75,22 @@ def register_misc_routes(app, socketio):
                               last_refresh=datetime.now().strftime("%Y-%m-%d %H:%M:%S"), 
                               total_printers=len(PRINTERS),
                               groups=groups,
-                              license_tier=license_tier,
-                              license_valid=license_valid,
-                              max_printers=max_printers,
+                              license_tier='OPEN_SOURCE',
+                              license_valid=True,
+                              max_printers=-1,
                               printer_count=printer_count)
 
     @app.route("/printers")
     def printers():
         """Printers management page"""
-        # Get license information
-        license_tier = app.config.get('LICENSE_TIER', 'free')
-        license_valid = app.config.get('LICENSE_VALID', False)
-        max_printers = app.config.get('MAX_PRINTERS', 3)
-        
         with ReadLock(printers_rwlock):
             printer_count = len(PRINTERS)
         
         return render_template("printers.html",
                               printers=PRINTERS,
-                              license_tier=license_tier,
-                              license_valid=license_valid,
-                              max_printers=max_printers,
+                              license_tier='OPEN_SOURCE',
+                              license_valid=True,
+                              max_printers=-1,
                               printer_count=printer_count)
 
     @app.route("/stats")
@@ -134,20 +124,15 @@ def register_misc_routes(app, socketio):
     @app.route("/bulk_upload")
     def bulk_upload():
         """Render the bulk upload page"""
-        # Get license information for any restrictions
-        license_tier = app.config.get('LICENSE_TIER', 'free')
-        license_valid = app.config.get('LICENSE_VALID', False)
-        max_printers = app.config.get('MAX_PRINTERS', 3)
-        
         # Get available printer groups
         groups = None
         with ReadLock(printers_rwlock):
             groups = sorted(set(str(p.get('group', 'Default')) for p in PRINTERS)) if PRINTERS else ['Default']
         
         return render_template("bulk_upload.html", 
-                              license_tier=license_tier,
-                              license_valid=license_valid,
-                              max_printers=max_printers,
+                              license_tier='OPEN_SOURCE',
+                              license_valid=True,
+                              max_printers=-1,
                               available_groups=groups)
 
     @app.route('/clear_all_data', methods=['POST'])
@@ -228,11 +213,15 @@ def register_misc_routes(app, socketio):
     @app.route('/system-info')
     def system_info():
         """Display system information including Machine ID"""
-        from utils.license_validator import get_machine_id
         import platform
+        import uuid
+        
+        # Generate a unique machine ID
+        system_info_str = platform.node() + platform.machine() + platform.processor()
+        machine_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, system_info_str))
         
         info = {
-            'machine_id': get_machine_id(),
+            'machine_id': machine_id,
             'hostname': platform.node(),
             'system': platform.system(),
             'release': platform.release(),
@@ -254,16 +243,7 @@ def register_misc_routes(app, socketio):
             if not isinstance(jobs, list):
                 return jsonify({'error': 'Jobs must be an array'}), 400
             
-            # Get license limits
-            license_tier = current_app.config.get('LICENSE_TIER', 'free')
-            max_jobs = get_max_jobs_per_batch(license_tier)
-            
-            if len(jobs) > max_jobs:
-                return jsonify({
-                    'error': f'Too many jobs. Your {license_tier} tier allows up to {max_jobs} jobs per batch.'
-                }), 403
-            
-            # Process jobs
+            # Process jobs (no limits in open source edition)
             queued_count = 0
             failed_jobs = []
             
@@ -345,13 +325,6 @@ def register_misc_routes(app, socketio):
             jobs = data['jobs']
             if not isinstance(jobs, list) or len(jobs) == 0:
                 return "No jobs provided", 400
-            
-            # Validate license limits (if applicable)
-            license_tier = app.config.get('LICENSE_TIER', 'free')
-            max_jobs_per_batch = get_max_jobs_per_batch(license_tier)
-            
-            if len(jobs) > max_jobs_per_batch:
-                return f"Batch size ({len(jobs)}) exceeds license limit ({max_jobs_per_batch})", 400
             
             # Sort jobs by their order_index to maintain CSV row order
             jobs.sort(key=lambda x: x.get('order_index', 0))
