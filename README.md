@@ -279,6 +279,130 @@ npm run test
 | `npm run preview` | Preview production build |
 | `npm run test` | Run tests with Vitest |
 
+## Building / Compiling
+
+PrintQue can be compiled into standalone executables for Windows, macOS, and Linux using PyInstaller.
+
+### Build Prerequisites
+
+- **Python 3.9+** (for building)
+- **Node.js 18+** (for frontend build)
+- **npm** (Node package manager)
+- **PyInstaller** (`pip install pyinstaller`)
+
+### Quick Build
+
+The easiest way to build is using the cross-platform build script:
+
+```bash
+# Build for your current platform
+python build.py
+```
+
+This will:
+1. Check all dependencies
+2. Install Python packages from `requirements.txt`
+3. Build the React frontend (`npm install` + `npm run build`)
+4. Copy the frontend to the API directory
+5. Create a PyInstaller spec file
+6. Build the executable
+7. Create a distribution package with launcher scripts
+
+### Build Options
+
+| Flag | Description |
+|------|-------------|
+| `--clean` | Remove previous build artifacts before building |
+| `--skip-frontend` | Skip frontend build (use existing `frontend_dist`) |
+| `--skip-deps` | Skip Python dependency installation |
+
+Examples:
+
+```bash
+# Clean build from scratch
+python build.py --clean
+
+# Rebuild only the backend (frontend already built)
+python build.py --skip-frontend
+
+# Quick rebuild (dependencies already installed)
+python build.py --skip-deps --skip-frontend
+```
+
+### Build Output
+
+After a successful build, you'll find:
+
+```
+dist/
+├── PrintQue.exe              # Windows executable (or PrintQue on Linux/macOS)
+├── PrintQue_Windows_YYYYMMDD/   # Distribution folder
+│   ├── PrintQue.exe
+│   ├── Start_PrintQue.bat    # Launcher script
+│   ├── README.txt
+│   ├── data/                 # Configuration directory
+│   ├── uploads/              # Upload directory
+│   └── logs/                 # Log directory
+└── PrintQue_Windows_YYYYMMDD.zip  # Distribution archive
+```
+
+### Platform-Specific Notes
+
+#### Windows
+
+```bash
+python build.py
+# Output: dist/PrintQue.exe
+# Launcher: dist/PrintQue_Windows_YYYYMMDD/Start_PrintQue.bat
+```
+
+#### macOS
+
+```bash
+python build.py
+# Output: dist/PrintQue.app
+# Launcher: dist/PrintQue_macOS_YYYYMMDD/start_printque.sh
+```
+
+#### Linux
+
+```bash
+python build.py
+# Output: dist/printque
+# Launcher: dist/PrintQue_Linux_YYYYMMDD/start_printque.sh
+```
+
+### Testing the Build
+
+After building, test the executable:
+
+**Windows:**
+```bash
+cd dist\PrintQue_Windows_*
+Start_PrintQue.bat
+```
+
+**macOS:**
+```bash
+open dist/PrintQue_macOS_*/PrintQue.app
+```
+
+**Linux:**
+```bash
+cd dist/PrintQue_Linux_*
+./start_printque.sh
+```
+
+Then open your browser to **http://localhost:5000** to verify everything works.
+
+### Troubleshooting Build Issues
+
+- **PyInstaller not found**: Run `pip install pyinstaller`
+- **Node.js not found**: Install Node.js 18+ from [nodejs.org](https://nodejs.org)
+- **Frontend build fails**: Check `app/` directory exists and run `npm install` manually
+- **Missing modules in executable**: Check the PyInstaller spec file for hidden imports
+- **First run is slow on Windows**: Windows Defender may scan the new executable
+
 ## Legal
 
 PrintQue © All rights reserved.

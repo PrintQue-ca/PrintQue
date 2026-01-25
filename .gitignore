@@ -16,6 +16,9 @@ dist/
 *.exe
 *.zip
 
+# Built frontend (generated from app/ during build)
+api/frontend_dist/
+
 # IDE
 .idea/
 .vscode/
