@@ -1,6 +1,6 @@
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '@/lib/api'
-import type { Printer, PrinterFormData, ApiResponse } from '@/types'
+import type { ApiResponse, Printer, PrinterFormData } from '@/types'
 
 export function usePrinters() {
   return useQuery({
@@ -22,8 +22,7 @@ export function usePrinter(name: string) {
 export function useAddPrinter() {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: (data: PrinterFormData) =>
-      api.post<ApiResponse>('/printers', data),
+    mutationFn: (data: PrinterFormData) => api.post<ApiResponse>('/printers', data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['printers'] })
     },
@@ -67,8 +66,7 @@ export function useSendPrint() {
 export function useStopPrint() {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: (printerName: string) =>
-      api.post<ApiResponse>(`/printers/${printerName}/stop`),
+    mutationFn: (printerName: string) => api.post<ApiResponse>(`/printers/${printerName}/stop`),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['printers'] })
     },
@@ -78,8 +76,7 @@ export function useStopPrint() {
 export function usePausePrint() {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: (printerName: string) =>
-      api.post<ApiResponse>(`/printers/${printerName}/pause`),
+    mutationFn: (printerName: string) => api.post<ApiResponse>(`/printers/${printerName}/pause`),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['printers'] })
     },
@@ -89,8 +86,7 @@ export function usePausePrint() {
 export function useResumePrint() {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: (printerName: string) =>
-      api.post<ApiResponse>(`/printers/${printerName}/resume`),
+    mutationFn: (printerName: string) => api.post<ApiResponse>(`/printers/${printerName}/resume`),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['printers'] })
     },
@@ -100,8 +96,7 @@ export function useResumePrint() {
 export function useMarkReady() {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: (printerName: string) =>
-      api.post<ApiResponse>(`/printers/${printerName}/ready`),
+    mutationFn: (printerName: string) => api.post<ApiResponse>(`/printers/${printerName}/ready`),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['printers'] })
     },

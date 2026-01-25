@@ -1,5 +1,5 @@
-import { io, Socket } from 'socket.io-client'
 import type { QueryClient } from '@tanstack/react-query'
+import { io, type Socket } from 'socket.io-client'
 
 let socket: Socket | null = null
 
@@ -38,11 +38,12 @@ export function initSocket(queryClient: QueryClient) {
 
   // Printer-specific updates
   socket.on('printer_update', (data) => {
-    queryClient.setQueryData(['printers'], (old: unknown[] | undefined) => {
-      if (!old) return old
-      return old.map((p: { name: string }) =>
-        p.name === data.name ? { ...p, ...data } : p
-      )
+    queryClient.setQueryData(['printers'], (old: unknown) => {
+      if (!Array.isArray(old)) return old
+      return old.map((p) => {
+        const printer = p as { name: string }
+        return printer.name === data.name ? { ...printer, ...data } : printer
+      })
     })
   })
 

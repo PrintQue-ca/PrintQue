@@ -1,6 +1,6 @@
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '@/lib/api'
-import type { Order, ApiResponse } from '@/types'
+import type { ApiResponse, Order } from '@/types'
 
 export function useOrders() {
   return useQuery({
@@ -21,8 +21,7 @@ export function useOrder(id: number) {
 export function useCreateOrder() {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: (formData: FormData) =>
-      api.upload<ApiResponse>('/orders', formData),
+    mutationFn: (formData: FormData) => api.upload<ApiResponse>('/orders', formData),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['orders'] })
     },
@@ -112,18 +111,24 @@ export function useReorderOrder() {
 export function useUpdateOrderEjection() {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: ({ id, ejectionEnabled, ejectionCodeId, ejectionCodeName, endGcode }: { 
+    mutationFn: ({
+      id,
+      ejectionEnabled,
+      ejectionCodeId,
+      ejectionCodeName,
+      endGcode,
+    }: {
       id: number
       ejectionEnabled: boolean
       ejectionCodeId?: string
       ejectionCodeName?: string
       endGcode?: string
     }) =>
-      api.patch<ApiResponse>(`/orders/${id}/ejection`, { 
+      api.patch<ApiResponse>(`/orders/${id}/ejection`, {
         ejection_enabled: ejectionEnabled,
         ejection_code_id: ejectionCodeId,
         ejection_code_name: ejectionCodeName,
-        end_gcode: endGcode
+        end_gcode: endGcode,
       }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['orders'] })

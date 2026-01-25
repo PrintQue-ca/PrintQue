@@ -2,11 +2,11 @@
  * Tests for useOrders hooks.
  */
 
-import React from 'react'
-import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { renderHook, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { useOrders, useCreateOrder, useDeleteOrder, useUpdateOrder } from '../../hooks/useOrders'
+import { renderHook, waitFor } from '@testing-library/react'
+import type React from 'react'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { useCreateOrder, useDeleteOrder, useOrders, useUpdateOrder } from '../../hooks/useOrders'
 import type { Order } from '../../types'
 
 // Mock the API module
@@ -30,9 +30,7 @@ const createWrapper = () => {
     },
   })
   return ({ children }: { children: React.ReactNode }) => (
-    <QueryClientProvider client={queryClient}>
-      {children}
-    </QueryClientProvider>
+    <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
   )
 }
 

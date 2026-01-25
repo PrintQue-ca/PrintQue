@@ -1,17 +1,11 @@
 import {
-  useReactTable,
-  getCoreRowModel,
-  flexRender,
-  createColumnHelper,
-} from '@tanstack/react-table'
-import {
-  DndContext,
   closestCenter,
+  DndContext,
+  type DragEndEvent,
   KeyboardSensor,
   PointerSensor,
   useSensor,
   useSensors,
-  type DragEndEvent,
 } from '@dnd-kit/core'
 import {
   SortableContext,
@@ -21,6 +15,25 @@ import {
 } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
 import {
+  createColumnHelper,
+  flexRender,
+  getCoreRowModel,
+  useReactTable,
+} from '@tanstack/react-table'
+import { GripVertical, Minus, Plus, Thermometer, Trash2, Zap, ZapOff } from 'lucide-react'
+import { useEffect, useState } from 'react'
+import { toast } from 'sonner'
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
+import {
   Table,
   TableBody,
   TableCell,
@@ -29,20 +42,13 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select'
-import { Button } from '@/components/ui/button'
-import { Badge } from '@/components/ui/badge'
-import { Input } from '@/components/ui/input'
-import { GripVertical, Trash2, Plus, Minus, Zap, ZapOff, Thermometer } from 'lucide-react'
+  useDeleteOrder,
+  useEjectionCodes,
+  useReorderOrder,
+  useUpdateOrderEjection,
+  useUpdateQuantity,
+} from '@/hooks'
 import type { Order } from '@/types'
-import { useDeleteOrder, useReorderOrder, useUpdateQuantity, useUpdateOrderEjection, useEjectionCodes } from '@/hooks'
-import { useState, useEffect } from 'react'
-import { toast } from 'sonner'
 
 interface OrdersTableProps {
   orders: Order[]
@@ -59,21 +65,14 @@ function arrayMove<T>(array: T[], from: number, to: number): T[] {
 }
 
 // Sortable row component
-function SortableRow({ 
-  row, 
-  children 
-}: { 
+function SortableRow({
+  row,
+  children,
+}: {
   row: { id: string; original: Order }
-  children: React.ReactNode 
+  children: React.ReactNode
 }) {
-  const {
-    attributes,
-    listeners,
-    setNodeRef,
-    transform,
-    transition,
-    isDragging,
-  } = useSortable({ 
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: row.original.id,
   })
 
@@ -111,10 +110,10 @@ export function OrdersTable({ orders }: OrdersTableProps) {
   const { data: ejectionCodes } = useEjectionCodes()
   const [editingQuantity, setEditingQuantity] = useState<number | null>(null)
   const [quantityValue, setQuantityValue] = useState<number>(0)
-  
+
   // Local state for immediate UI updates during drag
   const [localOrders, setLocalOrders] = useState(orders)
-  
+
   // Sync with prop changes (from server/other sources)
   useEffect(() => {
     setLocalOrders(orders)
@@ -123,9 +122,9 @@ export function OrdersTable({ orders }: OrdersTableProps) {
   const handleEjectionChange = async (orderId: number, codeId: string, currentOrder: Order) => {
     try {
       let ejectionEnabled = true
-      let ejectionCodeId: string | undefined = undefined
-      let ejectionCodeName: string | undefined = undefined
-      let endGcode: string | undefined = undefined
+      let ejectionCodeId: string | undefined
+      let ejectionCodeName: string | undefined
+      let endGcode: string | undefined
 
       if (codeId === 'none') {
         ejectionEnabled = false
@@ -137,7 +136,7 @@ export function OrdersTable({ orders }: OrdersTableProps) {
         endGcode = currentOrder.end_gcode
       } else {
         // Find the selected ejection code
-        const selectedCode = ejectionCodes?.find(code => code.id === codeId)
+        const selectedCode = ejectionCodes?.find((code) => code.id === codeId)
         if (selectedCode) {
           ejectionCodeId = selectedCode.id
           ejectionCodeName = selectedCode.name
@@ -150,12 +149,10 @@ export function OrdersTable({ orders }: OrdersTableProps) {
         ejectionEnabled,
         ejectionCodeId,
         ejectionCodeName,
-        endGcode
+        endGcode,
       })
-      
-      toast.success(ejectionEnabled 
-        ? `Ejection set to "${ejectionCodeName}"` 
-        : 'Ejection disabled')
+
+      toast.success(ejectionEnabled ? `Ejection set to "${ejectionCodeName}"` : 'Ejection disabled')
     } catch {
       toast.error('Failed to update ejection settings')
     }
@@ -202,11 +199,11 @@ export function OrdersTable({ orders }: OrdersTableProps) {
 
   const handleDragEnd = (event: DragEndEvent) => {
     const { active, over } = event
-    
+
     if (over && active.id !== over.id) {
       const oldIndex = localOrders.findIndex((order) => order.id === active.id)
       const newIndex = localOrders.findIndex((order) => order.id === over.id)
-      
+
       if (oldIndex !== -1 && newIndex !== -1) {
         // Update local state immediately (synchronous - no flicker)
         setLocalOrders(arrayMove(localOrders, oldIndex, newIndex))
@@ -235,7 +232,10 @@ export function OrdersTable({ orders }: OrdersTableProps) {
               {displayName}
             </span>
             {name && (
-              <span className="text-xs text-muted-foreground truncate max-w-[200px] block" title={filename}>
+              <span
+                className="text-xs text-muted-foreground truncate max-w-[200px] block"
+                title={filename}
+              >
                 {filename}
               </span>
             )}
@@ -248,14 +248,14 @@ export function OrdersTable({ orders }: OrdersTableProps) {
       cell: (info) => {
         const id = info.row.original.id
         const currentQty = info.getValue()
-        
+
         if (editingQuantity === id) {
           return (
             <Input
               type="number"
               min={1}
               value={quantityValue}
-              onChange={(e) => setQuantityValue(parseInt(e.target.value) || 1)}
+              onChange={(e) => setQuantityValue(parseInt(e.target.value, 10) || 1)}
               onBlur={() => handleQuantitySubmit(id)}
               onKeyDown={(e) => e.key === 'Enter' && handleQuantitySubmit(id)}
               className="w-16 h-8"
@@ -308,7 +308,8 @@ export function OrdersTable({ orders }: OrdersTableProps) {
       header: 'Groups',
       cell: (info) => {
         const groups = info.getValue()
-        if (!groups || groups.length === 0) return <span className="text-muted-foreground">All</span>
+        if (!groups || groups.length === 0)
+          return <span className="text-muted-foreground">All</span>
         return (
           <div className="flex gap-1 flex-wrap">
             {groups.map((g) => (
@@ -329,11 +330,11 @@ export function OrdersTable({ orders }: OrdersTableProps) {
         const codeName = order.ejection_code_name
         const codeId = order.ejection_code_id
         const cooldownTemp = order.cooldown_temp
-        
+
         // Determine current value for select
         let currentValue = 'none'
         if (isEnabled) {
-          if (codeId && ejectionCodes?.find(c => c.id === codeId)) {
+          if (codeId && ejectionCodes?.find((c) => c.id === codeId)) {
             currentValue = codeId
           } else if (codeName === 'Custom' || (!codeId && order.end_gcode)) {
             currentValue = 'custom'
@@ -397,8 +398,8 @@ export function OrdersTable({ orders }: OrdersTableProps) {
             </Select>
             {/* Show cooldown temperature indicator if set */}
             {cooldownTemp !== undefined && cooldownTemp !== null && (
-              <Badge 
-                variant="outline" 
+              <Badge
+                variant="outline"
                 className="h-6 px-1.5 text-xs flex items-center gap-0.5 text-cyan-600 border-cyan-300"
                 title={`Cooldown: Wait for bed to reach ${cooldownTemp}°C before ejection`}
               >
@@ -435,11 +436,7 @@ export function OrdersTable({ orders }: OrdersTableProps) {
 
   return (
     <div className="rounded-md border">
-      <DndContext
-        sensors={sensors}
-        collisionDetection={closestCenter}
-        onDragEnd={handleDragEnd}
-      >
+      <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
         <Table>
           <TableHeader>
             {table.getHeaderGroups().map((headerGroup) => (

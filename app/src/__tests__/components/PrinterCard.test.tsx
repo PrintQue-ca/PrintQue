@@ -2,9 +2,9 @@
  * Tests for PrinterCard component.
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, fireEvent } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { render, screen } from '@testing-library/react'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { PrinterCard } from '../../components/printers/PrinterCard'
 import type { Printer } from '../../types'
 
@@ -25,9 +25,7 @@ const createWrapper = () => {
     },
   })
   return ({ children }: { children: React.ReactNode }) => (
-    <QueryClientProvider client={queryClient}>
-      {children}
-    </QueryClientProvider>
+    <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
   )
 }
 
@@ -46,20 +44,20 @@ describe('PrinterCard', () => {
   describe('Basic Rendering', () => {
     it('should render printer name and IP', () => {
       render(<PrinterCard printer={basePrinter} />, { wrapper: createWrapper() })
-      
+
       expect(screen.getByText('Test Printer')).toBeInTheDocument()
       expect(screen.getByText('192.168.1.100')).toBeInTheDocument()
     })
 
     it('should render printer type badge', () => {
       render(<PrinterCard printer={basePrinter} />, { wrapper: createWrapper() })
-      
+
       expect(screen.getByText('prusa')).toBeInTheDocument()
     })
 
     it('should render status badge', () => {
       render(<PrinterCard printer={basePrinter} />, { wrapper: createWrapper() })
-      
+
       expect(screen.getByText('Ready')).toBeInTheDocument()
     })
   })
@@ -67,7 +65,7 @@ describe('PrinterCard', () => {
   describe('Ready State', () => {
     it('should show ready message when printer is READY', () => {
       render(<PrinterCard printer={basePrinter} />, { wrapper: createWrapper() })
-      
+
       expect(screen.getByText('Ready for printing')).toBeInTheDocument()
     })
   })
@@ -83,20 +81,20 @@ describe('PrinterCard', () => {
 
     it('should show progress when printing', () => {
       render(<PrinterCard printer={printingPrinter} />, { wrapper: createWrapper() })
-      
+
       expect(screen.getByText('45%')).toBeInTheDocument()
       expect(screen.getByText('test_part.gcode')).toBeInTheDocument()
     })
 
     it('should show time remaining', () => {
       render(<PrinterCard printer={printingPrinter} />, { wrapper: createWrapper() })
-      
+
       expect(screen.getByText('~60m remaining')).toBeInTheDocument()
     })
 
     it('should show Pause and Stop buttons when printing', () => {
       render(<PrinterCard printer={printingPrinter} />, { wrapper: createWrapper() })
-      
+
       expect(screen.getByRole('button', { name: /pause/i })).toBeInTheDocument()
       expect(screen.getByRole('button', { name: /stop/i })).toBeInTheDocument()
     })
@@ -112,7 +110,7 @@ describe('PrinterCard', () => {
 
     it('should show Resume and Stop buttons when paused', () => {
       render(<PrinterCard printer={pausedPrinter} />, { wrapper: createWrapper() })
-      
+
       expect(screen.getByRole('button', { name: /resume/i })).toBeInTheDocument()
       expect(screen.getByRole('button', { name: /stop/i })).toBeInTheDocument()
     })
@@ -127,13 +125,13 @@ describe('PrinterCard', () => {
 
     it('should show Mark Ready button when finished', () => {
       render(<PrinterCard printer={finishedPrinter} />, { wrapper: createWrapper() })
-      
+
       expect(screen.getByRole('button', { name: /mark ready/i })).toBeInTheDocument()
     })
 
     it('should show completed file name', () => {
       render(<PrinterCard printer={finishedPrinter} />, { wrapper: createWrapper() })
-      
+
       expect(screen.getByText(/completed_part.gcode/)).toBeInTheDocument()
     })
   })
@@ -147,14 +145,14 @@ describe('PrinterCard', () => {
 
     it('should show error message', () => {
       render(<PrinterCard printer={errorPrinter} />, { wrapper: createWrapper() })
-      
+
       expect(screen.getByText('Printer Error')).toBeInTheDocument()
       expect(screen.getByText('Filament runout detected')).toBeInTheDocument()
     })
 
     it('should show Clear Error button', () => {
       render(<PrinterCard printer={errorPrinter} />, { wrapper: createWrapper() })
-      
+
       expect(screen.getByRole('button', { name: /clear error/i })).toBeInTheDocument()
     })
 
@@ -164,9 +162,9 @@ describe('PrinterCard', () => {
         type: 'bambu',
         hms_alerts: ['Nozzle clogged', 'Temperature warning'],
       }
-      
+
       render(<PrinterCard printer={bambuError} />, { wrapper: createWrapper() })
-      
+
       expect(screen.getByText('HMS Alerts:')).toBeInTheDocument()
       expect(screen.getByText('Nozzle clogged')).toBeInTheDocument()
       expect(screen.getByText('Temperature warning')).toBeInTheDocument()
@@ -182,14 +180,14 @@ describe('PrinterCard', () => {
 
     it('should show cooling message', () => {
       render(<PrinterCard printer={coolingPrinter} />, { wrapper: createWrapper() })
-      
+
       expect(screen.getByText('Cooling Down')).toBeInTheDocument()
       expect(screen.getByText(/Waiting for bed to cool/)).toBeInTheDocument()
     })
 
     it('should show Skip Cooldown button', () => {
       render(<PrinterCard printer={coolingPrinter} />, { wrapper: createWrapper() })
-      
+
       expect(screen.getByRole('button', { name: /skip cooldown/i })).toBeInTheDocument()
     })
   })
@@ -201,9 +199,9 @@ describe('PrinterCard', () => {
         nozzle_temp: 210.5,
         bed_temp: 60.2,
       }
-      
+
       render(<PrinterCard printer={printerWithTemps} />, { wrapper: createWrapper() })
-      
+
       expect(screen.getByText(/Nozzle: 210.5°C/)).toBeInTheDocument()
       expect(screen.getByText(/Bed: 60.2°C/)).toBeInTheDocument()
     })
@@ -215,9 +213,9 @@ describe('PrinterCard', () => {
         nozzle_temp: 0,
         bed_temp: 0,
       }
-      
+
       render(<PrinterCard printer={offlinePrinter} />, { wrapper: createWrapper() })
-      
+
       expect(screen.queryByText(/Nozzle:/)).not.toBeInTheDocument()
     })
   })

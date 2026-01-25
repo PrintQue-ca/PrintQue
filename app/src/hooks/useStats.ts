@@ -1,6 +1,14 @@
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '@/lib/api'
-import type { Stats, EjectionStatus, License, SystemInfo, Group, ApiResponse, EjectionCode } from '@/types'
+import type {
+  ApiResponse,
+  EjectionCode,
+  EjectionStatus,
+  Group,
+  License,
+  Stats,
+  SystemInfo,
+} from '@/types'
 
 export function useStats() {
   return useQuery({
@@ -74,8 +82,7 @@ export function useGroups() {
 export function useCreateGroup() {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: (name: string) =>
-      api.post<ApiResponse>('/system/groups', { name }),
+    mutationFn: (name: string) => api.post<ApiResponse>('/system/groups', { name }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['groups'] })
     },
@@ -144,7 +151,9 @@ export function useEjectionCode(id: string) {
   return useQuery({
     queryKey: ['ejection-codes', id],
     queryFn: async () => {
-      const response = await api.get<{ success: boolean; ejection_code: EjectionCode }>(`/ejection-codes/${id}`)
+      const response = await api.get<{ success: boolean; ejection_code: EjectionCode }>(
+        `/ejection-codes/${id}`
+      )
       return response.ejection_code
     },
     enabled: !!id,
@@ -233,7 +242,10 @@ export function useSetDebugFlag() {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: ({ flag, enabled }: { flag: string; enabled: boolean }) =>
-      api.post<ApiResponse & { flags: Record<string, boolean> }>('/system/logging/debug-flags', { flag, enabled }),
+      api.post<ApiResponse & { flags: Record<string, boolean> }>('/system/logging/debug-flags', {
+        flag,
+        enabled,
+      }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['logging'] })
     },

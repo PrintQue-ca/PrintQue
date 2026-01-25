@@ -263,14 +263,132 @@ For assistance with PrintQue:
 
 ## Development
 
-### Running Tests
+### Development Setup
+
+#### Backend Dev Environment
+
+```bash
+cd api
+
+# Create and activate virtual environment
+python -m venv .venv
+# Windows:
+.venv\Scripts\activate
+# macOS/Linux:
+source .venv/bin/activate
+
+# Install runtime and dev dependencies
+pip install -r requirements.txt
+pip install -r requirements-dev.txt
+```
+
+#### Frontend Dev Environment
 
 ```bash
 cd app
+npm install
+```
+
+### Pre-commit Hooks
+
+This project uses **Husky** and **lint-staged** to automatically run linting before each commit. When you run `npm install` in the `app/` directory, the hooks are automatically installed.
+
+**What happens on commit:**
+1. **Frontend files** (`.ts`, `.tsx`, `.js`, `.json`) are checked and auto-fixed by Biome
+2. **Backend files** (`.py`) are checked by Ruff
+
+If any issues can't be auto-fixed, the commit will be blocked until you resolve them.
+
+### Linting
+
+#### Frontend Linting (Biome)
+
+```bash
+cd app
+
+# Check for lint and format issues
+npm run lint
+
+# Auto-fix issues
+npm run lint:fix
+
+# Format only
+npm run format
+```
+
+#### Backend Linting (Ruff)
+
+```bash
+cd api
+
+# Run linter
+ruff check .
+
+# Run linter with auto-fix
+ruff check . --fix
+```
+
+#### Frontend Type Checking (TypeScript)
+
+```bash
+cd app
+
+# Run TypeScript type check
+npx tsc --noEmit
+```
+
+### Running Tests
+
+#### Backend Tests (pytest)
+
+```bash
+cd api
+
+# Run all tests
+pytest
+
+# Run tests with verbose output
+pytest -v
+
+# Run tests with coverage report
+pytest --cov=. --cov-report=term-missing
+
+# Run a specific test file
+pytest tests/test_routes/test_orders.py
+
+# Run tests matching a pattern
+pytest -k "test_printer"
+```
+
+#### Frontend Tests (Vitest)
+
+```bash
+cd app
+
+# Run all tests
 npm run test
+
+# Run tests in watch mode (re-runs on file changes)
+npm run test:watch
+
+# Run tests with coverage report
+npm run test:coverage
 ```
 
 ### Available Scripts
+
+#### Backend (API)
+
+| Command | Description |
+|---------|-------------|
+| `python app.py` | Start the API server |
+| `pytest` | Run tests |
+| `pytest --cov=.` | Run tests with coverage |
+| `ruff check .` | Run linter |
+| `ruff check . --fix` | Run linter with auto-fix |
+| `mypy .` | Run type checker (optional) |
+
+#### Frontend (App)
 
 | Command | Description |
 |---------|-------------|
@@ -278,6 +396,12 @@ npm run test
 | `npm run build` | Build for production |
 | `npm run preview` | Preview production build |
 | `npm run test` | Run tests with Vitest |
+| `npm run test:watch` | Run tests in watch mode |
+| `npm run test:coverage` | Run tests with coverage report |
+| `npm run lint` | Check for lint/format issues (Biome) |
+| `npm run lint:fix` | Auto-fix lint/format issues |
+| `npm run format` | Format code with Biome |
+| `npx tsc --noEmit` | Run TypeScript type check |
 
 ## Building / Compiling
 

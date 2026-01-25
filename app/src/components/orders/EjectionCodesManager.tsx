@@ -1,18 +1,20 @@
-import { useState, useRef } from 'react'
+import { Code, Edit2, FileCode, Play, Plus, Trash2, Upload } from 'lucide-react'
+import { useRef, useState } from 'react'
+import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
-import { Label } from '@/components/ui/label'
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
-import { GcodeEditor } from '@/components/ui/gcode-editor'
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import {
   Dialog,
   DialogContent,
   DialogDescription,
+  DialogFooter,
   DialogHeader,
   DialogTitle,
   DialogTrigger,
-  DialogFooter,
 } from '@/components/ui/dialog'
+import { GcodeEditor } from '@/components/ui/gcode-editor'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
 import {
   Select,
   SelectContent,
@@ -20,17 +22,14 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import { Upload, Plus, FileCode, Trash2, Code, Edit2, Play } from 'lucide-react'
-import { 
-  useEjectionCodes, 
-  useCreateEjectionCode, 
-  useUploadEjectionCode, 
+import {
+  useCreateEjectionCode,
   useDeleteEjectionCode,
-  useUpdateEjectionCode,
+  useEjectionCodes,
+  usePrinters,
   useTestEjectionCode,
-  usePrinters
+  useUpdateEjectionCode,
 } from '@/hooks'
-import { toast } from 'sonner'
 import type { EjectionCode } from '@/types'
 
 export function EjectionCodesManager() {
@@ -46,28 +45,26 @@ export function EjectionCodesManager() {
   const [newGcode, setNewGcode] = useState('')
   const fileInputRef = useRef<HTMLInputElement>(null)
   const editFileInputRef = useRef<HTMLInputElement>(null)
-  
+
   const { data: ejectionCodes, isLoading } = useEjectionCodes()
   const { data: printers } = usePrinters()
   const createCode = useCreateEjectionCode()
-  const uploadCode = useUploadEjectionCode()
   const deleteCode = useDeleteEjectionCode()
   const updateCode = useUpdateEjectionCode()
   const testCode = useTestEjectionCode()
-  
+
   // Filter printers that are available for testing (IDLE, READY, or FINISHED)
-  const availablePrinters = printers?.filter(p => 
-    ['IDLE', 'READY', 'FINISHED', 'OPERATIONAL'].includes(p.status?.toUpperCase() || '')
-  ) || []
+  const availablePrinters =
+    printers?.filter((p) =>
+      ['IDLE', 'READY', 'FINISHED', 'OPERATIONAL'].includes(p.status?.toUpperCase() || '')
+    ) || []
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
     if (!file) return
 
     const validExtensions = ['.txt', '.gcode', '.gc', '.nc']
-    const hasValidExt = validExtensions.some(ext => 
-      file.name.toLowerCase().endsWith(ext)
-    )
+    const hasValidExt = validExtensions.some((ext) => file.name.toLowerCase().endsWith(ext))
     if (!hasValidExt) {
       toast.error('Please select a valid G-code file (.txt, .gcode, .gc, .nc)')
       return
@@ -104,7 +101,7 @@ export function EjectionCodesManager() {
     try {
       await createCode.mutateAsync({
         name: newName.trim(),
-        gcode: newGcode.trim()
+        gcode: newGcode.trim(),
       })
       toast.success(`Ejection code "${newName}" created`)
       setIsCreateOpen(false)
@@ -117,7 +114,7 @@ export function EjectionCodesManager() {
 
   const handleDelete = async (code: EjectionCode) => {
     if (!confirm(`Delete "${code.name}"? This cannot be undone.`)) return
-    
+
     try {
       await deleteCode.mutateAsync(code.id)
       toast.success(`Deleted "${code.name}"`)
@@ -138,9 +135,7 @@ export function EjectionCodesManager() {
     if (!file) return
 
     const validExtensions = ['.txt', '.gcode', '.gc', '.nc']
-    const hasValidExt = validExtensions.some(ext => 
-      file.name.toLowerCase().endsWith(ext)
-    )
+    const hasValidExt = validExtensions.some((ext) => file.name.toLowerCase().endsWith(ext))
     if (!hasValidExt) {
       toast.error('Please select a valid G-code file (.txt, .gcode, .gc, .nc)')
       return
@@ -160,7 +155,7 @@ export function EjectionCodesManager() {
 
   const handleSave = async () => {
     if (!viewingCode) return
-    
+
     if (!editedName.trim()) {
       toast.error('Please enter a name')
       return
@@ -175,8 +170,8 @@ export function EjectionCodesManager() {
         id: viewingCode.id,
         data: {
           name: editedName.trim(),
-          gcode: editedGcode.trim()
-        }
+          gcode: editedGcode.trim(),
+        },
       })
       toast.success(`Ejection code "${editedName}" updated`)
       setIsViewOpen(false)
@@ -185,10 +180,8 @@ export function EjectionCodesManager() {
     }
   }
 
-  const hasChanges = viewingCode && (
-    editedName !== viewingCode.name || 
-    editedGcode !== viewingCode.gcode
-  )
+  const hasChanges =
+    viewingCode && (editedName !== viewingCode.name || editedGcode !== viewingCode.gcode)
 
   const handleTest = (code: EjectionCode) => {
     setTestingCode(code)
@@ -205,7 +198,7 @@ export function EjectionCodesManager() {
     try {
       await testCode.mutateAsync({
         codeId: testingCode.id,
-        printerName: selectedPrinter
+        printerName: selectedPrinter,
       })
       toast.success(`Ejection code "${testingCode.name}" sent to ${selectedPrinter}`)
       setIsTestOpen(false)
@@ -222,9 +215,7 @@ export function EjectionCodesManager() {
         <div className="flex items-center justify-between">
           <div>
             <CardTitle className="text-lg">Ejection Codes</CardTitle>
-            <CardDescription>
-              Saved G-code presets for auto-ejection after prints
-            </CardDescription>
+            <CardDescription>Saved G-code presets for auto-ejection after prints</CardDescription>
           </div>
           <Dialog open={isCreateOpen} onOpenChange={setIsCreateOpen}>
             <DialogTrigger asChild>
@@ -240,7 +231,7 @@ export function EjectionCodesManager() {
                   Upload a G-code file or enter the code manually
                 </DialogDescription>
               </DialogHeader>
-              
+
               <div className="space-y-4">
                 <div className="space-y-2">
                   <Label htmlFor="code-name">Name</Label>
@@ -286,10 +277,7 @@ export function EjectionCodesManager() {
                 <Button variant="outline" onClick={() => setIsCreateOpen(false)}>
                   Cancel
                 </Button>
-                <Button 
-                  onClick={handleCreate}
-                  disabled={createCode.isPending}
-                >
+                <Button onClick={handleCreate} disabled={createCode.isPending}>
                   {createCode.isPending ? 'Creating...' : 'Create'}
                 </Button>
               </DialogFooter>
@@ -318,8 +306,8 @@ export function EjectionCodesManager() {
                   <div>
                     <p className="font-medium text-sm">{code.name}</p>
                     <p className="text-xs text-muted-foreground">
-                      {code.gcode.split('\n').length} lines • 
-                      Created {new Date(code.created_at).toLocaleDateString()}
+                      {code.gcode.split('\n').length} lines • Created{' '}
+                      {new Date(code.created_at).toLocaleDateString()}
                     </p>
                   </div>
                 </div>
@@ -362,10 +350,11 @@ export function EjectionCodesManager() {
           <DialogHeader>
             <DialogTitle>Edit Ejection Code</DialogTitle>
             <DialogDescription>
-              {viewingCode?.source_filename && `Originally uploaded from ${viewingCode.source_filename}`}
+              {viewingCode?.source_filename &&
+                `Originally uploaded from ${viewingCode.source_filename}`}
             </DialogDescription>
           </DialogHeader>
-          
+
           <div className="space-y-4 flex-1 overflow-hidden flex flex-col">
             <div className="space-y-2">
               <Label htmlFor="edit-name">Name</Label>
@@ -376,7 +365,7 @@ export function EjectionCodesManager() {
                 placeholder="Ejection code name"
               />
             </div>
-            
+
             <div className="space-y-2 flex-1 flex flex-col min-h-0">
               <div className="flex items-center justify-between">
                 <Label>G-code Content</Label>
@@ -411,10 +400,7 @@ export function EjectionCodesManager() {
             <Button variant="outline" onClick={() => setIsViewOpen(false)}>
               Cancel
             </Button>
-            <Button 
-              onClick={handleSave}
-              disabled={updateCode.isPending || !hasChanges}
-            >
+            <Button onClick={handleSave} disabled={updateCode.isPending || !hasChanges}>
               {updateCode.isPending ? 'Saving...' : 'Save Changes'}
             </Button>
           </DialogFooter>
@@ -430,7 +416,7 @@ export function EjectionCodesManager() {
               Send "{testingCode?.name}" to a printer to test the ejection sequence
             </DialogDescription>
           </DialogHeader>
-          
+
           <div className="space-y-4">
             <div className="space-y-2">
               <Label htmlFor="test-printer">Select Printer</Label>
@@ -449,7 +435,8 @@ export function EjectionCodesManager() {
                 </Select>
               ) : (
                 <p className="text-sm text-muted-foreground py-2">
-                  No printers available for testing. Printers must be in IDLE, READY, or FINISHED state.
+                  No printers available for testing. Printers must be in IDLE, READY, or FINISHED
+                  state.
                 </p>
               )}
             </div>
@@ -467,10 +454,7 @@ export function EjectionCodesManager() {
             <Button variant="outline" onClick={() => setIsTestOpen(false)}>
               Cancel
             </Button>
-            <Button 
-              onClick={handleRunTest}
-              disabled={!selectedPrinter || testCode.isPending}
-            >
+            <Button onClick={handleRunTest} disabled={!selectedPrinter || testCode.isPending}>
               {testCode.isPending ? 'Sending...' : 'Run Test'}
             </Button>
           </DialogFooter>

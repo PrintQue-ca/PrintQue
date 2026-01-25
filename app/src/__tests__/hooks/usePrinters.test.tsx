@@ -2,11 +2,11 @@
  * Tests for usePrinters hooks.
  */
 
-import React from 'react'
-import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { renderHook, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { usePrinters, useAddPrinter, useDeletePrinter, useStopPrint } from '../../hooks/usePrinters'
+import { renderHook, waitFor } from '@testing-library/react'
+import type React from 'react'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { useAddPrinter, useDeletePrinter, usePrinters, useStopPrint } from '../../hooks/usePrinters'
 import type { Printer } from '../../types'
 
 // Mock the API module
@@ -30,9 +30,7 @@ const createWrapper = () => {
     },
   })
   return ({ children }: { children: React.ReactNode }) => (
-    <QueryClientProvider client={queryClient}>
-      {children}
-    </QueryClientProvider>
+    <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
   )
 }
 

@@ -1,7 +1,7 @@
 import { createFileRoute } from '@tanstack/react-router'
-import { useStats, useFilamentUsage } from '@/hooks'
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
-import { Loader2, TrendingUp, Printer, FileText, Layers, Library } from 'lucide-react'
+import { FileText, Layers, Library, Loader2, Printer, TrendingUp } from 'lucide-react'
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { useFilamentUsage, useStats } from '@/hooks'
 
 export const Route = createFileRoute('/stats')({ component: StatsPage })
 
@@ -28,9 +28,7 @@ function StatsPage() {
     <div className="space-y-6">
       <div>
         <h1 className="text-3xl font-bold tracking-tight">Statistics</h1>
-        <p className="text-muted-foreground">
-          Overview of your print farm performance
-        </p>
+        <p className="text-muted-foreground">Overview of your print farm performance</p>
       </div>
 
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-5">
@@ -41,9 +39,7 @@ function StatsPage() {
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold">{stats?.printers_count || 0}</div>
-            <p className="text-xs text-muted-foreground mt-1">
-              Connected printers
-            </p>
+            <p className="text-xs text-muted-foreground mt-1">Connected printers</p>
           </CardContent>
         </Card>
 
@@ -54,9 +50,7 @@ function StatsPage() {
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold">{stats?.active_prints || 0}</div>
-            <p className="text-xs text-muted-foreground mt-1">
-              Currently printing
-            </p>
+            <p className="text-xs text-muted-foreground mt-1">Currently printing</p>
           </CardContent>
         </Card>
 
@@ -67,9 +61,7 @@ function StatsPage() {
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold">{stats?.library_count || 0}</div>
-            <p className="text-xs text-muted-foreground mt-1">
-              Total files available
-            </p>
+            <p className="text-xs text-muted-foreground mt-1">Total files available</p>
           </CardContent>
         </Card>
 
@@ -80,9 +72,7 @@ function StatsPage() {
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold">{stats?.in_queue_count || 0}</div>
-            <p className="text-xs text-muted-foreground mt-1">
-              Orders actively printing
-            </p>
+            <p className="text-xs text-muted-foreground mt-1">Orders actively printing</p>
           </CardContent>
         </Card>
 
@@ -93,9 +83,7 @@ function StatsPage() {
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold">{stats?.idle_printers || 0}</div>
-            <p className="text-xs text-muted-foreground mt-1">
-              Ready to print
-            </p>
+            <p className="text-xs text-muted-foreground mt-1">Ready to print</p>
           </CardContent>
         </Card>
       </div>
@@ -115,9 +103,7 @@ function StatsPage() {
                 <div className="text-3xl font-bold">
                   {formatFilament(stats?.total_filament || filamentData?.total || 0)}
                 </div>
-                <p className="text-sm text-muted-foreground">
-                  Total filament used
-                </p>
+                <p className="text-sm text-muted-foreground">Total filament used</p>
               </div>
             </div>
           </CardContent>
@@ -134,12 +120,8 @@ function StatsPage() {
                 <TrendingUp className="h-8 w-8 text-green-500" />
               </div>
               <div>
-                <div className="text-3xl font-bold">
-                  {stats?.completed_today || 0}
-                </div>
-                <p className="text-sm text-muted-foreground">
-                  Prints completed today
-                </p>
+                <div className="text-3xl font-bold">{stats?.completed_today || 0}</div>
+                <p className="text-sm text-muted-foreground">Prints completed today</p>
               </div>
             </div>
           </CardContent>

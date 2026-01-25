@@ -2,7 +2,7 @@
  * Tests for the API client module.
  */
 
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { api } from '../../lib/api'
 
 describe('API Client', () => {
@@ -23,10 +23,8 @@ describe('API Client', () => {
       })
 
       const result = await api.get('/system/stats')
-      
-      expect(fetch).toHaveBeenCalledWith(
-        expect.stringContaining('/system/stats')
-      )
+
+      expect(fetch).toHaveBeenCalledWith(expect.stringContaining('/system/stats'))
       expect(result).toEqual(mockData)
     })
 
@@ -49,7 +47,7 @@ describe('API Client', () => {
       })
 
       const result = await api.post('/printers', { name: 'Test' })
-      
+
       expect(fetch).toHaveBeenCalledWith(
         expect.stringContaining('/printers'),
         expect.objectContaining({
@@ -68,7 +66,7 @@ describe('API Client', () => {
       })
 
       await api.post('/ejection/pause')
-      
+
       expect(fetch).toHaveBeenCalledWith(
         expect.stringContaining('/ejection/pause'),
         expect.objectContaining({
@@ -87,7 +85,7 @@ describe('API Client', () => {
       })
 
       await api.patch('/orders/1', { quantity: 5 })
-      
+
       expect(fetch).toHaveBeenCalledWith(
         expect.stringContaining('/orders/1'),
         expect.objectContaining({
@@ -106,7 +104,7 @@ describe('API Client', () => {
       })
 
       await api.delete('/printers/test')
-      
+
       expect(fetch).toHaveBeenCalledWith(
         expect.stringContaining('/printers/test'),
         expect.objectContaining({
@@ -128,7 +126,7 @@ describe('API Client', () => {
       formData.append('quantity', '1')
 
       await api.upload('/orders', formData)
-      
+
       expect(fetch).toHaveBeenCalledWith(
         expect.stringContaining('/orders'),
         expect.objectContaining({

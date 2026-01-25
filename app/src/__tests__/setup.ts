@@ -1,6 +1,6 @@
 /**
  * Vitest test setup file.
- * 
+ *
  * This file runs before each test file and sets up:
  * - DOM testing utilities
  * - Mock implementations for browser APIs
