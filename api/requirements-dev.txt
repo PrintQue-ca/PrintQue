@@ -9,3 +9,6 @@ ruff>=0.1.0
 
 # Type checking (optional)
 mypy>=1.5.0
+
+# Release automation
+python-semantic-release>=9.0.0

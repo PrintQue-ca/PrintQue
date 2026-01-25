@@ -1,0 +1,70 @@
+name: Version Bump
+
+on:
+  push:
+    branches: [main]
+
+# Prevent concurrent version bumps
+concurrency:
+  group: version-bump
+  cancel-in-progress: false
+
+jobs:
+  version-bump:
+    name: Analyze commits and bump version
+    runs-on: ubuntu-latest
+    # Skip if the commit is from semantic-release itself
+    if: "!contains(github.event.head_commit.message, 'chore(release):')"
+    
+    permissions:
+      contents: write
+      
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+          
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          
+      - name: Install python-semantic-release
+        run: pip install python-semantic-release
+        
+      - name: Configure Git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          
+      - name: Run semantic-release (dry run)
+        id: semantic_dry
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Run in dry-run mode first to see what would happen
+          OUTPUT=$(semantic-release version --no-commit --no-tag --no-push --no-vcs-release 2>&1) || true
+          echo "Dry run output:"
+          echo "$OUTPUT"
+          
+          # Check if there's a version bump
+          if echo "$OUTPUT" | grep -q "bump"; then
+            echo "should_release=true" >> $GITHUB_OUTPUT
+          else
+            echo "should_release=false" >> $GITHUB_OUTPUT
+          fi
+          
+      - name: Create version bump and tag
+        if: steps.semantic_dry.outputs.should_release == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Run semantic-release to bump version, commit, and tag
+          semantic-release version
+          
+      - name: Push changes
+        if: steps.semantic_dry.outputs.should_release == 'true'
+        run: |
+          git push origin main --follow-tags

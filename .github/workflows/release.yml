@@ -1,0 +1,173 @@
+name: Release Build
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+# Prevent concurrent releases
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build ${{ matrix.platform }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            platform: Windows
+            artifact_name: PrintQue.exe
+            asset_ext: .zip
+          - os: macos-latest
+            platform: macOS
+            artifact_name: PrintQue.app
+            asset_ext: .zip
+          - os: ubuntu-latest
+            platform: Linux
+            artifact_name: printque
+            asset_ext: .zip
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Get version from tag
+        id: get_version
+        shell: bash
+        run: |
+          # Extract version from tag (removes 'v' prefix)
+          VERSION=${GITHUB_REF#refs/tags/v}
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Building version: $VERSION"
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+          cache-dependency-path: api/requirements.txt
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: app/package-lock.json
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r api/requirements.txt
+          pip install pyinstaller
+
+      - name: Install frontend dependencies
+        run: npm ci
+        working-directory: app
+
+      - name: Build frontend
+        run: npm run build
+        working-directory: app
+
+      - name: Build executable
+        run: python build.py --skip-deps --version ${{ steps.get_version.outputs.version }}
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: PrintQue-${{ steps.get_version.outputs.version }}-${{ matrix.platform }}
+          path: dist/PrintQue-${{ steps.get_version.outputs.version }}-${{ matrix.platform }}.zip
+          retention-days: 5
+
+  release:
+    name: Create GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Get version from tag
+        id: get_version
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/v}
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: List artifacts
+        run: |
+          echo "Downloaded artifacts:"
+          find artifacts -type f -name "*.zip"
+
+      - name: Generate changelog
+        id: changelog
+        run: |
+          # Get the previous tag
+          PREV_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
+          
+          if [ -z "$PREV_TAG" ]; then
+            echo "No previous tag found, including all commits"
+            COMMITS=$(git log --pretty=format:"- %s" HEAD)
+          else
+            echo "Generating changelog from $PREV_TAG to HEAD"
+            COMMITS=$(git log --pretty=format:"- %s" $PREV_TAG..HEAD)
+          fi
+          
+          # Create changelog with proper escaping for multiline
+          {
+            echo 'changelog<<EOF'
+            echo "## What's Changed"
+            echo ""
+            echo "$COMMITS"
+            echo ""
+            echo "**Full Changelog**: https://github.com/${{ github.repository }}/compare/$PREV_TAG...v${{ steps.get_version.outputs.version }}"
+            echo 'EOF'
+          } >> $GITHUB_OUTPUT
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          name: PrintQue v${{ steps.get_version.outputs.version }}
+          body: |
+            ## PrintQue v${{ steps.get_version.outputs.version }}
+            
+            ### Downloads
+            
+            | Platform | Download |
+            |----------|----------|
+            | Windows | `PrintQue-${{ steps.get_version.outputs.version }}-Windows.zip` |
+            | macOS | `PrintQue-${{ steps.get_version.outputs.version }}-macOS.zip` |
+            | Linux | `PrintQue-${{ steps.get_version.outputs.version }}-Linux.zip` |
+            
+            ${{ steps.changelog.outputs.changelog }}
+            
+            ### Installation
+            
+            1. Download the ZIP file for your platform
+            2. Extract to a folder
+            3. Run the executable:
+               - **Windows**: Double-click `Start_PrintQue.bat`
+               - **macOS**: Open `PrintQue.app`
+               - **Linux**: Run `./start_printque.sh`
+            4. Open http://localhost:5000 in your browser
+            
+          files: |
+            artifacts/PrintQue-${{ steps.get_version.outputs.version }}-Windows/PrintQue-${{ steps.get_version.outputs.version }}-Windows.zip
+            artifacts/PrintQue-${{ steps.get_version.outputs.version }}-macOS/PrintQue-${{ steps.get_version.outputs.version }}-macOS.zip
+            artifacts/PrintQue-${{ steps.get_version.outputs.version }}-Linux/PrintQue-${{ steps.get_version.outputs.version }}-Linux.zip
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

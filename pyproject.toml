@@ -1,0 +1,53 @@
+[project]
+name = "printque"
+version = "1.0.0"
+description = "PrintQue - Open Source Print Farm Manager"
+readme = "README.md"
+requires-python = ">=3.9"
+license = {text = "GPL-3.0"}
+
+[tool.semantic_release]
+# Version locations - semantic-release will update these automatically
+version_toml = ["pyproject.toml:project.version"]
+version_variables = ["api/__version__.py:__version__"]
+
+# Branch configuration
+branch = "main"
+upload_to_repository = false
+upload_to_release = false
+build_command = ""
+
+# Commit message format
+commit_message = "chore(release): {version} [skip ci]"
+commit_parser = "angular"
+
+# Tag format
+tag_format = "v{version}"
+
+# Changelog
+changelog_generate = true
+changelog_file = "CHANGELOG.md"
+
+[tool.semantic_release.commit_parser_options]
+# Angular commit parser options
+allowed_tags = [
+    "build",
+    "chore", 
+    "ci",
+    "docs",
+    "feat",
+    "fix",
+    "perf",
+    "refactor",
+    "style",
+    "test",
+]
+minor_tags = ["feat"]
+patch_tags = ["fix", "perf"]
+
+[tool.semantic_release.remote]
+type = "github"
+token = { env = "GH_TOKEN" }
+
+[tool.semantic_release.publish]
+upload_to_vcs_release = false

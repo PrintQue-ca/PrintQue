@@ -7,6 +7,7 @@ Usage:
     python build.py              # Build for current platform
     python build.py --clean      # Clean build artifacts first
     python build.py --skip-frontend  # Skip frontend build (use existing)
+    python build.py --version 1.2.3  # Override version (for CI)
 """
 
 import os
@@ -15,12 +16,27 @@ import shutil
 import subprocess
 import platform
 import argparse
+import re
 from pathlib import Path
 from datetime import datetime
 
 # Build configuration
 APP_NAME = "PrintQue"
-VERSION = "1.0.0"
+
+
+def get_version_from_file() -> str:
+    """Read version from api/__version__.py"""
+    version_file = Path(__file__).parent / "api" / "__version__.py"
+    if version_file.exists():
+        content = version_file.read_text()
+        match = re.search(r'__version__\s*=\s*["\']([^"\']+)["\']', content)
+        if match:
+            return match.group(1)
+    return "0.0.0"  # Fallback
+
+
+# Default version from source file (can be overridden via --version flag)
+VERSION = get_version_from_file()
 
 # Directories
 ROOT_DIR = Path(__file__).parent.absolute()
@@ -450,10 +466,9 @@ def create_distribution():
     """Create a distribution package with all necessary files"""
     print_step("Creating distribution package...")
     
-    # Create platform-specific distribution name
-    date_str = datetime.now().strftime("%Y%m%d")
+    # Create platform-specific distribution name with version
     platform_name = {"windows": "Windows", "darwin": "macOS", "linux": "Linux"}[PLATFORM]
-    dist_name = f"{APP_NAME}_{platform_name}_{date_str}"
+    dist_name = f"{APP_NAME}-{VERSION}-{platform_name}"
     dist_folder = DIST_DIR / dist_name
     
     # Create distribution folder
@@ -555,13 +570,22 @@ Platform: {platform_name}
 
 
 def main():
+    global VERSION
+    
     parser = argparse.ArgumentParser(description=f"Build {APP_NAME} for {PLATFORM}")
     parser.add_argument("--clean", action="store_true", help="Clean build artifacts first")
     parser.add_argument("--skip-frontend", action="store_true", help="Skip frontend build")
     parser.add_argument("--skip-deps", action="store_true", help="Skip dependency installation")
+    parser.add_argument("--version", type=str, help="Override version (for CI builds)")
     args = parser.parse_args()
     
+    # Override version if provided via command line
+    if args.version:
+        VERSION = args.version
+        print(f"Using version override: {VERSION}")
+    
     print_header(f"{APP_NAME} Build Script")
+    print(f"Version: {VERSION}")
     print(f"Platform: {PLATFORM}")
     print(f"Python: {sys.version.split()[0]}")
     print(f"Working directory: {ROOT_DIR}")
@@ -602,14 +626,17 @@ def main():
         
         print_header("Build Complete!")
         print(f"Output: {DIST_DIR}")
+        print(f"Version: {VERSION}")
         print("\nTo test the build:")
+        platform_name = {"windows": "Windows", "darwin": "macOS", "linux": "Linux"}[PLATFORM]
+        dist_name = f"{APP_NAME}-{VERSION}-{platform_name}"
         if IS_WINDOWS:
-            print(f"  cd dist\\{APP_NAME}_Windows_*")
+            print(f"  cd dist\\{dist_name}")
             print("  Start_PrintQue.bat")
         elif IS_MAC:
-            print(f"  open dist/{APP_NAME}_macOS_*/{APP_NAME}.app")
+            print(f"  open dist/{dist_name}/{APP_NAME}.app")
         else:
-            print(f"  cd dist/{APP_NAME}_Linux_*")
+            print(f"  cd dist/{dist_name}")
             print(f"  ./start_printque.sh")
         
         return 0
