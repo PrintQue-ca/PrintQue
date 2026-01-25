@@ -43,32 +43,18 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           
-      - name: Run semantic-release (dry run)
-        id: semantic_dry
+      - name: Run semantic-release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # Run in dry-run mode first to see what would happen
-          OUTPUT=$(semantic-release version --no-commit --no-tag --no-push --no-vcs-release 2>&1) || true
-          echo "Dry run output:"
-          echo "$OUTPUT"
+          echo "Current tags:"
+          git tag -l | tail -5
           
-          # Check if there's a version bump
-          if echo "$OUTPUT" | grep -q "bump"; then
-            echo "should_release=true" >> $GITHUB_OUTPUT
-          else
-            echo "should_release=false" >> $GITHUB_OUTPUT
-          fi
-          
-      - name: Create version bump and tag
-        if: steps.semantic_dry.outputs.should_release == 'true'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          # Run semantic-release to bump version, commit, and tag
+          echo ""
+          echo "Running semantic-release..."
           semantic-release version
           
       - name: Push changes
-        if: steps.semantic_dry.outputs.should_release == 'true'
         run: |
+          # Push any new commits and tags created by semantic-release
           git push origin main --follow-tags
