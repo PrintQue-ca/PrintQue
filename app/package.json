@@ -11,8 +11,7 @@
     "test:coverage": "vitest run --coverage",
     "lint": "biome check .",
     "lint:fix": "biome check --write .",
-    "format": "biome format --write .",
-    "prepare": "cd .. && husky"
+    "format": "biome format --write ."
   },
   "lint-staged": {
     "*.{js,ts,tsx,json}": [
@@ -68,7 +67,6 @@
     "@types/react-dom": "^19.2.0",
     "@vitejs/plugin-react": "^5.0.4",
     "@vitest/coverage-v8": "^3.0.5",
-    "husky": "^9.1.7",
     "jsdom": "^27.0.0",
     "lint-staged": "^16.2.7",
     "tailwindcss": "^4.1.18",

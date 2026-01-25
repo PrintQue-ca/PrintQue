@@ -4,11 +4,142 @@ Thank you for your interest in contributing to PrintQue! This guide will help yo
 
 ## Table of Contents
 
+- [Commit Message Format](#commit-message-format) **(IMPORTANT - READ FIRST)**
 - [Development Setup](#development-setup)
 - [Running Tests](#running-tests)
 - [Code Style](#code-style)
 - [Pull Request Process](#pull-request-process)
+- [Versioning and Releases](#versioning-and-releases)
 - [Project Structure](#project-structure)
+
+---
+
+## Commit Message Format
+
+> **This project uses [Conventional Commits](https://www.conventionalcommits.org/) to automate versioning and releases. All commits MUST follow this format.**
+
+### Format
+
+```
+<type>(<scope>): <description>
+
+[optional body]
+
+[optional footer(s)]
+```
+
+### Types
+
+| Type | Description | Version Bump |
+|------|-------------|--------------|
+| `feat` | A new feature | **MINOR** (1.0.0 → 1.1.0) |
+| `fix` | A bug fix | **PATCH** (1.0.0 → 1.0.1) |
+| `perf` | Performance improvement | **PATCH** |
+| `docs` | Documentation only | None |
+| `style` | Formatting, whitespace | None |
+| `refactor` | Code restructuring | None |
+| `test` | Adding/updating tests | None |
+| `build` | Build system changes | None |
+| `ci` | CI configuration | None |
+| `chore` | Maintenance tasks | None |
+| `revert` | Revert a commit | Depends |
+
+### Breaking Changes
+
+For breaking changes that require a **MAJOR** version bump (1.0.0 → 2.0.0):
+
+```bash
+# Option 1: Add ! after the type
+feat!: remove deprecated printer API
+
+# Option 2: Add BREAKING CHANGE footer
+feat: redesign order system
+
+BREAKING CHANGE: Order IDs are now UUIDs instead of integers
+```
+
+### Examples
+
+```bash
+# Good - triggers minor version bump
+feat: add printer grouping support
+
+# Good - triggers patch version bump  
+fix: resolve order queue deadlock issue
+
+# Good - with scope
+feat(api): add batch order creation endpoint
+
+# Good - with body for context
+fix: prevent duplicate print jobs
+
+The job scheduler was not checking for existing jobs before
+queueing, causing duplicate prints on network reconnection.
+
+# Good - breaking change
+feat!: migrate to new authentication system
+
+BREAKING CHANGE: API tokens from v1 are no longer valid.
+Users must regenerate tokens.
+
+# BAD - missing type
+added new feature
+
+# BAD - wrong format
+Feature: add printer support
+
+# BAD - not lowercase
+Feat: add something
+```
+
+### Using Commitizen (Recommended)
+
+Don't want to remember the format? Use the interactive commit helper:
+
+```bash
+# From the project root
+npm run commit
+```
+
+This launches an interactive prompt that guides you through creating a properly formatted commit:
+
+```
+? Select the type of change you're committing: (Use arrow keys)
+❯ feat:     A new feature
+  fix:      A bug fix
+  docs:     Documentation only changes
+  style:    Changes that don't affect the meaning of the code
+  refactor: A code change that neither fixes a bug nor adds a feature
+  perf:     A code change that improves performance
+  test:     Adding missing tests
+
+? What is the scope of this change (e.g. component or file name)? (press enter to skip)
+? Write a short, imperative tense description of the change:
+? Provide a longer description of the change: (press enter to skip)
+? Are there any breaking changes? (y/N)
+? Does this change affect any open issues? (y/N)
+```
+
+### Enforcement
+
+Commit messages are **automatically validated** at two levels:
+
+1. **Local (commit-msg hook)**: Commitlint validates format before allowing the commit
+2. **CI (pull requests)**: GitHub Actions validates all commits in the PR
+
+If your commit is rejected:
+```bash
+# Amend the last commit message
+git commit --amend -m "feat: correct commit message"
+
+# Or for older commits, use interactive rebase
+git rebase -i HEAD~3
+
+# Or just use Commitizen next time!
+npm run commit
+```
+
+---
 
 ## Development Setup
 
@@ -26,19 +157,24 @@ Thank you for your interest in contributing to PrintQue! This guide will help yo
    cd PrintQue
    ```
 
-2. Create a Python virtual environment:
+2. Install root dependencies (commit tooling):
+   ```bash
+   npm install
+   ```
+
+3. Create a Python virtual environment:
    ```bash
    python -m venv venv
    source venv/bin/activate  # On Windows: venv\Scripts\activate
    ```
 
-3. Install dependencies:
+4. Install Python dependencies:
    ```bash
    pip install -r api/requirements.txt
    pip install -r api/requirements-dev.txt
    ```
 
-4. Run the API server:
+5. Run the API server:
    ```bash
    cd api
    python app.py
@@ -134,15 +270,26 @@ npx tsc --noEmit
 
 ### Commit Messages
 
-- Use clear, descriptive commit messages
-- Start with a verb (Add, Fix, Update, Remove, etc.)
-- Reference issue numbers when applicable
+**You MUST use Conventional Commits format.** See [Commit Message Format](#commit-message-format) at the top of this document.
 
-Examples:
+**Recommended**: Use Commitizen for guided commits:
+```bash
+npm run commit
 ```
-Add printer status polling interval
-Fix order quantity validation bug
-Update README with new setup instructions
+
+Or write commits manually:
+```bash
+feat: add printer status polling interval
+fix: resolve order quantity validation bug
+docs: update README with new setup instructions
+fix(api): handle null printer response
+```
+
+Reference issue numbers in the body or footer:
+```bash
+fix: resolve printer connection timeout
+
+Closes #123
 ```
 
 ## Pull Request Process
@@ -171,11 +318,78 @@ Update README with new setup instructions
 
 7. **Address review feedback** - Make any requested changes.
 
+## Versioning and Releases
+
+PrintQue uses **automated semantic versioning** based on your commit messages. You don't need to manually update version numbers.
+
+### How It Works
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│  Your Commit                                                    │
+│  feat: add printer grouping                                     │
+└─────────────────┬───────────────────────────────────────────────┘
+                  │
+                  ▼
+┌─────────────────────────────────────────────────────────────────┐
+│  Merge to main                                                  │
+│  CI analyzes commits since last release                         │
+└─────────────────┬───────────────────────────────────────────────┘
+                  │
+                  ▼
+┌─────────────────────────────────────────────────────────────────┐
+│  Automatic Version Bump                                         │
+│  1.2.0 → 1.3.0 (feat = minor bump)                              │
+│  Creates tag: v1.3.0                                            │
+└─────────────────┬───────────────────────────────────────────────┘
+                  │
+                  ▼
+┌─────────────────────────────────────────────────────────────────┐
+│  Release Build                                                  │
+│  • Windows (.exe)                                               │
+│  • macOS (.app)                                                 │
+│  • Linux (binary)                                               │
+│  → GitHub Release with all artifacts                            │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### Version Bump Rules
+
+| Commits in PR | Version Change |
+|--------------|----------------|
+| Only `fix:`, `perf:` | 1.2.3 → 1.2.4 (PATCH) |
+| Any `feat:` | 1.2.3 → 1.3.0 (MINOR) |
+| Any `feat!:` or `BREAKING CHANGE` | 1.2.3 → 2.0.0 (MAJOR) |
+| Only `docs:`, `chore:`, etc. | No release |
+
+### Version Location
+
+The version is maintained in a single source file:
+- **Source**: `api/__version__.py`
+- **Auto-synced to**: `pyproject.toml`, build artifacts
+
+Do NOT manually edit version numbers. The CI handles this automatically.
+
+### Creating a Release (Maintainers)
+
+Releases happen automatically when commits are merged to `main`. If you need a manual release:
+
+```bash
+# Ensure you have the latest main
+git checkout main
+git pull
+
+# Create and push a tag manually (rare)
+git tag v1.2.3
+git push origin v1.2.3
+```
+
 ## Project Structure
 
 ```
 PrintQue/
 ├── api/                    # Python Flask backend
+│   ├── __version__.py     # VERSION SOURCE OF TRUTH
 │   ├── app.py             # Main application entry point
 │   ├── routes/            # API route handlers
 │   │   ├── orders.py
@@ -204,8 +418,19 @@ PrintQue/
 │
 ├── .github/
 │   └── workflows/
-│       └── ci.yml         # GitHub Actions CI
+│       ├── ci.yml         # Lint and test
+│       ├── commitlint.yml # PR commit validation
+│       ├── version-bump.yml # Auto version bumping
+│       └── release.yml    # Multi-platform builds
 │
+├── .husky/
+│   ├── pre-commit         # Lint staged files
+│   └── commit-msg         # Validate commit format
+│
+├── package.json           # Root package (commit tooling)
+├── commitlint.config.js   # Commit message rules
+├── pyproject.toml         # Python project config
+├── build.py               # Cross-platform build script
 └── CONTRIBUTING.md        # This file
 ```
 

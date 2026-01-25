@@ -2,11 +2,14 @@ import os
 from dotenv import load_dotenv
 from cryptography.fernet import Fernet
 
+# Import version from single source of truth
+from __version__ import __version__
+
 load_dotenv()
 
 class Config:
-    # Application version
-    APP_VERSION = '1.0.0'
+    # Application version (imported from __version__.py)
+    APP_VERSION = __version__
 
     SECRET_KEY = os.getenv('SECRET_KEY', 'default-secret-for-dev-only')
 
