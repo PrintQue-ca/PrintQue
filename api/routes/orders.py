@@ -13,6 +13,7 @@ from services.state import (
 from services.printer_manager import distribute_orders_async, extract_filament_from_file, start_background_distribution
 from utils.config import Config
 from services.default_settings import load_default_settings, save_default_settings
+from utils.logger import debug_log
 
 order_bp = Blueprint('order_routes', __name__)
 
@@ -108,8 +109,8 @@ def register_order_routes(app, socketio):
             }
             ORDERS.append(order)
             save_data(ORDERS_FILE, ORDERS)
-            logging.debug(f"New order {order_id}: ejection_enabled={ejection_enabled}, end_gcode={end_gcode}, ORDERS IDs: {[o['id'] for o in ORDERS]}")
-            logging.debug(f"New order created with filename '{filename}' and ejection_enabled={ejection_enabled}")
+            logging.info(f"Created order {order_id}: {filename}, qty={quantity}")
+            debug_log('cooldown', f"Order {order_id} created with cooldown_temp={cooldown_temp}")
         
         flash(f"✅ Order for {quantity} print(s) of {filename} added successfully")
         

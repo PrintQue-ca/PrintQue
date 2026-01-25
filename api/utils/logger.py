@@ -38,6 +38,164 @@ logger.addHandler(file_handler)
 logger.addHandler(state_handler)
 logger.addHandler(console_handler)
 
+# =============================================================================
+# Dynamic Logging Control
+# =============================================================================
+
+# Settings file for persistence
+LOGGING_SETTINGS_FILE = os.path.join(os.path.expanduser("~"), "PrintQueData", "logging_settings.json")
+
+# Log level mapping
+LOG_LEVELS = {
+    'DEBUG': logging.DEBUG,
+    'INFO': logging.INFO,
+    'WARNING': logging.WARNING,
+    'ERROR': logging.ERROR,
+    'CRITICAL': logging.CRITICAL
+}
+
+# Feature-specific debug flags - these enable verbose logging for specific features
+# Can be toggled via API without changing the overall log level
+DEBUG_FLAGS = {
+    'cooldown': False,      # Cooldown/temperature waiting before ejection
+    'ejection': False,      # Ejection process debugging
+    'distribution': False,  # Job distribution debugging
+    'mqtt': False,          # MQTT/Bambu communication
+    'state': False,         # Printer state transitions
+    'api': False,           # API request/response debugging
+}
+
+# Lock for thread-safe access to debug flags
+_debug_flags_lock = threading.Lock()
+
+def _load_logging_settings():
+    """Load logging settings from file"""
+    try:
+        if os.path.exists(LOGGING_SETTINGS_FILE):
+            with open(LOGGING_SETTINGS_FILE, 'r') as f:
+                settings = json.load(f)
+                return settings
+    except Exception as e:
+        print(f"Could not load logging settings: {e}")
+    return None
+
+def _save_logging_settings():
+    """Save current logging settings to file"""
+    try:
+        settings = {
+            'console_level': get_console_log_level(),
+            'debug_flags': get_debug_flags()
+        }
+        os.makedirs(os.path.dirname(LOGGING_SETTINGS_FILE), exist_ok=True)
+        with open(LOGGING_SETTINGS_FILE, 'w') as f:
+            json.dump(settings, f, indent=2)
+    except Exception as e:
+        print(f"Could not save logging settings: {e}")
+
+def _apply_saved_settings():
+    """Apply saved logging settings on startup"""
+    settings = _load_logging_settings()
+    if settings:
+        # Apply console level
+        level = settings.get('console_level', 'INFO')
+        if level in LOG_LEVELS:
+            console_handler.setLevel(LOG_LEVELS[level])
+        
+        # Apply debug flags
+        saved_flags = settings.get('debug_flags', {})
+        with _debug_flags_lock:
+            for flag, enabled in saved_flags.items():
+                if flag in DEBUG_FLAGS:
+                    DEBUG_FLAGS[flag] = enabled
+
+# Apply saved settings on module load
+_apply_saved_settings()
+
+def get_console_log_level() -> str:
+    """Get current console log level as string"""
+    level = console_handler.level
+    for name, value in LOG_LEVELS.items():
+        if value == level:
+            return name
+    return 'INFO'
+
+def set_console_log_level(level: str, save: bool = True) -> bool:
+    """Set console log level. Returns True if successful."""
+    level = level.upper()
+    if level not in LOG_LEVELS:
+        return False
+    
+    new_level = LOG_LEVELS[level]
+    
+    # Update the PrintQue logger's console handler
+    console_handler.setLevel(new_level)
+    
+    # Also update the root logger's StreamHandlers to ensure all console output respects the level
+    root_logger = logging.getLogger()
+    for handler in root_logger.handlers:
+        if isinstance(handler, logging.StreamHandler) and not isinstance(handler, logging.FileHandler):
+            handler.setLevel(new_level)
+    
+    logger.info(f"Console log level changed to {level}")
+    if save:
+        _save_logging_settings()
+    return True
+
+def get_debug_flags() -> dict:
+    """Get current debug flags"""
+    with _debug_flags_lock:
+        return DEBUG_FLAGS.copy()
+
+def set_debug_flag(flag: str, enabled: bool, save: bool = True) -> bool:
+    """Set a specific debug flag. Returns True if flag exists."""
+    with _debug_flags_lock:
+        if flag not in DEBUG_FLAGS:
+            return False
+        DEBUG_FLAGS[flag] = enabled
+        logger.info(f"Debug flag '{flag}' set to {enabled}")
+    if save:
+        _save_logging_settings()
+    return True
+
+def is_debug_enabled(flag: str) -> bool:
+    """Check if a specific debug flag is enabled"""
+    with _debug_flags_lock:
+        return DEBUG_FLAGS.get(flag, False)
+
+def debug_log(flag: str, message: str, level: str = 'debug'):
+    """
+    Log a message only if the specified debug flag is enabled.
+    This allows feature-specific verbose logging without flooding the console.
+    
+    Args:
+        flag: Debug flag name (e.g., 'cooldown', 'ejection')
+        message: The message to log
+        level: Log level ('debug', 'info', 'warning', 'error')
+    """
+    if not is_debug_enabled(flag):
+        return
+    
+    prefixed_message = f"[{flag.upper()}] {message}"
+    
+    if level == 'error':
+        logger.error(prefixed_message)
+    elif level == 'warning':
+        logger.warning(prefixed_message)
+    elif level == 'info':
+        logger.info(prefixed_message)
+    else:
+        logger.debug(prefixed_message)
+
+def get_logging_config() -> dict:
+    """Get full logging configuration"""
+    return {
+        'console_level': get_console_log_level(),
+        'file_level': 'DEBUG',  # File always captures everything
+        'debug_flags': get_debug_flags(),
+        'available_levels': list(LOG_LEVELS.keys()),
+        'available_flags': list(DEBUG_FLAGS.keys())
+    }
+
 def log_state_change(printer_name, old_state, new_state, reason=""):
     """Log printer state changes"""
     # Changed from â†’ to -> for ASCII compatibility

@@ -16,7 +16,6 @@ from services.printer_manager import start_background_tasks, close_connection_po
 from utils.config import Config
 import asyncio
 import logging
-from utils.license_validator import verify_license_startup
 import time
 import atexit
 from utils.console_capture import console_capture
@@ -26,31 +25,24 @@ LOG_DIR = os.path.join(os.getenv('DATA_DIR', os.path.expanduser("~")), "PrintQue
 os.makedirs(LOG_DIR, exist_ok=True)
 LOG_FILE = os.path.join(LOG_DIR, "app.log")
 
-logging.basicConfig(
-    level=logging.DEBUG,
-    format='%(asctime)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler(LOG_FILE),
-        logging.StreamHandler()
-    ]
-)
+# Import log level configuration from logger module
+from utils.logger import get_console_log_level, LOG_LEVELS, console_handler as logger_console_handler
 
-# Verify license and get license information
-def verify_license():
-    # Create an empty license.key file if it doesn't exist
-    license_path = os.path.join(os.getcwd(), "license.key")
-    if not os.path.exists(license_path):
-        try:
-            with open(license_path, 'w') as f:
-                f.write("FREE-0000-0000-0000")
-            logging.info("Created default license.key file")
-        except Exception as e:
-            logging.error(f"Error creating license file: {str(e)}")
+# Set up logging with file handler at DEBUG (captures everything) and console at configured level
+file_handler = logging.FileHandler(LOG_FILE)
+file_handler.setLevel(logging.DEBUG)
+file_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
 
-    license_info = verify_license_startup()
-    logging.info(f"License tier: {license_info['tier']}")
-    logging.info(f"Max printers: {license_info['max_printers']}")
-    return license_info
+# Create app's console handler using saved log level
+app_console_handler = logging.StreamHandler()
+app_console_handler.setLevel(LOG_LEVELS.get(get_console_log_level(), logging.INFO))
+app_console_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
+
+# Configure root logger - handlers filter by their own levels
+root_logger = logging.getLogger()
+root_logger.setLevel(logging.DEBUG)  # Allow all through, handlers decide
+root_logger.addHandler(file_handler)
+root_logger.addHandler(app_console_handler)
 
 # Initialize the app with static and templates folders
 # Handle both development and packaged (PyInstaller) environments
@@ -95,14 +87,8 @@ socketio = SocketIO(app, async_mode='eventlet', cors_allowed_origins="*")
 # Initialize state
 initialize_state()
 
-# Verify license
-license_info = verify_license()
-app.config['LICENSE_TIER'] = license_info['tier']
-app.config['MAX_PRINTERS'] = license_info['max_printers']
-app.config['LICENSE_FEATURES'] = license_info['features']
-app.config['LICENSE_VALID'] = license_info['valid']
-if 'days_remaining' in license_info:
-    app.config['LICENSE_DAYS_REMAINING'] = license_info['days_remaining']
+# Open Source Edition - all features enabled, no limits
+logging.info("PrintQue Open Source Edition - All features enabled")
 
 # Register all routes
 register_routes(app, socketio)
@@ -284,7 +270,8 @@ if __name__ == '__main__':
     logging.info("")
     logging.info("    ╔═══════════════════════════════════════════════╗")
     logging.info("    ║                                               ║")
-    logging.info("    ║           PRINTQUE SERVER ONLINE              ║")
+    logging.info("    ║      PRINTQUE OPEN SOURCE EDITION             ║")
+    logging.info("    ║      All features enabled - No limits         ║")
     logging.info("    ║                                               ║")
     logging.info("    ╚═══════════════════════════════════════════════╝")
     logging.info("")

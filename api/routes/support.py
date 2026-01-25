@@ -8,7 +8,6 @@ from email.mime.multipart import MIMEMultipart
 from datetime import datetime
 import logging
 from services.state import PRINTERS, printers_rwlock, ReadLock
-from utils.license_validator import get_license_info
 
 # Create a Blueprint for support-related routes
 support_bp = Blueprint('support', __name__, url_prefix='/support')
@@ -135,6 +134,14 @@ Reply directly to this email to respond to the user.
 def support_page():
     """Display the support page and handle form submission"""
     
+    # Open Source Edition license info
+    license_info = {
+        'tier': 'OPEN_SOURCE',
+        'valid': True,
+        'max_printers': -1,
+        'features': ['all']
+    }
+    
     if request.method == 'POST':
         # Get form data
         name = request.form.get('name', '').strip()
@@ -146,9 +153,6 @@ def support_page():
         if not all([name, email, subject, message]):
             flash('Please fill in all fields.', 'error')
             return render_template('support.html')
-        
-        # Get license and system information
-        license_info = get_license_info()
         
         # Get current printer count
         with ReadLock(printers_rwlock):
@@ -166,9 +170,6 @@ def support_page():
             return redirect(url_for('support.support_page'))
         else:
             flash(f'Failed to send support request: {error_msg}', 'error')
-    
-    # Get license info for display
-    license_info = get_license_info()
     
     return render_template('support.html', license=license_info)
 

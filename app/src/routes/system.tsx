@@ -1,8 +1,18 @@
 import { createFileRoute } from '@tanstack/react-router'
-import { useSystemInfo } from '@/hooks'
+import { useSystemInfo, useLoggingConfig, useSetLogLevel, useSetDebugFlag } from '@/hooks'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
-import { Loader2, Server, Cpu, HardDrive, Clock } from 'lucide-react'
+import { Switch } from '@/components/ui/switch'
+import { Label } from '@/components/ui/label'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
+import { Loader2, Server, Cpu, HardDrive, Clock, Settings2, Bug } from 'lucide-react'
 import { EjectionCodesManager } from '@/components/orders/EjectionCodesManager'
+import { toast } from 'sonner'
 
 export const Route = createFileRoute('/system')({ component: SystemPage })
 
@@ -132,6 +142,9 @@ function SystemPage() {
       {/* Ejection Codes Manager */}
       <EjectionCodesManager />
 
+      {/* Logging Settings */}
+      <LoggingSettings />
+
       <Card>
         <CardHeader>
           <CardTitle>About PrintQue</CardTitle>
@@ -151,5 +164,134 @@ function SystemPage() {
         </CardContent>
       </Card>
     </div>
+  )
+}
+
+// Logging Settings Component
+function LoggingSettings() {
+  const { data: config, isLoading } = useLoggingConfig()
+  const setLogLevel = useSetLogLevel()
+  const setDebugFlag = useSetDebugFlag()
+
+  const handleLevelChange = async (level: string) => {
+    try {
+      await setLogLevel.mutateAsync(level)
+      toast.success(`Log level set to ${level}`)
+    } catch {
+      toast.error('Failed to set log level')
+    }
+  }
+
+  const handleFlagToggle = async (flag: string, enabled: boolean) => {
+    try {
+      await setDebugFlag.mutateAsync({ flag, enabled })
+      toast.success(`Debug flag '${flag}' ${enabled ? 'enabled' : 'disabled'}`)
+    } catch {
+      toast.error('Failed to update debug flag')
+    }
+  }
+
+  const debugFlagDescriptions: Record<string, string> = {
+    cooldown: 'Temperature waiting before ejection',
+    ejection: 'Ejection process details',
+    distribution: 'Job distribution logic',
+    mqtt: 'MQTT/Bambu communication',
+    state: 'Printer state transitions',
+    api: 'API request/response details',
+  }
+
+  if (isLoading) {
+    return (
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Settings2 className="h-5 w-5" />
+            Logging Settings
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="flex items-center justify-center py-4">
+            <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+          </div>
+        </CardContent>
+      </Card>
+    )
+  }
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          <Settings2 className="h-5 w-5" />
+          Logging Settings
+        </CardTitle>
+        <CardDescription>
+          Control console log verbosity and enable feature-specific debugging
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-6">
+        {/* Log Level */}
+        <div className="space-y-2">
+          <Label htmlFor="log-level">Console Log Level</Label>
+          <Select
+            value={config?.console_level || 'INFO'}
+            onValueChange={handleLevelChange}
+            disabled={setLogLevel.isPending}
+          >
+            <SelectTrigger id="log-level" className="w-[200px]">
+              <SelectValue placeholder="Select level" />
+            </SelectTrigger>
+            <SelectContent>
+              {(config?.available_levels || ['DEBUG', 'INFO', 'WARNING', 'ERROR']).map((level) => (
+                <SelectItem key={level} value={level}>
+                  {level}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <p className="text-xs text-muted-foreground">
+            DEBUG shows all messages, INFO shows standard operation, WARNING shows only issues
+          </p>
+        </div>
+
+        {/* Debug Flags */}
+        <div className="space-y-3">
+          <div className="flex items-center gap-2">
+            <Bug className="h-4 w-4 text-muted-foreground" />
+            <Label>Debug Flags</Label>
+          </div>
+          <p className="text-xs text-muted-foreground mb-3">
+            Enable verbose logging for specific features without changing the overall log level
+          </p>
+          <div className="grid gap-3 md:grid-cols-2">
+            {config?.available_flags?.map((flag) => (
+              <div
+                key={flag}
+                className="flex items-center justify-between p-3 border rounded-lg"
+              >
+                <div>
+                  <Label htmlFor={`flag-${flag}`} className="font-medium capitalize">
+                    {flag}
+                  </Label>
+                  <p className="text-xs text-muted-foreground">
+                    {debugFlagDescriptions[flag] || 'Enable debug logging'}
+                  </p>
+                </div>
+                <Switch
+                  id={`flag-${flag}`}
+                  checked={config?.debug_flags?.[flag] || false}
+                  onCheckedChange={(checked) => handleFlagToggle(flag, checked)}
+                  disabled={setDebugFlag.isPending}
+                />
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <p className="text-xs text-muted-foreground pt-2 border-t">
+          Settings are saved automatically and persist across restarts. File logs always capture DEBUG level.
+        </p>
+      </CardContent>
+    </Card>
   )
 }

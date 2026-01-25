@@ -12,19 +12,13 @@ import paho.mqtt.client as mqtt
 import re
 from flask import current_app, render_template, jsonify, request
 
-# Set up logging
+# Set up logging directory
 LOG_DIR = os.path.join(os.path.expanduser("~"), "PrintQueData")
 os.makedirs(LOG_DIR, exist_ok=True)
 LOG_FILE = os.path.join(LOG_DIR, "app.log")
 
-logging.basicConfig(
-    level=logging.DEBUG,
-    format='%(asctime)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler(LOG_FILE, encoding='utf-8'),
-        logging.StreamHandler()
-    ]
-)
+# Note: Main logging configuration is done in app.py to support dynamic log levels
+# This module just ensures the logging directory exists and gets a logger instance
 logger = logging.getLogger(__name__)
 
 # File paths (moved to writable directory)

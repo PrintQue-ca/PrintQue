@@ -477,10 +477,6 @@ def create_distribution():
     for dirname in ["data", "uploads", "logs"]:
         (dist_folder / dirname).mkdir(exist_ok=True)
     
-    # Create default license file
-    license_file = dist_folder / "license.key"
-    license_file.write_text("FREE-0000-0000-0000")
-    
     # Create launcher script
     if IS_WINDOWS:
         launcher = dist_folder / "Start_PrintQue.bat"
@@ -522,7 +518,7 @@ echo ""
     
     # Create README
     readme = dist_folder / "README.txt"
-    readme.write_text(f'''{APP_NAME} - Print Farm Manager
+    readme.write_text(f'''{APP_NAME} - Open Source Print Farm Manager
 {'=' * 40}
 
 Quick Start:
@@ -535,13 +531,14 @@ Data Storage:
 - Uploaded files: uploads/
 - Logs: logs/
 
-License:
-- Default: FREE tier (limited printers)
-- Edit license.key to upgrade
+Open Source:
+- All features enabled, no printer limits
+- License: GPL v3
+- GitHub: https://github.com/PrintQue/PrintQue
 
 Support:
 - Check logs/ for error details
-- Visit: https://printque.com/support
+- GitHub Issues: https://github.com/PrintQue/PrintQue/issues
 
 Version: {VERSION}
 Platform: {platform_name}

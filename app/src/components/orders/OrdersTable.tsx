@@ -38,7 +38,7 @@ import {
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Input } from '@/components/ui/input'
-import { GripVertical, Trash2, Plus, Minus, Zap, ZapOff } from 'lucide-react'
+import { GripVertical, Trash2, Plus, Minus, Zap, ZapOff, Thermometer } from 'lucide-react'
 import type { Order } from '@/types'
 import { useDeleteOrder, useReorderOrder, useUpdateQuantity, useUpdateOrderEjection, useEjectionCodes } from '@/hooks'
 import { useState, useEffect } from 'react'
@@ -328,6 +328,7 @@ export function OrdersTable({ orders }: OrdersTableProps) {
         const isEnabled = order.ejection_enabled
         const codeName = order.ejection_code_name
         const codeId = order.ejection_code_id
+        const cooldownTemp = order.cooldown_temp
         
         // Determine current value for select
         let currentValue = 'none'
@@ -342,57 +343,70 @@ export function OrdersTable({ orders }: OrdersTableProps) {
         }
 
         return (
-          <Select
-            value={currentValue}
-            onValueChange={(value) => handleEjectionChange(order.id, value, order)}
-          >
-            <SelectTrigger className="w-[130px] h-8 text-xs">
-              <SelectValue>
-                <span className="flex items-center gap-1">
-                  {isEnabled ? (
-                    <>
-                      <Zap className="h-3 w-3 text-yellow-500" />
-                      <span className="truncate">{codeName || 'Custom'}</span>
-                    </>
-                  ) : (
-                    <>
-                      <ZapOff className="h-3 w-3 text-muted-foreground" />
-                      <span>Off</span>
-                    </>
-                  )}
-                </span>
-              </SelectValue>
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="none">
-                <span className="flex items-center gap-2">
-                  <ZapOff className="h-3 w-3" />
-                  Off
-                </span>
-              </SelectItem>
-              <SelectItem value="custom">
-                <span className="flex items-center gap-2">
-                  <Zap className="h-3 w-3" />
-                  Custom
-                </span>
-              </SelectItem>
-              {ejectionCodes && ejectionCodes.length > 0 && (
-                <>
-                  <div className="px-2 py-1 text-xs font-semibold text-muted-foreground border-t mt-1">
-                    Saved Codes
-                  </div>
-                  {ejectionCodes.map((code) => (
-                    <SelectItem key={code.id} value={code.id}>
-                      <span className="flex items-center gap-2">
-                        <Zap className="h-3 w-3" />
-                        {code.name}
-                      </span>
-                    </SelectItem>
-                  ))}
-                </>
-              )}
-            </SelectContent>
-          </Select>
+          <div className="flex items-center gap-1">
+            <Select
+              value={currentValue}
+              onValueChange={(value) => handleEjectionChange(order.id, value, order)}
+            >
+              <SelectTrigger className="w-[130px] h-8 text-xs">
+                <SelectValue>
+                  <span className="flex items-center gap-1">
+                    {isEnabled ? (
+                      <>
+                        <Zap className="h-3 w-3 text-yellow-500" />
+                        <span className="truncate">{codeName || 'Custom'}</span>
+                      </>
+                    ) : (
+                      <>
+                        <ZapOff className="h-3 w-3 text-muted-foreground" />
+                        <span>Off</span>
+                      </>
+                    )}
+                  </span>
+                </SelectValue>
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="none">
+                  <span className="flex items-center gap-2">
+                    <ZapOff className="h-3 w-3" />
+                    Off
+                  </span>
+                </SelectItem>
+                <SelectItem value="custom">
+                  <span className="flex items-center gap-2">
+                    <Zap className="h-3 w-3" />
+                    Custom
+                  </span>
+                </SelectItem>
+                {ejectionCodes && ejectionCodes.length > 0 && (
+                  <>
+                    <div className="px-2 py-1 text-xs font-semibold text-muted-foreground border-t mt-1">
+                      Saved Codes
+                    </div>
+                    {ejectionCodes.map((code) => (
+                      <SelectItem key={code.id} value={code.id}>
+                        <span className="flex items-center gap-2">
+                          <Zap className="h-3 w-3" />
+                          {code.name}
+                        </span>
+                      </SelectItem>
+                    ))}
+                  </>
+                )}
+              </SelectContent>
+            </Select>
+            {/* Show cooldown temperature indicator if set */}
+            {cooldownTemp !== undefined && cooldownTemp !== null && (
+              <Badge 
+                variant="outline" 
+                className="h-6 px-1.5 text-xs flex items-center gap-0.5 text-cyan-600 border-cyan-300"
+                title={`Cooldown: Wait for bed to reach ${cooldownTemp}°C before ejection`}
+              >
+                <Thermometer className="h-3 w-3" />
+                {cooldownTemp}°
+              </Badge>
+            )}
+          </div>
         )
       },
     }),

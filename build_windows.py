@@ -28,8 +28,6 @@ def check_files():
         'state.py',
         'printer_manager.py',
         'config.py',
-        'license_validator.py',
-        'license_routes.py',
         'requirements.txt'
     ]
     
@@ -71,8 +69,6 @@ your_modules = [
     'state',
     'printer_manager',
     'config',
-    'license_validator',
-    'license_routes',
     'printer_routes',
     'bambu_handler',
     'retry_utils',
@@ -215,12 +211,6 @@ def create_distribution():
             shutil.copy(file, dist_dir)
             print(f"Copied {file}")
     
-    # Create default license.key if it doesn't exist
-    license_path = os.path.join(dist_dir, 'license.key')
-    if not os.path.exists(license_path):
-        with open(license_path, 'w') as f:
-            f.write('FREE-0000-0000-0000')
-        print("Created default license.key")
     
     # Create batch file launcher
     batch_content = """@echo off
@@ -246,20 +236,17 @@ pause
     print("Created Start_PrintQue.bat")
     
     # Create configuration template
-    config_content = """# PrintQue Configuration Template
+    config_content = """# PrintQue Open Source Edition - Configuration Template
 # Copy this file to .env and modify as needed
 
 # Server Configuration
 PORT=5000
 HOST=0.0.0.0
 
-# Security Keys (CHANGE THESE!)
+# Security Keys (CHANGE THESE for production!)
 SECRET_KEY=change-this-secret-key-to-something-random
 ENCRYPTION_KEY=change-this-encryption-key-to-something-random
 ADMIN_KEY=change-this-admin-key-to-something-random
-
-# License Server (optional)
-LICENSE_SERVER_URL=https://license.printque.ca
 
 # Bambu Printer Settings
 BAMBU_CA_CERT=certs/bambu_ca.pem
@@ -270,18 +257,22 @@ BAMBU_CA_CERT=certs/bambu_ca.pem
     print("Created config_template.env")
     
     # Create README
-    readme_content = """PrintQue - Print Farm Manager
-=============================
+    readme_content = """PrintQue - Open Source Print Farm Manager
+==========================================
 
 Quick Start:
 1. Double-click 'Start_PrintQue.bat' to launch the server
 2. Open your web browser and go to: http://localhost:5000
 3. Add your printers and start managing your print farm!
 
+Open Source Edition:
+- All features enabled, no printer limits
+- License: GPL v3
+- GitHub: https://github.com/PrintQue/PrintQue
+
 Configuration:
 - Copy 'config_template.env' to '.env' and modify the settings
 - Default port is 5000 (change in .env if needed)
-- License key is in 'license.key'
 
 Data Storage:
 - Printer data: data/printers.json
@@ -297,6 +288,7 @@ First Run:
 Troubleshooting:
 - If port 5000 is in use, change PORT in .env file
 - Check console window for error messages
+- Report issues: https://github.com/PrintQue/PrintQue/issues
 - Ensure firewall allows the application
 - First run may be slow due to Windows Defender scan
 

@@ -200,3 +200,42 @@ export function useTestEjectionCode() {
       api.post<ApiResponse>(`/ejection-codes/${codeId}/test`, { printer_name: printerName }),
   })
 }
+
+// Logging configuration
+export interface LoggingConfig {
+  console_level: string
+  file_level: string
+  debug_flags: Record<string, boolean>
+  available_levels: string[]
+  available_flags: string[]
+}
+
+export function useLoggingConfig() {
+  return useQuery({
+    queryKey: ['logging'],
+    queryFn: () => api.get<LoggingConfig>('/system/logging'),
+    staleTime: 10000,
+  })
+}
+
+export function useSetLogLevel() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (level: string) =>
+      api.post<ApiResponse & { level: string }>('/system/logging/level', { level }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['logging'] })
+    },
+  })
+}
+
+export function useSetDebugFlag() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ flag, enabled }: { flag: string; enabled: boolean }) =>
+      api.post<ApiResponse & { flags: Record<string, boolean> }>('/system/logging/debug-flags', { flag, enabled }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['logging'] })
+    },
+  })
+}

@@ -44,7 +44,6 @@ def main():
         from state import initialize_state
         from printer_manager import start_background_tasks, close_connection_pool
         from config import Config
-        from license_validator import verify_license_startup
         from console_capture import console_capture
         
         # Start console capture immediately after import
@@ -75,23 +74,6 @@ def main():
             except Exception as e:
                 logging.error(f"Failed to open web browser: {e}")
         
-        # Verify license
-        def verify_license():
-            # Create an empty license.key file if it doesn't exist
-            license_path = os.path.join(os.getcwd(), "license.key")
-            if not os.path.exists(license_path):
-                try:
-                    with open(license_path, 'w') as f:
-                        f.write("FREE-0000-0000-0000")
-                    logging.info("Created default license.key file")
-                except Exception as e:
-                    logging.error(f"Error creating license file: {str(e)}")
-        
-            license_info = verify_license_startup()
-            logging.info(f"License tier: {license_info['tier']}")
-            logging.info(f"Max printers: {license_info['max_printers']}")
-            return license_info
-        
         # Initialize the app
         executor = ThreadPoolExecutor(max_workers=20)
         
@@ -108,19 +90,6 @@ def main():
         # Ensure template directory exists
         os.makedirs(template_folder, exist_ok=True)
         os.makedirs(static_folder, exist_ok=True)
-        
-        # Check for license.html and create it if needed
-        license_template_path = os.path.join(template_folder, "license.html")
-        if not os.path.exists(license_template_path):
-            logging.info(f"License template not found at {license_template_path}, looking for it...")
-            
-            # Check if it exists in the current directory
-            current_dir_path = os.path.join(base_dir, "license.html")
-            if os.path.exists(current_dir_path):
-                logging.info(f"Found license.html in current directory, copying to templates...")
-                shutil.copy(current_dir_path, license_template_path)
-            else:
-                logging.warning(f"Could not find license.html to copy to templates directory")
         
         logging.debug(f"Base directory: {base_dir}")
         logging.debug(f"Template folder: {template_folder}")
@@ -174,14 +143,8 @@ def main():
         deduplicate_printers()
         deduplicate_orders()
         
-        # Verify license
-        license_info = verify_license()
-        app.config['LICENSE_TIER'] = license_info['tier']
-        app.config['MAX_PRINTERS'] = license_info['max_printers']
-        app.config['LICENSE_FEATURES'] = license_info['features']
-        app.config['LICENSE_VALID'] = license_info['valid']
-        if 'days_remaining' in license_info:
-            app.config['LICENSE_DAYS_REMAINING'] = license_info['days_remaining']
+        # Open Source Edition - all features enabled
+        logging.info("PrintQue Open Source Edition - All features enabled")
         
         # Register routes
         register_routes(app, socketio)

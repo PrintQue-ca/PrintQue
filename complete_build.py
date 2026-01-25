@@ -100,7 +100,6 @@ datas += [
     ('templates', 'templates'),
     ('static', 'static') if os.path.exists('static') else ('templates', '.'),
     ('README.txt', '.') if os.path.exists('README.txt') else ('requirements.txt', '.'),
-    ('license.key', '.') if os.path.exists('license.key') else ('requirements.txt', '.'),
 ]
 
 # Add all your Python modules
@@ -109,8 +108,6 @@ your_modules = [
     'state',
     'printer_manager',
     'config',
-    'license_validator',
-    'license_routes',
     'printer_routes',
     'order_routes',
     'misc_routes',
@@ -233,12 +230,6 @@ pause
                     shutil.copytree('templates', dest_templates)
                     print("Copied templates folder")
                 
-                # Create default license.key
-                if not os.path.exists('dist/license.key'):
-                    with open('dist/license.key', 'w') as f:
-                        f.write('FREE-0000-0000-0000')
-                    print("Created default license.key")
-                
                 print("\n" + "="*60)
                 print("BUILD SUCCESSFUL!")
                 print("="*60)
@@ -246,7 +237,7 @@ pause
                 print("  - PrintQue.exe (main executable)")
                 print("  - Start_PrintQue.bat (easy launcher)")
                 print("  - templates/ (HTML templates)")
-                print("  - license.key (default FREE license)")
+                print("\nPrintQue Open Source Edition - All features enabled!")
                 print("\nTo run PrintQue:")
                 print("  1. Go to the dist folder")
                 print("  2. Double-click Start_PrintQue.bat")
