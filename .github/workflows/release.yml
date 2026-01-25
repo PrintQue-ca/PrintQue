@@ -4,6 +4,13 @@ on:
   push:
     tags:
       - 'v*.*.*'
+  # Manual trigger from GitHub Actions UI
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to release (e.g., 1.0.0)'
+        required: true
+        type: string
 
 # Prevent concurrent releases
 concurrency:
@@ -35,12 +42,16 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Get version from tag
+      - name: Get version
         id: get_version
         shell: bash
         run: |
-          # Extract version from tag (removes 'v' prefix)
-          VERSION=${GITHUB_REF#refs/tags/v}
+          # Get version from tag or manual input
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+            VERSION="${{ github.event.inputs.version }}"
+          else
+            VERSION=${GITHUB_REF#refs/tags/v}
+          fi
           echo "version=$VERSION" >> $GITHUB_OUTPUT
           echo "Building version: $VERSION"
 
@@ -95,10 +106,15 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Get version from tag
+      - name: Get version
         id: get_version
         run: |
-          VERSION=${GITHUB_REF#refs/tags/v}
+          # Get version from tag or manual input
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+            VERSION="${{ github.event.inputs.version }}"
+          else
+            VERSION=${GITHUB_REF#refs/tags/v}
+          fi
           echo "version=$VERSION" >> $GITHUB_OUTPUT
 
       - name: Download all artifacts
