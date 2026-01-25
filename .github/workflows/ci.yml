@@ -1,0 +1,93 @@
+name: CI
+
+on:
+  push:
+    branches: [main, opensource-release]
+  pull_request:
+    branches: [main, opensource-release]
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install Python linter
+        run: pip install ruff
+      - name: Run Python linter
+        run: ruff check api/ --output-format=github
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: app/package-lock.json
+      - name: Install frontend dependencies
+        run: cd app && npm ci
+      - name: Run TypeScript type check
+        run: cd app && npx tsc --noEmit
+
+  test-backend:
+    name: Backend Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+          cache-dependency-path: |
+            api/requirements.txt
+            api/requirements-dev.txt
+      - name: Install dependencies
+        run: |
+          pip install -r api/requirements.txt
+          pip install -r api/requirements-dev.txt
+      - name: Run tests with coverage
+        run: cd api && pytest --cov=. --cov-report=xml --cov-report=term-missing
+        env:
+          PYTHONDONTWRITEBYTECODE: 1
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v4
+        with:
+          file: api/coverage.xml
+          flags: backend
+          fail_ci_if_error: false
+
+  test-frontend:
+    name: Frontend Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: app/package-lock.json
+      - name: Install dependencies
+        run: cd app && npm ci
+      - name: Run tests
+        run: cd app && npm run test
+
+  build:
+    name: Build Verification
+    needs: [lint, test-backend, test-frontend]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: app/package-lock.json
+      - name: Install frontend dependencies
+        run: cd app && npm ci
+      - name: Build frontend
+        run: cd app && npm run build
