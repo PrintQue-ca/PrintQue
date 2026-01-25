@@ -22,6 +22,7 @@ from services.state import (
 )
 from services.printer_manager import prepare_printer_data_for_broadcast, start_background_distribution, extract_filament_from_file
 from services.default_settings import load_default_settings, save_default_settings
+from utils.logger import debug_log
 
 __all__ = [
     'register_routes',
@@ -251,6 +252,76 @@ def register_routes(app, socketio):
         except Exception as e:
             return jsonify({'error': str(e)}), 500
 
+    # Logging control routes
+    @app.route('/api/v1/system/logging', methods=['GET'])
+    def api_get_logging_config():
+        """API: Get current logging configuration"""
+        try:
+            from utils.logger import get_logging_config
+            return jsonify(get_logging_config())
+        except Exception as e:
+            return jsonify({'error': str(e)}), 500
+
+    @app.route('/api/v1/system/logging/level', methods=['POST'])
+    def api_set_log_level():
+        """API: Set console log level"""
+        try:
+            from utils.logger import set_console_log_level, get_console_log_level
+            data = request.get_json()
+            level = data.get('level', 'INFO').upper()
+            
+            if set_console_log_level(level):
+                return jsonify({
+                    'success': True,
+                    'message': f'Console log level set to {level}',
+                    'level': get_console_log_level()
+                })
+            else:
+                return jsonify({
+                    'success': False,
+                    'error': f'Invalid log level: {level}. Valid levels: DEBUG, INFO, WARNING, ERROR, CRITICAL'
+                }), 400
+        except Exception as e:
+            return jsonify({'error': str(e)}), 500
+
+    @app.route('/api/v1/system/logging/debug-flags', methods=['GET'])
+    def api_get_debug_flags():
+        """API: Get current debug flags"""
+        try:
+            from utils.logger import get_debug_flags
+            return jsonify(get_debug_flags())
+        except Exception as e:
+            return jsonify({'error': str(e)}), 500
+
+    @app.route('/api/v1/system/logging/debug-flags', methods=['POST'])
+    def api_set_debug_flag():
+        """API: Set a debug flag"""
+        try:
+            from utils.logger import set_debug_flag, get_debug_flags
+            data = request.get_json()
+            flag = data.get('flag')
+            enabled = data.get('enabled', False)
+            
+            if not flag:
+                return jsonify({'error': 'Flag name required'}), 400
+            
+            if set_debug_flag(flag, enabled):
+                return jsonify({
+                    'success': True,
+                    'message': f"Debug flag '{flag}' set to {enabled}",
+                    'flags': get_debug_flags()
+                })
+            else:
+                available = list(get_debug_flags().keys())
+                return jsonify({
+                    'success': False,
+                    'error': f"Unknown debug flag: {flag}. Available: {available}"
+                }), 400
+        except Exception as e:
+            return jsonify({'error': str(e)}), 500
+        except Exception as e:
+            return jsonify({'error': str(e)}), 500
+
     # Printer routes
     @app.route('/api/v1/printers', methods=['GET'])
     def api_get_printers():
@@ -469,8 +540,12 @@ def register_routes(app, socketio):
                 try:
                     cooldown_temp = int(cooldown_temp_str)
                     if cooldown_temp < 0 or cooldown_temp > 100:
+                        debug_log('cooldown', f"cooldown_temp {cooldown_temp} out of range, ignoring", 'warning')
                         cooldown_temp = None  # Invalid range
+                    else:
+                        debug_log('cooldown', f"Parsed cooldown_temp as {cooldown_temp}°C")
                 except ValueError:
+                    debug_log('cooldown', f"Could not parse cooldown_temp '{cooldown_temp_str}'", 'warning')
                     cooldown_temp = None  # Invalid value
             
             # Use default if ejection enabled but no custom gcode provided
@@ -517,7 +592,8 @@ def register_routes(app, socketio):
                 }
                 ORDERS.append(order)
                 save_data(ORDERS_FILE, ORDERS)
-                logging.info(f"API: Created order {order_id}: {order_name or filename}, qty={quantity}, ejection={ejection_enabled}")
+                logging.info(f"Created order {order_id}: {order_name or filename}, qty={quantity}")
+                debug_log('cooldown', f"Order {order_id} created with cooldown_temp={cooldown_temp}")
             
             # Trigger distribution
             start_background_distribution(socketio, app)

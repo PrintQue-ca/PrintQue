@@ -648,6 +648,25 @@ def get_bambu_status(printer: Dict[str, Any]) -> Tuple[Dict[str, Any], Optional[
             }
         }
     
+    # CRITICAL: Preserve COOLING state - this is managed by PrintQue, not the printer
+    # Return COOLING state with current temperatures so cooling monitoring can work
+    if printer.get('state') == 'COOLING':
+        with bambu_states_lock:
+            bed_temp = 0
+            nozzle_temp = 0
+            if printer_name in BAMBU_PRINTER_STATES:
+                bed_temp = BAMBU_PRINTER_STATES[printer_name].get('bed_temp', 0)
+                nozzle_temp = BAMBU_PRINTER_STATES[printer_name].get('nozzle_temp', 0)
+        logging.debug(f"Bambu printer {printer_name} is COOLING, returning COOLING state (bed: {bed_temp}°C)")
+        return printer, {
+            "printer": {
+                "state": "COOLING",
+                "temp_nozzle": nozzle_temp,
+                "temp_bed": bed_temp,
+                "axis_z": 0
+            }
+        }
+    
     # Ensure connected
     if printer_name not in MQTT_CLIENTS or not MQTT_CLIENTS[printer_name].is_connected():
         if not connect_bambu_printer(printer):

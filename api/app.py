@@ -25,14 +25,24 @@ LOG_DIR = os.path.join(os.getenv('DATA_DIR', os.path.expanduser("~")), "PrintQue
 os.makedirs(LOG_DIR, exist_ok=True)
 LOG_FILE = os.path.join(LOG_DIR, "app.log")
 
-logging.basicConfig(
-    level=logging.DEBUG,
-    format='%(asctime)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler(LOG_FILE),
-        logging.StreamHandler()
-    ]
-)
+# Import log level configuration from logger module
+from utils.logger import get_console_log_level, LOG_LEVELS, console_handler as logger_console_handler
+
+# Set up logging with file handler at DEBUG (captures everything) and console at configured level
+file_handler = logging.FileHandler(LOG_FILE)
+file_handler.setLevel(logging.DEBUG)
+file_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
+
+# Create app's console handler using saved log level
+app_console_handler = logging.StreamHandler()
+app_console_handler.setLevel(LOG_LEVELS.get(get_console_log_level(), logging.INFO))
+app_console_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
+
+# Configure root logger - handlers filter by their own levels
+root_logger = logging.getLogger()
+root_logger.setLevel(logging.DEBUG)  # Allow all through, handlers decide
+root_logger.addHandler(file_handler)
+root_logger.addHandler(app_console_handler)
 
 # Initialize the app with static and templates folders
 # Handle both development and packaged (PyInstaller) environments
