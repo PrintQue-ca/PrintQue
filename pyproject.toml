@@ -1,6 +1,6 @@
 [project]
 name = "printque"
-version = "1.0.0"
+version = "1.0.1"
 description = "PrintQue - Open Source Print Farm Manager"
 readme = "README.md"
 requires-python = ">=3.9"

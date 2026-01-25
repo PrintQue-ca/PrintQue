@@ -67,9 +67,20 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # Show what version semantic-release will calculate
-          echo "=== Semantic-release version check ==="
-          semantic-release version --print || true
+          # Get what version semantic-release will calculate
+          NEXT_VERSION=$(semantic-release version --print 2>/dev/null || echo "")
+          echo "Calculated next version: $NEXT_VERSION"
+          
+          if [ -z "$NEXT_VERSION" ]; then
+            echo "No version calculated, skipping"
+            exit 0
+          fi
+          
+          # Check if this tag already exists
+          if git tag -l "v$NEXT_VERSION" | grep -q "v$NEXT_VERSION"; then
+            echo "Tag v$NEXT_VERSION already exists, skipping"
+            exit 0
+          fi
           
           echo ""
           echo "=== Running semantic-release ==="
@@ -78,4 +89,4 @@ jobs:
       - name: Push changes
         run: |
           # Push any new commits and tags created by semantic-release
-          git push origin main --follow-tags
+          git push origin main --follow-tags 2>/dev/null || echo "Nothing to push"
