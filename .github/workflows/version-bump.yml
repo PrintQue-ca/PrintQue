@@ -1,7 +1,9 @@
 name: Version Bump
 
 on:
-  push:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
     branches: [main]
 
 # Prevent concurrent version bumps
@@ -13,8 +15,10 @@ jobs:
   version-bump:
     name: Analyze commits and bump version
     runs-on: ubuntu-latest
-    # Skip if the commit is from semantic-release itself
-    if: "!contains(github.event.head_commit.message, 'chore(release):')"
+    # Only run if CI passed and commit is not from semantic-release
+    if: >
+      github.event.workflow_run.conclusion == 'success' &&
+      !contains(github.event.workflow_run.head_commit.message, 'chore(release):')
     
     permissions:
       contents: write
