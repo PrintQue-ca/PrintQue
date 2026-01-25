@@ -30,6 +30,12 @@ jobs:
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
           
+      - name: Fetch all tags
+        run: |
+          git fetch --tags --force
+          echo "Available tags:"
+          git tag -l
+          
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
@@ -43,15 +49,30 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           
+      - name: Debug info
+        run: |
+          echo "=== Latest tag ==="
+          git describe --tags --abbrev=0 || echo "No tags found"
+          
+          echo ""
+          echo "=== Commits since latest tag ==="
+          LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+          if [ -n "$LATEST_TAG" ]; then
+            git log --oneline $LATEST_TAG..HEAD | head -20
+          else
+            git log --oneline | head -20
+          fi
+          
       - name: Run semantic-release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          echo "Current tags:"
-          git tag -l | tail -5
+          # Show what version semantic-release will calculate
+          echo "=== Semantic-release version check ==="
+          semantic-release version --print || true
           
           echo ""
-          echo "Running semantic-release..."
+          echo "=== Running semantic-release ==="
           semantic-release version
           
       - name: Push changes

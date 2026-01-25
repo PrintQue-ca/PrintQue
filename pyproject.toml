@@ -19,7 +19,7 @@ build_command = ""
 
 # Commit message format
 commit_message = "chore(release): {version} [skip ci]"
-commit_parser = "angular"
+commit_parser = "conventional"
 
 # Tag format
 tag_format = "v{version}"
@@ -29,7 +29,7 @@ changelog_generate = true
 changelog_file = "CHANGELOG.md"
 
 [tool.semantic_release.commit_parser_options]
-# Angular commit parser options
+# Conventional commit parser options
 allowed_tags = [
     "build",
     "chore", 
