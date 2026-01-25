@@ -7,18 +7,15 @@ import uuid
 import threading
 import re
 from datetime import datetime
-import tempfile
 from threading import Lock
 from services.state import (
     PRINTERS_FILE, TOTAL_FILAMENT_FILE, ORDERS_FILE,
     PRINTERS, TOTAL_FILAMENT_CONSUMPTION, ORDERS,
-    save_data, load_data, encrypt_api_key, decrypt_api_key,
+    save_data, load_data, decrypt_api_key,
     logging, orders_lock, filament_lock, printers_rwlock, SafeLock, ReadLock, WriteLock,
-    get_order_lock, acquire_locks, increment_order_sent_count,
-    reconcile_order_counts, create_print_transaction, update_print_transaction, get_print_transaction,
-    get_ejection_paused,
-    set_printer_ejection_state, get_printer_ejection_state, clear_printer_ejection_state,
-    is_ejection_in_progress_enhanced, get_ejection_lock, release_ejection_lock
+    increment_order_sent_count,
+    reconcile_order_counts, get_ejection_paused,
+    set_printer_ejection_state, get_printer_ejection_state, clear_printer_ejection_state
 )
 from utils.config import Config
 from utils.retry_utils import retry_async
@@ -28,12 +25,11 @@ from utils.logger import (
     log_state_transition,
     log_distribution_event,
     log_job_lifecycle,
-    log_api_poll_event,
-    log_manual_action
+    log_api_poll_event
 )
 # Bambu printer support
 from services.bambu_handler import (
-    connect_bambu_printer, get_bambu_status, send_bambu_print_command,
+    get_bambu_status, send_bambu_print_command,
     stop_bambu_print, pause_bambu_print, resume_bambu_print,
     send_bambu_ejection_gcode,
     BAMBU_PRINTER_STATES, bambu_states_lock
@@ -53,12 +49,12 @@ from utils.logger import debug_log
 def deduplicate_printers():
     """Remove duplicate printers from the PRINTERS list - keep first occurrence"""
     global PRINTERS
-    
+
     with WriteLock(printers_rwlock):
         seen_names = set()
         unique_printers = []
         duplicates_removed = 0
-        
+
         for printer in PRINTERS:
             printer_name = printer.get('name')
             if printer_name and printer_name not in seen_names:
@@ -67,7 +63,7 @@ def deduplicate_printers():
             else:
                 duplicates_removed += 1
                 logging.warning(f"REMOVED DUPLICATE: Printer '{printer_name}' was duplicated")
-                
+
         if duplicates_removed > 0:
             PRINTERS.clear()
             PRINTERS.extend(unique_printers)
@@ -79,12 +75,12 @@ def deduplicate_printers():
 def deduplicate_orders():
     """Remove duplicate orders from the ORDERS list - keep first occurrence"""
     global ORDERS
-    
+
     with SafeLock(orders_lock):
         seen_ids = set()
         unique_orders = []
         duplicates_removed = 0
-        
+
         for order in ORDERS:
             order_id = order.get('id')
             if order_id and order_id not in seen_ids:
@@ -93,7 +89,7 @@ def deduplicate_orders():
             else:
                 duplicates_removed += 1
                 logging.warning(f"REMOVED DUPLICATE: Order '{order_id}' was duplicated")
-                
+
         if duplicates_removed > 0:
             ORDERS.clear()
             ORDERS.extend(unique_orders)
@@ -107,78 +103,78 @@ def periodic_deduplication_check(socketio, app):
     while True:
         try:
             time.sleep(300)  # Check every 5 minutes
-                        
+
             # Check for printer duplicates
             # Use ReadLock for the check before calling the function that uses WriteLock
             with ReadLock(printers_rwlock):
                 printer_names = [p.get('name') for p in PRINTERS]
                 if len(printer_names) != len(set(printer_names)):
                     logging.warning("DUPLICATE PRINTERS DETECTED! Running deduplication...")
-                            
+
             deduplicate_printers()
-                    
+
             # Check for order duplicates
             # Use SafeLock/orders_lock for the check before calling the function that uses SafeLock
             with SafeLock(orders_lock):
                 order_ids = [o.get('id') for o in ORDERS]
                 if len(order_ids) != len(set(order_ids)):
                     logging.warning("DUPLICATE ORDERS DETECTED! Running deduplication...")
-                            
+
             deduplicate_orders()
-                
+
         except Exception as e:
             logging.error(f"Error in periodic deduplication: {e}")
 
 def get_minutes_since_finished(printer):
     """Calculate minutes elapsed since printer entered FINISHED state
-    
+
     Args:
         printer: Dictionary containing printer data
-        
+
     Returns:
         int: Minutes elapsed since finished, or None if not applicable
     """
     logging.debug(f"Checking finish time for {printer.get('name')}: "
                   f"state={printer.get('state')}, finish_time={printer.get('finish_time')}")
-    
+
     if printer.get('state') != 'FINISHED' or not printer.get('finish_time'):
         return None
-    
+
     current_time = time.time()
     finish_time = printer.get('finish_time', current_time)
     elapsed_seconds = current_time - finish_time
-    
+
     minutes = int(elapsed_seconds / 60)
-    
+
     logging.debug(f"Timer for {printer.get('name')}: {minutes} minutes")
     return minutes
 
 def prepare_printer_data_for_broadcast(printers):
     """Prepare printer data with calculated fields for broadcasting"""
     printers_copy = copy.deepcopy(printers)
-    
+
     for printer in printers_copy:
         # Map backend field names to frontend expected names
         # 'file' -> 'current_file' (what's currently printing)
         if 'file' in printer:
             printer['current_file'] = printer.get('file')
-        
+
         # 'state' -> 'status' (the frontend uses 'status' for the printer state)
         if 'state' in printer:
             printer['status'] = printer.get('state')
-        
+
         # Extract temperature values - check multiple possible sources
         # 1. Nested 'temps' object (Prusa format)
         temps = printer.get('temps', {})
         nozzle_temp = temps.get('nozzle', 0) if temps else 0
         bed_temp = temps.get('bed', 0) if temps else 0
-        
+
         # 2. Direct nozzle_temp/bed_temp fields (might be set directly for Bambu)
         if 'nozzle_temp' in printer and printer['nozzle_temp']:
             nozzle_temp = printer['nozzle_temp']
         if 'bed_temp' in printer and printer['bed_temp']:
             bed_temp = printer['bed_temp']
-            
+
         # 3. Check Bambu MQTT state directly for real-time temps and error info
         if printer.get('type') == 'bambu':
             printer_name = printer.get('name')
@@ -190,34 +186,34 @@ def prepare_printer_data_for_broadcast(printers):
                             nozzle_temp = bambu_state.get('nozzle_temp', 0)
                         if bambu_state.get('bed_temp') is not None:
                             bed_temp = bambu_state.get('bed_temp', 0)
-                        
+
                         # Add error information for ERROR state
                         if bambu_state.get('state') == 'ERROR' or printer.get('state') == 'ERROR':
                             error_msg = bambu_state.get('error')
                             hms_alerts = bambu_state.get('hms_alerts', [])
-                            
+
                             if error_msg:
                                 printer['error_message'] = error_msg
                             elif hms_alerts:
                                 printer['error_message'] = '; '.join(hms_alerts)
                             else:
                                 printer['error_message'] = 'Unknown error'
-                            
+
                             # Include HMS alerts separately for detailed view
                             if hms_alerts:
                                 printer['hms_alerts'] = hms_alerts
-        
+
         # For Prusa printers in ERROR state, try to get error details
         elif printer.get('type') == 'prusa' and printer.get('state') == 'ERROR':
             # Prusa error info is usually in the state response
             # Set a generic message if no specific error is stored
             if not printer.get('error_message'):
                 printer['error_message'] = printer.get('error', 'Printer reported an error - check printer display')
-        
+
         # Always set the temps for frontend
         printer['nozzle_temp'] = nozzle_temp
         printer['bed_temp'] = bed_temp
-        
+
         # Add minutes since finished for FINISHED printers
         if printer.get('state') == 'FINISHED':
             minutes = get_minutes_since_finished(printer)
@@ -227,12 +223,12 @@ def prepare_printer_data_for_broadcast(printers):
                 # If we can't calculate minutes, but printer is FINISHED, set to 0
                 printer['minutes_since_finished'] = 0
                 logging.warning(f"FINISHED printer {printer.get('name')} has no valid timer, setting to 0")
-        
+
         # Calculate print_stage for timeline display
         state = printer.get('state', 'OFFLINE')
         print_stage = 'idle'  # Default
         stage_detail = None
-        
+
         if state == 'OFFLINE':
             print_stage = 'offline'
             stage_detail = 'Printer is offline'
@@ -254,12 +250,12 @@ def prepare_printer_data_for_broadcast(printers):
         elif state == 'FINISHED':
             # Determine if waiting to cool or ready for ejection
             status = printer.get('status', '')
-            ejection_in_progress = printer.get('ejection_in_progress', False)
-            
+            printer.get('ejection_in_progress', False)
+
             # Check if bed needs to cool down (threshold: 45°C for safe part removal)
             cooling_threshold = 45
             is_cooling = bed_temp > cooling_threshold
-            
+
             if 'Paused' in status or 'Ejection Paused' in status:
                 print_stage = 'ejection_paused'
                 stage_detail = 'Ejection paused globally'
@@ -283,15 +279,15 @@ def prepare_printer_data_for_broadcast(printers):
         elif state == 'ERROR':
             print_stage = 'error'
             stage_detail = printer.get('error_message', 'Printer error')
-        
+
         printer['print_stage'] = print_stage
         printer['stage_detail'] = stage_detail
-        
+
         # Add timestamps for timeline tracking
         printer['print_started_at'] = printer.get('print_started_at')
         printer['finish_time'] = printer.get('finish_time')
         printer['ejection_start_time'] = printer.get('ejection_start_time')
-    
+
     return printers_copy
 
 def get_ejection_lock(printer_name):
@@ -319,7 +315,7 @@ def release_ejection_lock(printer_name):
     try:
         ejection_lock.release()
         logging.info(f"EJECTION COMPLETE: Released lock for {printer_name}")
-    except:
+    except Exception:
         pass  # Lock may already be released
 
 def force_release_all_ejection_locks():
@@ -332,7 +328,7 @@ def force_release_all_ejection_locks():
                 lock.release()
                 released_count += 1
                 logging.warning(f"FORCE RELEASED: Ejection lock for {printer_name}")
-            except:
+            except Exception:
                 pass  # Lock wasn't acquired
         logging.warning(f"FORCE RELEASED: {released_count} ejection locks")
         return released_count
@@ -351,7 +347,7 @@ def clear_stuck_ejection_locks():
                         lock.release()
                         cleared_count += 1
                         logging.warning(f"CLEARED STUCK LOCK: {printer_name} (state: {printer.get('state')})")
-                    except:
+                    except Exception:
                         pass
             if cleared_count > 0:
                 logging.warning(f"CLEARED {cleared_count} stuck ejection locks")
@@ -363,11 +359,11 @@ def enhanced_prusa_ejection_monitoring():
     This runs independently of the main API polling to catch completion
     """
     printers_to_check = []
-    
+
     # Get printers currently in EJECTING state
     with ReadLock(printers_rwlock, timeout=5):
         for i, printer in enumerate(PRINTERS):
-            if (printer.get('state') == 'EJECTING' and 
+            if (printer.get('state') == 'EJECTING' and
                 printer.get('type', 'prusa') != 'bambu'):  # Only Prusa printers
                 printers_to_check.append({
                     'index': i,
@@ -377,55 +373,55 @@ def enhanced_prusa_ejection_monitoring():
                     'ejection_file': printer.get('file', ''),
                     'ejection_start_time': printer.get('ejection_start_time', 0)
                 })
-    
+
     if not printers_to_check:
         return  # No Prusa printers ejecting
-    
+
     # Check each printer's current status directly
     for printer_info in printers_to_check:
         try:
             # Direct API call to check current state
             headers = {"X-Api-Key": decrypt_api_key(printer_info['api_key'])} if printer_info['api_key'] else {}
             status_url = f"http://{printer_info['ip']}/api/v1/status"
-            
+
             response = requests.get(status_url, headers=headers, timeout=5)
             if response.status_code == 200:
                 status_data = response.json()
                 current_api_state = status_data.get('printer', {}).get('state', 'UNKNOWN')
                 current_api_file = status_data.get('job', {}).get('file', {}).get('name', '')
-                
+
                 # Log detailed status for debugging
                 logging.debug(f"Direct ejection check for {printer_info['name']}: API_state={current_api_state}, API_file='{current_api_file}', stored_ejection_file='{printer_info['ejection_file']}'")
-                
+
                 ejection_complete = False
                 completion_reason = ""
-                
+
                 # Method 1: Check ejection state manager
                 ejection_state = get_printer_ejection_state(printer_info['name'])
                 if ejection_state['state'] == 'completed':
                     ejection_complete = True
                     completion_reason = "State manager shows completed"
-                
+
                 # Method 2: API shows non-printing/ejecting states
                 elif current_api_state in ['IDLE', 'READY', 'OPERATIONAL', 'FINISHED']:
                     ejection_complete = True
                     completion_reason = f"API state changed to {current_api_state}"
-                
+
                 # Method 3: Ejection file no longer active (most reliable for Prusa)
                 elif printer_info['ejection_file'] and 'ejection_' in printer_info['ejection_file']:
                     # If the current file is different from ejection file, ejection is complete
                     if not current_api_file or current_api_file != printer_info['ejection_file']:
                         ejection_complete = True
                         completion_reason = f"File changed from '{printer_info['ejection_file']}' to '{current_api_file}'"
-                
+
                 # Method 4: No file running at all (fallback)
                 elif not current_api_file and current_api_state != 'PRINTING':
                     ejection_complete = True
                     completion_reason = "No file active and not printing"
-                
+
                 if ejection_complete:
                     logging.info(f"PRUSA EJECTION COMPLETE: {printer_info['name']} - {completion_reason}")
-                    
+
                     # Force transition to READY
                     with WriteLock(printers_rwlock, timeout=10):
                         if printer_info['index'] < len(PRINTERS):
@@ -447,16 +443,16 @@ def enhanced_prusa_ejection_monitoring():
                                     "last_ejection_time": time.time(),
                                     "count_incremented_for_current_job": False # Reset count flag
                                 })
-                                
+
                                 # Clean up ejection state
                                 release_ejection_lock(printer_info['name'])
                                 clear_printer_ejection_state(printer_info['name'])
-                                
+
                                 logging.info(f"Successfully transitioned {printer_info['name']} from EJECTING to READY")
-                                
+
                                 # Save data and trigger distribution
                                 save_data(PRINTERS_FILE, PRINTERS)
-                                
+
                                 # Trigger job distribution after a short delay
                                 def trigger_distribution():
                                     try:
@@ -465,12 +461,12 @@ def enhanced_prusa_ejection_monitoring():
                                         start_background_distribution(socketio, app)
                                     except Exception as e:
                                         logging.error(f"Error triggering distribution after ejection: {e}")
-                                
+
                                 threading.Timer(2.0, trigger_distribution).start()
-                
+
             else:
                 logging.warning(f"Failed to check ejection status for {printer_info['name']}: HTTP {response.status_code}")
-                
+
         except Exception as e:
             logging.error(f"Error checking ejection status for {printer_info['name']}: {e}")
 
@@ -484,7 +480,7 @@ def start_prusa_ejection_monitor():
             except Exception as e:
                 logging.error(f"Error in Prusa ejection monitor: {e}")
                 time.sleep(15)  # Wait longer on error
-    
+
     monitor_thread = threading.Thread(target=monitor_loop, daemon=True, name="PrusaEjectionMonitor")
     monitor_thread.start()
     logging.info("Started enhanced Prusa ejection monitoring thread")
@@ -507,29 +503,29 @@ CONNECTION_POOL = None
 def update_bambu_printer_states():
     """Update main printer states from Bambu MQTT data and track filament usage"""
     global TOTAL_FILAMENT_CONSUMPTION
-    
+
     # Get Bambu states snapshot
     with bambu_states_lock:
         bambu_states = copy.deepcopy(BAMBU_PRINTER_STATES)
-    
+
     # Log current filament total for debugging
     logging.debug(f"Current filament total: {TOTAL_FILAMENT_CONSUMPTION}g")
-    
+
     with WriteLock(printers_rwlock):
         for printer in PRINTERS:
             if printer.get('type') != 'bambu':
                 continue
-                
+
             printer_name = printer['name']
             if printer_name not in bambu_states:
                 continue
-                
+
             state_data = bambu_states[printer_name]
-            
+
             # Store previous state for transition detection
             previous_state = printer.get('state', 'OFFLINE')
-            previous_file = printer.get('file')
-            
+            printer.get('file')
+
             # CRITICAL: Check if printer is manually set to READY - don't override it!
             if printer.get('manually_set', False) and printer.get('state') == 'READY':
                 logging.debug(f"Preserving manually set READY state for Bambu printer {printer_name}")
@@ -543,7 +539,7 @@ def update_bambu_printer_states():
                 printer['time_remaining'] = 0
                 printer['file'] = None
                 continue  # Skip the rest of the state update logic
-            
+
             # CRITICAL: Preserve COOLING state - this is managed by PrintQue, not the printer
             # The printer will report FINISHED/IDLE but we need to wait for bed to cool
             if printer.get('state') == 'COOLING':
@@ -556,7 +552,7 @@ def update_bambu_printer_states():
                 # Update the bed_temp field directly for easier access
                 printer['bed_temp'] = state_data.get('bed_temp', 0)
                 continue  # Skip state update - the COOLING monitoring loop will handle the transition
-            
+
             # CRITICAL: Preserve EJECTING state - don't let MQTT updates override it
             if printer.get('state') == 'EJECTING':
                 logging.debug(f"Preserving EJECTING state for Bambu printer {printer_name} (printer reports: {state_data.get('state', 'UNKNOWN')})")
@@ -566,41 +562,41 @@ def update_bambu_printer_states():
                     'bed': state_data.get('bed_temp', 0)
                 }
                 continue  # Skip state update - ejection monitoring will handle the transition
-            
+
             # Map Bambu states to our standard states
             bambu_state = state_data.get('state', 'OFFLINE')
-            gcode_state = state_data.get('gcode_state', 'UNKNOWN')
-            
+            state_data.get('gcode_state', 'UNKNOWN')
+
             # Log state changes at INFO level
             if previous_state != bambu_state:
                 logging.info(f"Bambu printer {printer_name} state: {previous_state} -> {bambu_state}")
-            
+
             # Update printer state
             new_state = bambu_state
             printer['state'] = new_state
             printer['status'] = state_map.get(new_state, 'Unknown')
-            
+
             # Update temperatures
             printer['temps'] = {
                 'nozzle': state_data.get('nozzle_temp', 0),
                 'bed': state_data.get('bed_temp', 0)
             }
-            
+
             # Update progress
             printer['progress'] = state_data.get('progress', 0)
-            
+
             # Update time remaining
             printer['time_remaining'] = state_data.get('time_remaining', 0)
-            
+
             # Update current file
             if state_data.get('current_file'):
                 printer['file'] = state_data['current_file']
-            
+
             # Log print completion (state change is already logged above)
             if previous_state == 'PRINTING' and new_state == 'FINISHED':
                 logging.debug(f"Print complete details - order_id: {printer.get('order_id')}, file: {printer.get('file')}, filament_used_g: {printer.get('filament_used_g', 0)}")
                 # Note: Filament is now tracked when the print starts, not when it finishes
-        
+
         # Save printer states after updating
         save_data(PRINTERS_FILE, PRINTERS)
 
@@ -613,48 +609,48 @@ def ensure_finish_times():
                 printer['finish_time'] = time.time()
                 logging.debug(f"Set missing finish_time for FINISHED printer {printer['name']}")
                 updated = True
-        
+
         if updated:
             save_data(PRINTERS_FILE, PRINTERS)
             logging.debug("Updated finish_time for FINISHED printers")
 
 def start_background_tasks(socketio, app):
     from flask import request
-    
+
     logging.debug("Starting background tasks")
 
     # Run deduplication on startup
     deduplicate_printers()
     deduplicate_orders()
-    
+
     @socketio.on('connect')
     def handle_connect():
         logging.debug(f"Client connected: {request.sid}")
-    
+
     # Ensure all FINISHED printers have finish_time
     ensure_finish_times()
-    
+
     # Start enhanced Prusa ejection monitoring
     start_prusa_ejection_monitor()
-    
+
     def run_status_updates():
         try:
             # First update Bambu printer states from MQTT data
             logging.debug("Updating Bambu printer states before status update")
             update_bambu_printer_states()
-            
+
             batch_size = Config.STATUS_BATCH_SIZE
-            
+
             with ReadLock(printers_rwlock):
                 total_printers = len(PRINTERS)
-            
+
             if total_printers == 0:
                 return
-                
+
             batch_count = (total_printers + batch_size - 1) // batch_size
-            
+
             loop = get_event_loop_for_thread()
-            
+
             for batch_index in range(batch_count):
                 coro = get_printer_status_async(socketio, app, batch_index, batch_size)
                 try:
@@ -662,21 +658,21 @@ def start_background_tasks(socketio, app):
                 except Exception as batch_error:
                     coro.close()
                     raise batch_error
-                
+
                 if batch_index < batch_count - 1:
                     time.sleep(Config.STATUS_BATCH_INTERVAL)
-                    
+
         except Exception as e:
             logging.error(f"Error in status update task: {str(e)}")
-    
+
     @socketio.on('status_update_request')
     def handle_status_update_request():
         thread = threading.Thread(target=run_status_updates)
         thread.daemon = True
         thread.start()
-    
+
     threading.Timer(5.0, lambda: start_background_distribution(socketio, app)).start()
-    
+
     def schedule_distribution():
         while True:
             try:
@@ -685,11 +681,11 @@ def start_background_tasks(socketio, app):
             except Exception as e:
                 logging.error(f"Error in distribution scheduler: {str(e)}")
                 time.sleep(60)
-    
+
     distribution_thread = threading.Thread(target=schedule_distribution)
     distribution_thread.daemon = True
     distribution_thread.start()
-    
+
     def schedule_status_updates():
         while True:
             try:
@@ -698,29 +694,29 @@ def start_background_tasks(socketio, app):
             except Exception as e:
                 logging.error(f"Error in status update scheduler: {str(e)}")
                 time.sleep(30)
-    
+
     status_thread = threading.Thread(target=schedule_status_updates)
     status_thread.daemon = True
     status_thread.start()
-    
+
     def schedule_order_reconciliation():
         while True:
             try:
                 time.sleep(900)
-                
+
                 logging.debug("Starting automatic order count reconciliation (counts will only increase, never decrease)")
                 corrections, changed_orders = reconcile_order_counts()
-                
+
                 if corrections > 0:
                     logging.info(f"Auto-reconciliation increased {corrections} order counts")
-                    
+
                     with SafeLock(filament_lock):
                         total_filament = TOTAL_FILAMENT_CONSUMPTION / 1000
                     with SafeLock(orders_lock):
                         orders_data = ORDERS.copy()
                     with ReadLock(printers_rwlock):
                         printers_copy = prepare_printer_data_for_broadcast(PRINTERS)
-                        
+
                     socketio.emit('status_update', {
                         'printers': printers_copy,
                         'total_filament': total_filament,
@@ -729,16 +725,16 @@ def start_background_tasks(socketio, app):
             except Exception as e:
                 logging.error(f"Error in order reconciliation scheduler: {str(e)}")
                 time.sleep(300)
-    
+
     reconciliation_thread = threading.Thread(target=schedule_order_reconciliation)
     reconciliation_thread.daemon = True
     reconciliation_thread.start()
-    
+
     # Add periodic deduplication check
     dedup_thread = threading.Thread(target=lambda: periodic_deduplication_check(socketio, app))
     dedup_thread.daemon = True
     dedup_thread.start()
-    
+
     logging.debug("Background tasks started")
 
 def get_connection_pool():
@@ -773,19 +769,19 @@ async def close_connection_pool():
             logging.debug("Successfully closed aiohttp connection pool")
         except Exception as e:
             logging.error(f"Error closing connection pool: {e}")
-    
+
     # Clean up Bambu MQTT connections
     from services.state import cleanup_mqtt_connections
     cleanup_mqtt_connections()
 
 async def async_send_ejection_gcode(session, printer, headers, ejection_url, gcode_content, gcode_file_name):
     printer_name = printer['name']
-    
+
     # NOTE: We intentionally do NOT check ejection_in_progress here!
     # That flag is set by handle_finished_state_ejection to prevent job distribution,
     # but this function SHOULD run even when that flag is True.
     # The pending_ejection field (which is cleared after pickup) is the actual lock.
-        
+
     logging.debug(f"EJECTION: Starting actual file transfer for {printer_name}")
     async def _send_gcode():
         if printer.get('type') == 'bambu':
@@ -795,19 +791,19 @@ async def async_send_ejection_gcode(session, printer, headers, ejection_url, gco
                 success = send_bambu_ejection_gcode(printer, gcode_content)
                 if success:
                     logging.debug(f"EJECTION: Successfully sent G-code to Bambu printer {printer_name}")
-                    
+
                     # Count and filament already incremented when print started
-                    order_id = printer.get('order_id')
-                                
+                    printer.get('order_id')
+
                     printer['file'] = None  # CLEAR FILE immediately after successful send
-                    printer['order_id'] = None  # CLEAR ORDER_ID 
+                    printer['order_id'] = None  # CLEAR ORDER_ID
                     printer['ejection_processed'] = True
                     printer['last_ejection_time'] = time.time()
-                    
+
                     # CRITICAL FIX: Mark ejection as complete and trigger immediate transition
                     set_printer_ejection_state(printer_name, 'completed')
                     release_ejection_lock(printer_name)
-                    
+
                     # Force immediate transition to READY
                     printer.update({
                         "state": 'READY',
@@ -844,17 +840,17 @@ async def async_send_ejection_gcode(session, printer, headers, ejection_url, gco
                     logging.debug(f"EJECTION: Upload response for {printer_name}: HTTP {upload_resp.status}")
                     if upload_resp.status == 201:
                         # Count and filament already incremented when print started
-                        order_id = printer.get('order_id')
+                        printer.get('order_id')
 
                         # CRITICAL FIX: Keep the ejection file name for tracking
-                        printer['file'] = gcode_file_name 
+                        printer['file'] = gcode_file_name
                         printer['order_id'] = None  # CLEAR ORDER_ID (after incrementing!)
                         printer['ejection_processed'] = True
                         printer['last_ejection_time'] = time.time()
-                        
+
                         # Don't immediately transition - let monitoring detect completion
                         set_printer_ejection_state(printer_name, 'running')
-                        
+
                         logging.info(f"EJECTION STARTED: {printer_name} - G-code uploaded and printing")
                         return True
                     else:
@@ -869,7 +865,7 @@ async def async_send_ejection_gcode(session, printer, headers, ejection_url, gco
                 # On exception, release lock
                 release_ejection_lock(printer_name)
                 return False
-    
+
     try:
         success = await retry_async(_send_gcode, max_retries=2, initial_backoff=1)
         if not success:
@@ -892,13 +888,12 @@ def convert_mm_to_g(filament_mm, density):
 def extract_filament_from_file(filepath, is_bgcode=False):
     filament_g = 0
     filament_mm = 0
-    
+
     # Check if it's a .3mf file
     if filepath.endswith('.3mf'):
         try:
             import zipfile
-            import xml.etree.ElementTree as ET
-            
+
             # .3mf files are ZIP archives
             with zipfile.ZipFile(filepath, 'r') as zip_file:
                 # Look for Metadata/Slic3r_PE.config or similar files
@@ -925,7 +920,7 @@ def extract_filament_from_file(filepath, is_bgcode=False):
                     if match:
                         filament_g = float(match.group(1))
                         logging.debug(f"Extracted filament from filename: {filament_g}g")
-                        
+
         except Exception as e:
             logging.error(f"Error parsing filament from .3mf file {filepath}: {str(e)}")
             # Try to extract from filename as fallback
@@ -949,7 +944,7 @@ def extract_filament_from_file(filepath, is_bgcode=False):
                     filament_g = convert_mm_to_g(filament_mm, Config.DEFAULT_FILAMENT_DENSITY)
         except Exception as e:
             logging.error(f"Error parsing filament from {filepath}: {str(e)}")
-    
+
     logging.debug(f"Extracted filament from {filepath}: {filament_g}g")
     return filament_g
 
@@ -957,12 +952,12 @@ async def fetch_status(session, printer):
     # Check if this is a Bambu printer
     if printer.get('type') == 'bambu':
         return get_bambu_status(printer)
-    
+
     # Original Prusa code continues below
     url = f"http://{printer['ip']}/api/v1/status"
     headers = {"X-Api-Key": decrypt_api_key(printer['api_key'])}
     logging.debug(f"Fetching status for {printer['name']} at {url}")
-    
+
     async def _fetch():
         try:
             async with session.get(url, headers=headers) as resp:
@@ -981,7 +976,7 @@ async def fetch_status(session, printer):
         except Exception as e:
             logging.error(f"Unexpected error for {printer['name']}: {str(e)}")
             return printer, None
-    
+
     try:
         return await retry_async(_fetch, max_retries=2, initial_backoff=1)
     except Exception as e:
@@ -1005,16 +1000,16 @@ async def stop_print(session, printer):
                 "count_incremented_for_current_job": False # NEW: Reset count flag
             })
         return success
-    
+
     # Prusa API - try both v1 and legacy endpoints
     headers = {"X-Api-Key": decrypt_api_key(printer['api_key'])}
-    
+
     async def _stop():
         # First try the v1 API endpoint
         url = f"http://{printer['ip']}/api/v1/job"
         try:
-            async with session.post(url, 
-                                  headers=headers, 
+            async with session.post(url,
+                                  headers=headers,
                                   json={"command": "cancel"}) as resp:
                 if resp.status == 200:
                     logging.debug(f"Successfully stopped print on {printer['name']} using v1 API")
@@ -1035,7 +1030,7 @@ async def stop_print(session, printer):
                     logging.debug(f"v1 API returned 405, trying legacy API for {printer['name']}")
         except Exception as e:
             logging.debug(f"v1 API error: {str(e)}, trying legacy API")
-        
+
         # Try legacy API endpoint
         legacy_url = f"http://{printer['ip']}/api/job"
         try:
@@ -1062,7 +1057,7 @@ async def stop_print(session, printer):
         except Exception as e:
             logging.error(f"Failed to stop print on {printer['name']}: {str(e)}")
             return False
-    
+
     try:
         return await retry_async(_stop, max_retries=2, initial_backoff=1)
     except Exception as e:
@@ -1071,11 +1066,11 @@ async def stop_print(session, printer):
 
 async def reset_printer_state(session, printer, headers):
     logging.debug(f"Attempting to reset state for printer {printer['name']}")
-    
+
     try:
         try:
-            async with session.post(f"http://{printer['ip']}/api/v1/job", 
-                                  headers=headers, 
+            async with session.post(f"http://{printer['ip']}/api/v1/job",
+                                  headers=headers,
                                   json={"command": "cancel"}) as resp:
                 if resp.status == 200:
                     logging.debug(f"Successfully cancelled any active job on {printer['name']}")
@@ -1086,16 +1081,16 @@ async def reset_printer_state(session, printer, headers):
                     logging.error(f"Error cancelling job on {printer['name']}: HTTP {resp.status}")
         except Exception as e:
             logging.error(f"Error cancelling job: {str(e)}")
-            
+
         try:
-            async with session.post(f"http://{printer['ip']}/api/v1/connection", 
-                                  headers=headers, 
+            async with session.post(f"http://{printer['ip']}/api/v1/connection",
+                                  headers=headers,
                                   json={"command": "connect"}) as resp:
                 logging.debug(f"Refreshed connection on {printer['name']}: {resp.status}")
                 await asyncio.sleep(2)
         except Exception as e:
             logging.error(f"Error refreshing connection: {str(e)}")
-                
+
         return True
     except Exception as e:
         logging.error(f"Error resetting printer state: {str(e)}")
@@ -1106,9 +1101,9 @@ async def reset_printer_state_async(session, printer):
         # Bambu printer reset not implemented
         logging.warning(f"Reset not implemented for Bambu printer {printer['name']}")
         return False
-        
+
     headers = {"X-Api-Key": decrypt_api_key(printer["api_key"])}
-    
+
     log_state_transition(
         printer['name'],
         printer.get('state', 'UNKNOWN'),
@@ -1116,44 +1111,44 @@ async def reset_printer_state_async(session, printer):
         'MANUAL_RESET_ATTEMPT',
         {'reason': 'User initiated reset'}
     )
-    
+
     return await reset_printer_state(session, printer, headers)
 
 def match_shortened_filename(full_filename, shortened_filename):
     if not full_filename or not shortened_filename:
         return False
-        
+
     full_base = os.path.splitext(os.path.basename(full_filename))[0]
     short_base = os.path.splitext(os.path.basename(shortened_filename))[0]
-    
+
     if full_base.upper() == short_base.upper():
         return True
-        
+
     if len(short_base) >= 6 and short_base[:6].upper() == full_base[:6].upper() and '~' in short_base:
         return True
-        
+
     if len(short_base) >= 3 and full_base.upper().startswith(short_base[:3].upper()):
         return True
-        
+
     if len(short_base) >= 8 and short_base[:8].upper() == full_base[:8].upper():
         return True
-        
+
     if short_base.upper() in full_base.upper() or full_base.upper() in short_base.upper():
         return True
-        
+
     return False
 
 async def verify_print_started(session, printer, filename, headers, max_attempts=3, initial_delay=20):
     if '/' in filename:
-        base_filename = os.path.basename(filename)  
+        base_filename = os.path.basename(filename)
     else:
         base_filename = filename
-        
+
     logging.debug(f"Starting verification for {printer['name']} with file {base_filename}")
-    
+
     logging.debug(f"Starting verification for {printer['name']} with {max_attempts} attempts, waiting {initial_delay}s first")
     await asyncio.sleep(initial_delay)
-    
+
     for attempt in range(max_attempts):
         try:
             async with session.get(f"http://{printer['ip']}/api/v1/status", headers=headers) as status_resp:
@@ -1162,12 +1157,12 @@ async def verify_print_started(session, printer, filename, headers, max_attempts
                     printer_state = status_data['printer']['state']
                     if printer_state in ['PRINTING', 'BUSY']:
                         logging.debug(f"Verified {printer['name']} is in {printer_state} state")
-                        
+
                         async with session.get(f"http://{printer['ip']}/api/v1/job", headers=headers) as job_resp:
                             if job_resp.status == 200:
                                 job_data = await job_resp.json()
                                 job_filename = job_data.get('file', {}).get('name')
-                                if job_filename and (job_filename == base_filename or 
+                                if job_filename and (job_filename == base_filename or
                                                     match_shortened_filename(base_filename, job_filename)):
                                     logging.debug(f"Verified {printer['name']} is printing file {base_filename}")
                                     return True
@@ -1182,46 +1177,46 @@ async def verify_print_started(session, printer, filename, headers, max_attempts
                             logging.debug(f"Printer {printer['name']} still processing. State: {status_data['printer']['state']}")
                         else:
                             logging.debug(f"Printer {printer['name']} state is {status_data['printer']['state']}, not PRINTING or BUSY")
-            
+
             if attempt < max_attempts - 1:
                 wait_time = 10 * (1.5 ** attempt)
                 logging.debug(f"Verification attempt {attempt+1}/{max_attempts} failed, waiting {wait_time}s before retry...")
                 await asyncio.sleep(wait_time)
-            
+
         except Exception as e:
             logging.error(f"Error in verification for {printer['name']}: {str(e)}")
             if attempt < max_attempts - 1:
                 await asyncio.sleep(10)
-        
+
     logging.debug(f"All verification attempts failed for {printer['name']}")
     return False
 
 async def get_printer_status_async(socketio, app, batch_index=None, batch_size=None):
     global TOTAL_FILAMENT_CONSUMPTION
-    
+
     # Clear any stuck ejection locks before processing
     clear_stuck_ejection_locks()
-    
+
     # Update Bambu printer states first
     update_bambu_printer_states()
-    
+
     if batch_size is None:
         batch_size = Config.STATUS_BATCH_SIZE
-    
+
     printers_to_process = []
     printer_indices = []
-    
+
     with ReadLock(printers_rwlock):
         all_printers = [p.copy() for p in PRINTERS if not p.get('service_mode', False)]
-    
+
     if batch_index is not None:
         start_idx = batch_index * batch_size
         end_idx = min(start_idx + batch_size, len(all_printers))
-        
+
         for i in range(start_idx, end_idx):
             if i < len(all_printers):
                 printer_copy = all_printers[i]
-                
+
                 # Build minimal printer object based on printer type
                 minimal_printer = {
                     'name': printer_copy['name'],
@@ -1238,7 +1233,7 @@ async def get_printer_status_async(socketio, app, batch_index=None, batch_size=N
                     'finish_time': printer_copy.get('finish_time'), # Include finish time
                     'count_incremented_for_current_job': printer_copy.get('count_incremented_for_current_job', False) # NEW: Include count flag
                 }
-                
+
                 # Only add api_key for Prusa printers
                 if printer_copy.get('type') != 'bambu':
                     minimal_printer['api_key'] = printer_copy.get('api_key')
@@ -1247,7 +1242,7 @@ async def get_printer_status_async(socketio, app, batch_index=None, batch_size=N
                     minimal_printer['device_id'] = printer_copy.get('device_id')
                     minimal_printer['serial_number'] = printer_copy.get('serial_number')
                     minimal_printer['access_code'] = printer_copy.get('access_code')
-                
+
                 printers_to_process.append(minimal_printer)
                 printer_indices.append(i)
     else:
@@ -1268,7 +1263,7 @@ async def get_printer_status_async(socketio, app, batch_index=None, batch_size=N
                 'finish_time': printer.get('finish_time'), # Include finish time
                 'count_incremented_for_current_job': printer.get('count_incremented_for_current_job', False) # NEW: Include count flag
             }
-            
+
             # Only add api_key for Prusa printers
             if printer.get('type') != 'bambu':
                 minimal_printer['api_key'] = printer.get('api_key')
@@ -1277,19 +1272,19 @@ async def get_printer_status_async(socketio, app, batch_index=None, batch_size=N
                 minimal_printer['device_id'] = printer.get('device_id')
                 minimal_printer['serial_number'] = printer.get('serial_number')
                 minimal_printer['access_code'] = printer.get('access_code')
-            
+
             printers_to_process.append(minimal_printer)
             printer_indices.append(i)
-    
+
     if not printers_to_process:
         logging.debug(f"No printers to process in batch {batch_index}")
         return
-    
+
     await asyncio.sleep(0.01)
-    
+
     printer_updates = []
     ejection_tasks = []
-    
+
     async with aiohttp.ClientSession(
         connector=aiohttp.TCPConnector(limit=20, ttl_dns_cache=300),
         timeout=aiohttp.ClientTimeout(total=Config.API_TIMEOUT)
@@ -1297,10 +1292,10 @@ async def get_printer_status_async(socketio, app, batch_index=None, batch_size=N
         for idx, p in enumerate(printers_to_process):
             if p.get('manually_set', False):
                 logging.debug(f"Processing manually set printer {p['name']}: Current state={p.get('state', 'Unknown')}")
-        
+
         tasks = [fetch_status(session, p) for p in printers_to_process]
         results = await asyncio.gather(*tasks, return_exceptions=True)
-        
+
         for idx, result in enumerate(results):
             if isinstance(result, Exception):
                 logging.error(f"Error fetching status for {printers_to_process[idx]['name']}: {str(result)}")
@@ -1321,7 +1316,7 @@ async def get_printer_status_async(socketio, app, batch_index=None, batch_size=N
                     }
                 })
                 continue
-                
+
             printer, data = result
             if data:
                 api_state = data['printer']['state']
@@ -1331,15 +1326,15 @@ async def get_printer_status_async(socketio, app, batch_index=None, batch_size=N
                 ejection_in_progress = printer.get('ejection_in_progress', False) # Get in_progress
                 current_file = printer.get('file', '')
                 current_order_id = printer.get('order_id')
-                
+
                 with ReadLock(printers_rwlock):
                     if printer_indices[idx] < len(PRINTERS):
                         database_state = PRINTERS[printer_indices[idx]].get('state', 'Unknown')
                         database_ejection_processed = PRINTERS[printer_indices[idx]].get('ejection_processed', False)
                         logging.debug(f"Printer {printer['name']}: API state={api_state}, Copied state={current_state}, Database state={database_state}, manually_set={manually_set}, ejection_processed={ejection_processed}, db_ejection_processed={database_ejection_processed}, ejection_in_progress={ejection_in_progress}")
-                
+
                 updates = {}
-                
+
                 # CRITICAL: Skip normal state updates for printers in COOLING state
                 # COOLING is managed by PrintQue, not the printer - the printer will report FINISHED/IDLE
                 # The COOLING monitoring loop handles the state transition when bed is cool
@@ -1357,19 +1352,19 @@ async def get_printer_status_async(socketio, app, batch_index=None, batch_size=N
                                 }
                             })
                             continue
-                
+
                 if manually_set and api_state not in ['PRINTING', 'EJECTING']:
                     # CRITICAL FIX: Allow FINISHED state even when manually_set=True
                     # This ensures ejection logic can run for completed prints
                     if api_state == 'FINISHED':
                         logging.debug(f"Printer {printer['name']} has finished printing, using enhanced FINISHED handler")
                         handle_finished_state_ejection(printer, printer['name'], current_file, current_order_id, updates)
-                        
-                        # If ejection was started (Prusa logic updates main PRINTERS list directly), 
+
+                        # If ejection was started (Prusa logic updates main PRINTERS list directly),
                         # ensure the local updates dictionary reflects the new state for the printer_updates list.
                         if updates.get('state') == 'EJECTING':
                             updates['ejection_in_progress'] = True
-                        
+
                     else:
                         manual_timeout = printer.get('manual_timeout', 0)
                         current_time = time.time()
@@ -1478,7 +1473,7 @@ async def get_printer_status_async(socketio, app, batch_index=None, batch_size=N
                                 'ejection_processed': ejection_processed
                             }
                         )
-                
+
                     if api_state in ['PRINTING', 'PAUSED']:
                         # Only fetch job details for Prusa printers
                         if printer.get('type') != 'bambu':
@@ -1520,20 +1515,20 @@ async def get_printer_status_async(socketio, app, batch_index=None, batch_size=N
                     elif api_state == 'FINISHED':
                         # Use the enhanced FINISHED handler
                         handle_finished_state_ejection(printer, printer['name'], current_file, current_order_id, updates)
-                        
+
                         # Add ejection tasks if needed
                         if updates.get('state') == 'EJECTING':
                             updates['ejection_in_progress'] = True
-                        
+
                     elif api_state in ['IDLE', 'FINISHED', 'OPERATIONAL']:
                         original_printer_index = printer_indices[idx]
                         with ReadLock(printers_rwlock):
                             if 0 <= original_printer_index < len(PRINTERS):
                                 stored_state = PRINTERS[original_printer_index].get('state', 'Unknown')
                                 stored_finish_time = PRINTERS[original_printer_index].get('finish_time')
-                                
+
                                 logging.debug(f"Checking printer {printer['name']}: API state={api_state}, stored state={stored_state}, stored_finish_time={stored_finish_time}")
-                                
+
                                 # Preserve finish_time if it exists
                                 if stored_finish_time:
                                     updates['finish_time'] = stored_finish_time
@@ -1614,19 +1609,19 @@ async def get_printer_status_async(socketio, app, batch_index=None, batch_size=N
                                     })
                     elif api_state not in ['PRINTING', 'PAUSED', 'FINISHED', 'EJECTING']:
                         updates.update({"progress": 0, "time_remaining": 0, "file": "None", "job_id": None, "manually_set": False, "finish_time": None, "ejection_in_progress": False, "count_incremented_for_current_job": False}) # NEW: Reset count flag
-                
+
                 printer_updates.append({
                     'index': printer_indices[idx],
                     'updates': updates
                 })
-                
+
                 # FIX: Execute pending Prusa ejection tasks here
                 if updates.get('state') == 'EJECTING':
                     # Check if printer has pending ejection details
                     with ReadLock(printers_rwlock):
                         original_printer = PRINTERS[printer_indices[idx]]
                         pending_ejection = original_printer.get('pending_ejection')
-                        
+
                     if pending_ejection and printer.get('type') != 'bambu':
                         # Prusa ejection - use stored details
                         gcode_content = pending_ejection['gcode_content']
@@ -1634,16 +1629,16 @@ async def get_printer_status_async(socketio, app, batch_index=None, batch_size=N
                         headers = {"X-Api-Key": decrypt_api_key(printer['api_key'])}
                         ejection_file_path = f"/usb/{gcode_file_name}"
                         ejection_url = f"http://{printer['ip']}/api/v1/files{ejection_file_path}"
-                        
+
                         ejection_tasks.append(async_send_ejection_gcode(
-                            session, printer, headers, ejection_url, 
+                            session, printer, headers, ejection_url,
                             gcode_content, gcode_file_name
                         ))
-                        
+
                         # Clear pending ejection after queuing
                         with WriteLock(printers_rwlock):
                             # The check is redundant as we hold the lock, but safer to be explicit
-                            if printer_indices[idx] < len(PRINTERS): 
+                            if printer_indices[idx] < len(PRINTERS):
                                 PRINTERS[printer_indices[idx]]['pending_ejection'] = None
                                 logging.info(f"EJECTION: Queued pending ejection task for {printer['name']}")
             else:
@@ -1663,11 +1658,11 @@ async def get_printer_status_async(socketio, app, batch_index=None, batch_size=N
                         "count_incremented_for_current_job": False # NEW: Reset count flag
                     }
                 })
-        
+
         if ejection_tasks:
             logging.info(f"EJECTION: Executing {len(ejection_tasks)} ejection tasks")
             ejection_results = await asyncio.gather(*ejection_tasks, return_exceptions=True)
-            
+
             # Log results of ejection tasks
             for i, result in enumerate(ejection_results):
                 if isinstance(result, Exception):
@@ -1676,7 +1671,7 @@ async def get_printer_status_async(socketio, app, batch_index=None, batch_size=N
                     logging.info(f"EJECTION: Task {i} completed successfully")
         else:
             logging.debug("EJECTION: No ejection tasks to execute")
-        
+
     with WriteLock(printers_rwlock):
         for update in printer_updates:
             if 0 <= update['index'] < len(PRINTERS):
@@ -1687,24 +1682,24 @@ async def get_printer_status_async(socketio, app, batch_index=None, batch_size=N
                     if current_manually_set and PRINTERS[update['index']]['state'] == 'READY':
                         logging.warning(f"Preventing manual flag from being cleared for READY printer {PRINTERS[update['index']]['name']}")
                         update['updates']['manually_set'] = True
-                
-                if (PRINTERS[update['index']].get('state') == 'READY' and 
+
+                if (PRINTERS[update['index']].get('state') == 'READY' and
                     update['updates'].get('state') == 'FINISHED' and
                     (PRINTERS[update['index']].get('file') is None or PRINTERS[update['index']].get('ejection_processed', False))):
                     logging.debug(f"Preserving READY state for {PRINTERS[update['index']]['name']} despite API FINISHED state")
                     update['updates']['state'] = 'READY'
                     update['updates']['status'] = 'Ready'
                     update['updates']['manually_set'] = True
-                
+
                 # Log state changes at INFO level
                 old_state = PRINTERS[update['index']].get('state')
                 new_state = update['updates'].get('state')
                 if new_state and old_state != new_state:
                     logging.info(f"Printer {PRINTERS[update['index']]['name']} state: {old_state} -> {new_state}")
-                
+
                 for key, value in update['updates'].items():
                     PRINTERS[update['index']][key] = value
-        
+
         for i, printer in enumerate(PRINTERS):
             if printer.get('manually_set', False) and printer.get('state') not in ['READY', 'PRINTING', 'EJECTING']:
                 logging.warning(f"Failsafe: Fixing printer {printer['name']} - has manually_set=True but state={printer['state']}. Setting back to READY")
@@ -1712,7 +1707,7 @@ async def get_printer_status_async(socketio, app, batch_index=None, batch_size=N
                 printer['status'] = 'Ready'
                 printer['manually_set'] = True
                 printer['count_incremented_for_current_job'] = False # NEW: Reset count flag on failsafe
-        
+
         # Enhanced ejection completion monitoring - FIXED VERSION
         for i, printer in enumerate(PRINTERS):
             if printer.get('state') == 'EJECTING':
@@ -1721,51 +1716,51 @@ async def get_printer_status_async(socketio, app, batch_index=None, batch_size=N
                 current_time = time.time()
                 ejection_start = printer.get('ejection_start_time', 0)
                 elapsed_minutes = (current_time - ejection_start) / 60.0 if ejection_start else 0
-                
+
                 # Get the corresponding API update for this printer
                 api_state = None
                 current_api_file = None
-                
+
                 for update in printer_updates:
                     if update['index'] == i:
                         api_state = update['updates'].get('state')
                         current_api_file = update['updates'].get('file', '')
                         break
-                
+
                 logging.debug(f"Ejection check for {printer_name} (type: {printer_type}): api_state={api_state}, api_file='{current_api_file}', stored_file='{printer.get('file', '')}', elapsed={elapsed_minutes:.1f}min")
-                
+
                 ejection_complete = False
                 completion_reason = ""
-                
+
                 # ENHANCED COMPLETION DETECTION
-                
+
                 # Method 1: Check ejection state manager first (highest priority)
                 ejection_state = get_printer_ejection_state(printer_name)
                 if ejection_state['state'] == 'completed':
                     ejection_complete = True
                     completion_reason = "State manager shows completed"
-                
+
                 # Method 2: API shows clear completion states
                 elif api_state in ['IDLE', 'READY', 'OPERATIONAL']:
                     ejection_complete = True
                     completion_reason = f"API state = {api_state}"
-                
+
                 # Method 3: For Prusa printers - enhanced file-based detection
                 elif printer_type != 'bambu':
                     stored_file = printer.get('file', '')
-                    
+
                     # Check if we were running an ejection file and it's no longer active
                     if stored_file and 'ejection_' in stored_file:
                         if not current_api_file or current_api_file != stored_file:
                             ejection_complete = True
                             completion_reason = f"Ejection file '{stored_file}' no longer active (current: '{current_api_file}')"
-                    
+
                     # Also check if API reports FINISHED (common with Prusa after ejection)
                     elif api_state == 'FINISHED':
                         # For Prusa, FINISHED often means ejection completed
                         ejection_complete = True
-                        completion_reason = f"Prusa API shows FINISHED after ejection"
-                
+                        completion_reason = "Prusa API shows FINISHED after ejection"
+
                 # Method 4: Bambu-specific detection
                 elif printer_type == 'bambu':
                     try:
@@ -1781,11 +1776,11 @@ async def get_printer_status_async(socketio, app, batch_index=None, batch_size=N
                                     completion_reason = f"Bambu state = {bambu_state.get('state', '')}"
                     except Exception as e:
                         logging.error(f"Error checking Bambu ejection state for {printer_name}: {e}")
-                
+
                 # PROCESS COMPLETION
                 if ejection_complete:
                     logging.warning(f"EJECTION COMPLETE: {printer_name} transitioning from EJECTING to READY ({completion_reason})")
-                    
+
                     # Force immediate transition to READY
                     printer.update({
                         "state": 'READY',
@@ -1804,26 +1799,26 @@ async def get_printer_status_async(socketio, app, batch_index=None, batch_size=N
                         "last_ejection_time": time.time(),
                         "count_incremented_for_current_job": False # NEW: Reset count flag
                     })
-                    
+
                     # Clean up ejection state
                     release_ejection_lock(printer_name)
                     clear_printer_ejection_state(printer_name)
-                    
+
                     # Trigger distribution for new jobs
                     threading.Timer(2.0, lambda: start_background_distribution(socketio, app)).start()
-                    
+
                 else:
                     # Log status for debugging stuck ejections
                     if elapsed_minutes > 5:  # Only log if ejection has been running for more than 5 minutes
                         logging.info(f"Ejection still in progress for {printer_name}: {elapsed_minutes:.1f} minutes elapsed, api_state={api_state}, waiting for completion signal")
-        
+
         # COOLING STATE MONITORING - For Bambu printers waiting for bed to cool
         for i, printer in enumerate(PRINTERS):
             if printer.get('state') == 'COOLING':
                 printer_name = printer['name']
                 cooldown_target = printer.get('cooldown_target_temp', 0)
                 cooldown_order_id = printer.get('cooldown_order_id')
-                
+
                 # Get current bed temperature from Bambu MQTT state
                 current_bed_temp = 0
                 try:
@@ -1832,22 +1827,22 @@ async def get_printer_status_async(socketio, app, batch_index=None, batch_size=N
                             current_bed_temp = BAMBU_PRINTER_STATES[printer_name].get('bed_temp', 0)
                 except Exception as e:
                     logging.warning(f"Could not get bed temp for {printer_name}: {e}")
-                
+
                 # Update status with current temperature
                 printer['status'] = f'Cooling ({current_bed_temp}°C → {cooldown_target}°C)'
-                
+
                 if current_bed_temp <= cooldown_target:
                     logging.info(f"COOLING->EJECTING: {printer_name} (bed temp {current_bed_temp}°C <= target {cooldown_target}°C)")
-                    
+
                     # Get the order for ejection gcode
                     with SafeLock(orders_lock):
                         order = next((o for o in ORDERS if o['id'] == cooldown_order_id), None)
-                    
+
                     if order and order.get('ejection_enabled', False):
                         gcode_content = order.get('end_gcode', '').strip()
                         if not gcode_content:
                             gcode_content = "G28 X Y\nM84"  # Default ejection
-                        
+
                         # Transition to EJECTING and send ejection gcode
                         printer.update({
                             "state": 'EJECTING',
@@ -1859,7 +1854,7 @@ async def get_printer_status_async(socketio, app, batch_index=None, batch_size=N
                             "cooldown_target_temp": None,
                             "cooldown_order_id": None
                         })
-                        
+
                         # Send ejection gcode to Bambu printer
                         success = send_bambu_ejection_gcode(printer, gcode_content)
                         if not success:
@@ -1890,25 +1885,25 @@ async def get_printer_status_async(socketio, app, batch_index=None, batch_size=N
                     cooling_minutes = (time.time() - finish_time) / 60.0
                     if int(cooling_minutes) % 2 == 0 and cooling_minutes > 0:  # Log every 2 minutes
                         logging.debug(f"COOLING: {printer_name} at {current_bed_temp}°C, target {cooldown_target}°C ({cooling_minutes:.1f}min elapsed)")
-        
+
         # No automatic safety timeout - ejections run until natural completion
-        
+
         save_data(PRINTERS_FILE, PRINTERS)
-    
+
     current_filament = None
     with SafeLock(filament_lock):
         filament_data = load_data(TOTAL_FILAMENT_FILE, {"total_filament_used_g": 0})
         TOTAL_FILAMENT_CONSUMPTION = filament_data.get("total_filament_used_g", 0)
         current_filament = TOTAL_FILAMENT_CONSUMPTION / 1000
         logging.debug(f"Loaded filament data: total={TOTAL_FILAMENT_CONSUMPTION}g ({current_filament}kg)")
-        
+
     current_orders = None
     with SafeLock(orders_lock):
         current_orders = copy.deepcopy(ORDERS)
-    
+
     with ReadLock(printers_rwlock):
         printers_copy = prepare_printer_data_for_broadcast(PRINTERS)
-    
+
     if batch_index is not None:
         logging.debug(f"Emitting status_update with total_filament: {current_filament}kg")
         socketio.emit('status_update', {
@@ -1919,7 +1914,7 @@ async def get_printer_status_async(socketio, app, batch_index=None, batch_size=N
 
 async def check_and_start_print(session, printer, order, headers, batch_id, app):
     global TOTAL_FILAMENT_CONSUMPTION
-    
+
     # FIXED SAFETY CHECK: Accept both READY and IDLE printers
     if printer.get('state') not in ['READY', 'IDLE']:
         logging.error(f"SAFETY: Attempted to start print on {printer['name']} in state {printer['state']} - ABORTING")
@@ -1928,11 +1923,11 @@ async def check_and_start_print(session, printer, order, headers, batch_id, app)
     # NEW: Reset the count increment flag for this new job
     printer['count_incremented_for_current_job'] = False
     logging.debug(f"Starting new job for {printer['name']} - reset count increment flag")
-    
+
     # Handle Bambu printers differently
     if printer.get('type') == 'bambu':
         logging.debug(f"Starting Bambu print job for {printer['name']} with order {order['id']}")
-        
+
         # Bambu requires .3mf extension
         filename = order['filename']
         if not filename.endswith('.3mf'):
@@ -1940,18 +1935,18 @@ async def check_and_start_print(session, printer, order, headers, batch_id, app)
                 filename = filename.replace('.gcode', '.gcode.3mf')
             else:
                 filename = filename + '.gcode.3mf'
-        
+
         # Send print command with file upload
         # Pass the filepath so the file will be uploaded via FTP
         success = send_bambu_print_command(printer, filename, filepath=order['filepath'])
-        
+
         if success:
             old_state = printer.get('state', 'UNKNOWN')
             printer['state'] = 'PRINTING'
             printer['file'] = order['filename']
             printer['from_queue'] = True
             logging.info(f"Printer {printer['name']} started printing: {old_state} -> PRINTING (file: {order['filename']})")
-            
+
             # ALWAYS increment count when print starts - regardless of ejection
             # For Bambu, we trust the send_bambu_print_command result since we control the FTP upload
             success_increment, updated_order = increment_order_sent_count(order['id'])
@@ -1967,20 +1962,20 @@ async def check_and_start_print(session, printer, order, headers, batch_id, app)
                 printer['from_queue'] = True
                 printer['finish_time'] = None
                 printer['count_incremented_for_current_job'] = True  # Mark as counted
-            
+
             printer['manually_set'] = False
             printer['ejection_processed'] = False
             printer['ejection_in_progress'] = False
-        
+
         return printer, order, success, batch_id
-    
+
     # Original Prusa code continues below
-    
+
     file_path = f"/usb/{order['filename']}"
     file_url = f"http://{printer['ip']}/api/v1/files{file_path}"
-    
+
     logging.debug(f"Starting print job for {printer['name']} with order {order['id']}")
-    
+
     file_data = None
     try:
         with open(order['filepath'], "rb") as f:
@@ -1994,15 +1989,15 @@ async def check_and_start_print(session, printer, order, headers, batch_id, app)
         try:
             async with session.delete(file_url, headers=headers) as delete_resp:
                 if delete_resp.status == 204:
-                    logging.debug(f"Successfully deleted existing file")
+                    logging.debug("Successfully deleted existing file")
                 else:
                     logging.debug(f"Delete returned status {delete_resp.status}, continuing anyway")
         except Exception as e:
             logging.debug(f"Error during pre-emptive delete: {str(e)}")
-        
+
         success = False
         logging.debug(f"Batch {batch_id}: File {order['filename']} exists on {printer['name']}, starting print...")
-        
+
         async def _start_print():
             try:
                 async with session.post(file_url, headers=headers) as start_resp:
@@ -2026,25 +2021,25 @@ async def check_and_start_print(session, printer, order, headers, batch_id, app)
             except Exception as e:
                 logging.error(f"Error starting print: {str(e)}")
                 return False
-        
+
         logging.debug(f"Batch {batch_id}: File {order['filename']} not found, uploading...")
-        
+
         async def _upload_file():
             try:
                 try:
                     await asyncio.sleep(1)
                     async with session.delete(file_url, headers=headers) as delete_resp:
                         if delete_resp.status == 204:
-                            logging.debug(f"Successfully deleted file before upload")
+                            logging.debug("Successfully deleted file before upload")
                         else:
                             logging.debug(f"Delete before upload returned {delete_resp.status}")
                         await asyncio.sleep(1)
                 except Exception as e:
                     logging.debug(f"Error during re-upload delete: {str(e)}")
-                
+
                 async with session.put(
-                    file_url, 
-                    data=file_data, 
+                    file_url,
+                    data=file_data,
                     headers={**headers, "Print-After-Upload": "?1"}
                 ) as upload_resp:
                     if upload_resp.status == 201:
@@ -2056,8 +2051,8 @@ async def check_and_start_print(session, printer, order, headers, batch_id, app)
                         async with session.delete(file_url, headers=headers) as delete_resp:
                             await asyncio.sleep(2)
                             async with session.put(
-                                file_url, 
-                                data=file_data, 
+                                file_url,
+                                data=file_data,
                                 headers={**headers, "Print-After-Upload": "?1"}
                             ) as retry_resp:
                                 if retry_resp.status == 201:
@@ -2077,7 +2072,7 @@ async def check_and_start_print(session, printer, order, headers, batch_id, app)
             except Exception as e:
                 logging.error(f"Error uploading to {printer['name']}: {str(e)}")
                 return False
-        
+
         try:
             file_size = os.path.getsize(order['filepath'])
             initial_delay = 10 if file_size < 5*1024*1024 else 20
@@ -2093,7 +2088,7 @@ async def check_and_start_print(session, printer, order, headers, batch_id, app)
 
         logging.debug(f"Running print verification for {printer['name']} with batch {batch_id}")
         verification_success = await verify_print_started(
-            session, printer, order['filename'], headers, 
+            session, printer, order['filename'], headers,
             max_attempts=3, initial_delay=initial_delay
         )
 
@@ -2152,7 +2147,7 @@ async def check_and_start_print(session, printer, order, headers, batch_id, app)
             printer['file'] = order['filename']
             printer['from_queue'] = True
             logging.info(f"Printer {printer['name']} started printing: {old_state} -> PRINTING (file: {order['filename']})")
-            
+
             # Prusa filament/count deferral check (STEP 4 - PRUSA) - ENHANCED WITH FILENAME VERIFICATION
             if printer.get('type') != 'bambu':
                 try:
@@ -2161,7 +2156,7 @@ async def check_and_start_print(session, printer, order, headers, batch_id, app)
                         if final_check.status == 200:
                             final_data = await final_check.json()
                             if final_data['printer']['state'] in ['PRINTING', 'BUSY']:
-                                
+
                                 # CRITICAL NEW CHECK: Verify the printer is printing OUR file, not a leftover job
                                 should_increment = False
                                 try:
@@ -2169,7 +2164,7 @@ async def check_and_start_print(session, printer, order, headers, batch_id, app)
                                         if job_check.status == 200:
                                             job_data = await job_check.json()
                                             current_file = job_data.get('file', {}).get('name', '')
-                                            
+
                                             # Verify filename matches
                                             if match_shortened_filename(order['filename'], current_file):
                                                 should_increment = True
@@ -2180,7 +2175,7 @@ async def check_and_start_print(session, printer, order, headers, batch_id, app)
                                             logging.warning(f"Could not verify job filename for {printer['name']} - HTTP {job_check.status}")
                                 except Exception as e:
                                     logging.error(f"Error verifying filename for {printer['name']}: {str(e)}")
-                                
+
                                 # Only proceed if filename verification passed
                                 if should_increment:
                                     # ALWAYS increment count when print starts - regardless of ejection
@@ -2205,7 +2200,7 @@ async def check_and_start_print(session, printer, order, headers, batch_id, app)
                             logging.warning(f"Final verification failed: could not get status for {printer['name']}")
                 except Exception as e:
                     logging.error(f"Error in final verification for {printer['name']}: {str(e)}")
-            
+
             printer['total_filament_used_g'] = printer.get('total_filament_used_g', 0) + order['filament_g']
             printer['filament_used_g'] = order['filament_g']
             printer['manually_set'] = False
@@ -2214,9 +2209,9 @@ async def check_and_start_print(session, printer, order, headers, batch_id, app)
             printer['finish_time'] = None # Clear finish time on new print
             logging.debug(f"Batch {batch_id}: Sent {order['filename']} to {printer['name']}, filament: {order['filament_g']}, order_id: {order['id']}")
             logging.debug(f"Successfully configured {printer['name']} to print order {order['id']} in thread {threading.current_thread().name} ({threading.get_ident()})")
-        
+
         return printer, order, success, batch_id
-        
+
     except Exception as e:
         logging.error(f"Batch {batch_id}: Error processing {printer['name']}: {str(e)}")
         return printer, order, False, batch_id
@@ -2225,7 +2220,7 @@ def start_background_distribution(socketio, app, batch_size=10):
     if not distribution_semaphore.acquire(blocking=True, timeout=0.5):
         logging.debug(f"Distribution semaphore acquisition failed - already running. Thread: {threading.current_thread().name}, ID: {threading.get_ident()}")
         return None
-    
+
     # Check if this is happening at night
     current_hour = datetime.now().hour
     if 0 <= current_hour < 6:
@@ -2235,9 +2230,9 @@ def start_background_distribution(socketio, app, batch_size=10):
             'triggered_by': str(traceback.extract_stack()[-2]),  # What called this?
             'hour': current_hour
         })
-    
+
     task_id = str(uuid.uuid4())
-    
+
     def run_with_semaphore():
         try:
             logging.debug(f"Starting distribution thread {task_id}")
@@ -2248,7 +2243,7 @@ def start_background_distribution(socketio, app, batch_size=10):
         finally:
             logging.debug(f"Releasing distribution semaphore for {task_id}")
             distribution_semaphore.release()
-    
+
     thread = threading.Thread(target=run_with_semaphore)
     thread.daemon = True
     thread.start()
@@ -2261,7 +2256,7 @@ def run_background_distribution(socketio, app, task_id, batch_size=10):
         except RuntimeError:
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
-        
+
         loop.run_until_complete(distribute_orders_async(socketio, app, task_id, batch_size))
     except Exception as e:
         logging.error(f"Error in background distribution: {str(e)}")
@@ -2270,7 +2265,7 @@ async def distribute_orders_async(socketio, app, task_id=None, batch_size=10):
     thread_id = threading.get_ident()
     thread_name = threading.current_thread().name
     logging.debug(f"Starting distribute_orders_async in thread {thread_name} (ID: {thread_id}), task_id: {task_id}")
-    
+
     # Check if this is a midnight run
     current_hour = datetime.now().hour
     if 0 <= current_hour < 6:
@@ -2279,27 +2274,27 @@ async def distribute_orders_async(socketio, app, task_id=None, batch_size=10):
             'time': datetime.now().isoformat(),
             'hour': current_hour
         })
-    
+
     global TOTAL_FILAMENT_CONSUMPTION, ORDERS
-    
+
     MAX_CONCURRENT_JOBS = 10
-    
+
     current_filament = 0
     with SafeLock(filament_lock):
         filament_data = load_data(TOTAL_FILAMENT_FILE, {"total_filament_used_g": 0})
         current_filament = filament_data.get("total_filament_used_g", 0)
         TOTAL_FILAMENT_CONSUMPTION = current_filament
         logging.debug(f"Starting distribution - total filament: {TOTAL_FILAMENT_CONSUMPTION}g")
-    
+
     processed_order_printers = set()
-    
+
     active_orders = []
     with SafeLock(orders_lock):
-        active_orders = [o.copy() for o in ORDERS 
-                        if o['status'] != 'completed' 
+        active_orders = [o.copy() for o in ORDERS
+                        if o['status'] != 'completed'
                         and o['sent'] < o['quantity']]
         logging.debug(f"Active orders: {[(o['id'], o['sent'], o['quantity']) for o in active_orders]}")
-    
+
     if not active_orders:
         logging.debug("No active orders to distribute, skipping distribution")
         return
@@ -2309,43 +2304,43 @@ async def distribute_orders_async(socketio, app, task_id=None, batch_size=10):
         all_printers = [p.copy() for p in PRINTERS if not p.get('service_mode', False)]
         # FIXED: Include both READY and IDLE printers for job distribution
         ready_printers = [p for p in all_printers if p['state'] in ['READY', 'IDLE']]
-        
+
         printer_states = {}
         for p in all_printers:
             state = p['state']
             if state not in printer_states:
                 printer_states[state] = []
             printer_states[state].append(p['name'])
-        
+
         # Log FINISHED printers that are being skipped
         if 'FINISHED' in printer_states:
             logging.debug(f"Skipping {len(printer_states['FINISHED'])} FINISHED printers: {printer_states['FINISHED']}")
-        
+
         for state, printers in printer_states.items():
             logging.debug(f"Printers in state {state}: {len(printers)} ({', '.join(printers[:5])}{'...' if len(printers) > 5 else ''})")
-        
+
         logging.debug(f"Found {len(ready_printers)} READY printers out of {len(all_printers)} total printers")
-    
+
     log_distribution_event('DISTRIBUTION_START', {
         'task_id': task_id,
         'active_orders': len(active_orders),
         'ready_printers': len(ready_printers),
         'ready_printer_names': [p['name'] for p in ready_printers]
     })
-    
+
     if not ready_printers:
         logging.debug("No ready printers available, skipping distribution")
         return
-    
+
     async with aiohttp.ClientSession(
         connector=aiohttp.TCPConnector(limit=20, ttl_dns_cache=300),
         timeout=aiohttp.ClientTimeout(total=Config.API_TIMEOUT)
     ) as session:
         batch_id = str(uuid.uuid4())[:8]
-        
+
         assigned_printers = set()
         all_jobs = []
-        
+
         for order in active_orders:
             # UPDATED: Text-based group filtering
             eligible_printers = [
@@ -2354,15 +2349,15 @@ async def distribute_orders_async(socketio, app, task_id=None, batch_size=10):
                 p['name'] not in assigned_printers and
                 f"{order['id']}:{p['name']}" not in processed_order_printers
             ]
-            
+
             logging.debug(f"Order {order['id']}: Eligible printers before filtering: {[p['name'] for p in ready_printers]}")
             logging.debug(f"Order {order['id']}: After group filter (groups={order.get('groups', ['Default'])}): {[p['name'] for p in eligible_printers]}")
-            
+
             def extract_number(printer):
                 numbers = re.findall(r'\d+', printer['name'])
                 return int(numbers[0]) if numbers else float('inf')
             eligible_printers.sort(key=extract_number)
-            
+
             if not eligible_printers:
                 logging.debug(f"No eligible printers for order {order['id']}")
                 group_requirements = order.get('groups', ['Default'])
@@ -2372,14 +2367,14 @@ async def distribute_orders_async(socketio, app, task_id=None, batch_size=10):
                 else:
                     logging.debug(f"No printers in required groups {group_requirements}")
                 continue
-            
+
             copies_needed = min(order['quantity'] - order['sent'], len(eligible_printers))
             if copies_needed <= 0:
                 logging.debug(f"Order {order['id']}: No copies needed (sent={order['sent']}, quantity={order['quantity']})")
                 continue
-                
+
             logging.debug(f"Found {len(eligible_printers)} available printers for order {order['id']}, need to distribute {copies_needed} copies")
-            
+
             for i in range(copies_needed):
                 if i >= len(eligible_printers):
                     break
@@ -2397,43 +2392,43 @@ async def distribute_orders_async(socketio, app, task_id=None, batch_size=10):
                 all_jobs.append(job_data)
                 assigned_printers.add(printer['name'])
                 logging.debug(f"Assigned printer {printer['name']} to order {order['id']}")
-        
+
         total_processed = 0
         total_successful = 0
         updated_printers = {}
-        
+
         logging.debug(f"Total assigned print jobs: {len(all_jobs)}")
-        
+
         for i in range(0, len(all_jobs), MAX_CONCURRENT_JOBS):
             batch_jobs = all_jobs[i:i+MAX_CONCURRENT_JOBS]
             batch_tasks = []
-            
+
             logging.debug(f"Processing batch {i//MAX_CONCURRENT_JOBS + 1} with {len(batch_jobs)} jobs")
-            
+
             for job in batch_jobs:
                 task = check_and_start_print(
                     session, job['printer'], job['order'], job['headers'], batch_id, app
                 )
                 batch_tasks.append(task)
-            
+
             batch_results = await asyncio.gather(*batch_tasks, return_exceptions=True)
-            
+
             for result in batch_results:
                 total_processed += 1
-                
+
                 if isinstance(result, Exception):
                     logging.error(f"Error in print job: {str(result)}")
                     continue
-                    
+
                 if not isinstance(result, tuple) or len(result) < 3:
                     logging.error(f"Unexpected result format: {result}")
                     continue
-                    
+
                 printer, order, success, _ = result
                 if success:
                     total_successful += 1
                     updated_printers[printer['name']] = printer
-                    
+
                     # Log the job assignment
                     log_job_lifecycle(
                         order['id'],
@@ -2446,37 +2441,37 @@ async def distribute_orders_async(socketio, app, task_id=None, batch_size=10):
                             'task_id': task_id
                         }
                     )
-                
+
                 # NOTE: The filament and increment logic is now fully handled in check_and_start_print
                 # for both Prusa (deferred) and Bambu (deferred) printers.
                 # The logic for Prusa printers without ejection is also in check_and_start_print.
-                
+
             if i + MAX_CONCURRENT_JOBS < len(all_jobs):
                 await asyncio.sleep(1)
-        
+
         logging.debug(f"Processed {total_processed} jobs, {total_successful} successful")
-        
+
         if updated_printers:
             with WriteLock(printers_rwlock):
                 for i, p in enumerate(PRINTERS):
                     if p['name'] in updated_printers:
                         for key, value in updated_printers[p['name']].items():
                             PRINTERS[i][key] = value
-                            
+
                 save_data(PRINTERS_FILE, PRINTERS)
-    
+
     with SafeLock(filament_lock):
         total_filament = TOTAL_FILAMENT_CONSUMPTION / 1000
-    
+
     with SafeLock(orders_lock):
         orders_data = ORDERS.copy()
         logging.debug(f"Post-distribution orders: {[(o['id'], o['sent'], o['quantity']) for o in orders_data if o['status'] != 'completed']}")
-    
+
     with ReadLock(printers_rwlock):
         printers_copy = prepare_printer_data_for_broadcast(PRINTERS)
-    
+
     logging.debug(f"Final summary: {total_processed} jobs processed, {total_successful} successful, {total_processed - total_successful} failed")
-    
+
     socketio.emit('status_update', {
         'printers': printers_copy,
         'total_filament': total_filament,
@@ -2497,16 +2492,16 @@ async def pause_print_async(session, printer):
             printer['state'] = 'PAUSED'
             printer['status'] = 'Paused'
         return success
-    
+
     # Prusa API - try both v1 and legacy endpoints
     headers = {"X-Api-Key": decrypt_api_key(printer['api_key'])}
-    
+
     async def _pause():
         # First try the v1 API endpoint
         url = f"http://{printer['ip']}/api/v1/job"
         try:
-            async with session.post(url, 
-                                  headers=headers, 
+            async with session.post(url,
+                                  headers=headers,
                                   json={"command": "pause"}) as resp:
                 if resp.status == 200:
                     logging.debug(f"Successfully paused print on {printer['name']} using v1 API")
@@ -2518,7 +2513,7 @@ async def pause_print_async(session, printer):
                     logging.debug(f"v1 API returned 405, trying legacy API for {printer['name']}")
         except Exception as e:
             logging.debug(f"v1 API error: {str(e)}, trying legacy API")
-        
+
         # Try legacy API endpoint
         legacy_url = f"http://{printer['ip']}/api/job"
         try:
@@ -2536,7 +2531,7 @@ async def pause_print_async(session, printer):
         except Exception as e:
             logging.error(f"Failed to pause print on {printer['name']}: {str(e)}")
             return False
-    
+
     try:
         return await retry_async(_pause, max_retries=2, initial_backoff=1)
     except Exception as e:
@@ -2552,16 +2547,16 @@ async def resume_print_async(session, printer):
             printer['state'] = 'PRINTING'
             printer['status'] = 'Printing'
         return success
-    
+
     # Prusa API - try both v1 and legacy endpoints
     headers = {"X-Api-Key": decrypt_api_key(printer['api_key'])}
-    
+
     async def _resume():
         # First try the v1 API endpoint
         url = f"http://{printer['ip']}/api/v1/job"
         try:
-            async with session.post(url, 
-                                  headers=headers, 
+            async with session.post(url,
+                                  headers=headers,
                                   json={"command": "resume"}) as resp:
                 if resp.status == 200:
                     logging.debug(f"Successfully resumed print on {printer['name']} using v1 API")
@@ -2573,7 +2568,7 @@ async def resume_print_async(session, printer):
                     logging.debug(f"v1 API returned 405, trying legacy API for {printer['name']}")
         except Exception as e:
             logging.debug(f"v1 API error: {str(e)}, trying legacy API")
-        
+
         # Try legacy API endpoint
         legacy_url = f"http://{printer['ip']}/api/job"
         try:
@@ -2591,7 +2586,7 @@ async def resume_print_async(session, printer):
         except Exception as e:
             logging.error(f"Failed to resume print on {printer['name']}: {str(e)}")
             return False
-    
+
     try:
         return await retry_async(_resume, max_retries=2, initial_backoff=1)
     except Exception as e:
@@ -2615,17 +2610,17 @@ async def send_print_to_printer(session, printer, filepath, filename, order_id=N
             printer['finish_time'] = None # Clear finish time on new print
             printer['count_incremented_for_current_job'] = False # NEW: Reset count flag
         return success
-    
+
     # Original Prusa code for manual prints
     file_path = f"/usb/{filename}"
     file_url = f"http://{printer['ip']}/api/v1/files{file_path}"
     headers = {"X-Api-Key": decrypt_api_key(printer['api_key'])}
-    
+
     try:
         # Read the file
         with open(filepath, "rb") as f:
             file_data = f.read()
-        
+
         # Upload and start print
         async with session.put(
             file_url,
@@ -2638,7 +2633,7 @@ async def send_print_to_printer(session, printer, filepath, filename, order_id=N
             else:
                 logging.error(f"Failed to send print to {printer['name']}: HTTP {resp.status}")
                 return False
-                
+
     except Exception as e:
         logging.error(f"Error sending print to {printer['name']}: {str(e)}")
         return False
@@ -2664,21 +2659,21 @@ def detect_ejection_completion(printer, api_state, current_api_file):
     """
     printer_name = printer['name']
     current_state = printer.get('state')
-    
+
     if current_state != 'EJECTING':
         return False
-    
+
     # NEW: Check ejection state manager first
     ejection_state = get_printer_ejection_state(printer_name)
     if ejection_state['state'] == 'completed':
         logging.info(f"Ejection completion detected for {printer_name}: State manager shows completed")
         return True
-    
+
     # Method 1: API shows completion states (most reliable)
     if api_state in ['IDLE', 'FINISHED', 'READY', 'OPERATIONAL']:
         logging.info(f"Ejection completion detected for {printer_name}: API state = {api_state}")
         return True
-    
+
     # Method 2: For Prusa printers - ejection file no longer running
     stored_file = printer.get('file', '')
     if (stored_file and 'ejection_' in stored_file):
@@ -2686,7 +2681,7 @@ def detect_ejection_completion(printer, api_state, current_api_file):
         if not current_api_file or current_api_file != stored_file:
             logging.info(f"Ejection completion detected for {printer_name}: File changed from {stored_file} to {current_api_file or 'None'}")
             return True
-    
+
     # Method 3: Bambu-specific completion detection
     if printer.get('type') == 'bambu':
         try:
@@ -2704,12 +2699,12 @@ def detect_ejection_completion(printer, api_state, current_api_file):
                         return True
         except Exception as e:
             logging.debug(f"Bambu state check failed for {printer_name}: {e}")
-    
+
     return False
 
 def handle_finished_state_ejection(printer, printer_name, current_file, current_order_id, updates):
     """Enhanced handler for FINISHED state that checks for and processes ejection if needed"""
-    
+
     # CRITICAL: Always ensure finish_time is set when entering FINISHED state
     if not printer.get('finish_time'):
         finish_time = time.time()
@@ -2718,7 +2713,7 @@ def handle_finished_state_ejection(printer, printer_name, current_file, current_
     else:
         # Preserve existing finish_time
         updates['finish_time'] = printer.get('finish_time')
-    
+
     # CRITICAL FIX: Check if ejection has already been processed OR is currently in progress
     if printer.get('ejection_processed', False) or printer.get('ejection_in_progress', False):
         logging.debug(f"FINISHED->SKIP: {printer_name} (ejection already processed or in progress)")
@@ -2739,7 +2734,7 @@ def handle_finished_state_ejection(printer, printer_name, current_file, current_
             debug_log('cooldown', f"Found order {current_order_id}: ejection={order.get('ejection_enabled')}, cooldown={order.get('cooldown_temp')}, file={order.get('filename')}")
         else:
             debug_log('cooldown', f"Order {current_order_id} NOT FOUND! Available: {[o['id'] for o in ORDERS]}", 'warning')
-    
+
     if not order or not order.get('ejection_enabled', False):
         # CRITICAL FIX: No ejection needed - STAY in FINISHED state (don't auto-transition to READY)
         logging.info(f"FINISHED->STAY: {printer_name} (no ejection enabled - staying in FINISHED)")
@@ -2777,13 +2772,13 @@ def handle_finished_state_ejection(printer, printer_name, current_file, current_
     order_cooldown = order.get('cooldown_temp') if order else None
     is_bambu = printer.get('type') == 'bambu'
     has_cooldown = order_cooldown is not None
-    
+
     debug_log('cooldown', f"{printer_name}: type={printer.get('type')}, order_id={current_order_id}, cooldown={order_cooldown}")
     debug_log('cooldown', f"{printer_name}: is_bambu={is_bambu}, has_cooldown={has_cooldown}, will_check={is_bambu and has_cooldown}")
-    
+
     if is_bambu and has_cooldown:
         cooldown_temp = int(order_cooldown)  # Ensure it's an integer
-        
+
         # Get current bed temperature from Bambu MQTT state
         current_bed_temp = 0
         try:
@@ -2795,9 +2790,9 @@ def handle_finished_state_ejection(printer, printer_name, current_file, current_
                     debug_log('cooldown', f"{printer_name}: NOT in BAMBU_PRINTER_STATES!", 'warning')
         except Exception as e:
             logging.warning(f"Could not get bed temp for {printer_name}: {e}")
-        
+
         debug_log('cooldown', f"{printer_name}: bed={current_bed_temp}°C vs target={cooldown_temp}°C, needs_cooling={current_bed_temp > cooldown_temp}")
-        
+
         if current_bed_temp > cooldown_temp:
             logging.info(f"FINISHED->COOLING: {printer_name} (bed temp {current_bed_temp}°C > target {cooldown_temp}°C)")
             updates.update({
@@ -2837,7 +2832,7 @@ def handle_finished_state_ejection(printer, printer_name, current_file, current_
             'order_id': current_order_id,
             'file': current_file
         })
-        
+
         # CRITICAL FIX: Set the in_progress flag immediately
         printer['ejection_in_progress'] = True
 
@@ -2869,7 +2864,7 @@ def handle_finished_state_ejection(printer, printer_name, current_file, current_
         else:
             # CRITICAL FIX: Prusa ejection - store ejection details AND update main PRINTERS list immediately
             gcode_file_name = f"ejection_{printer_name}_{int(time.time())}.gcode"
-            
+
             # Store pending ejection on the actual printer object in PRINTERS
             with WriteLock(printers_rwlock):
                 # Find this printer in the main PRINTERS list
@@ -2920,30 +2915,30 @@ def emergency_fix_stuck_printers():
                 })
                 fixed_count += 1
                 logging.warning(f"EMERGENCY: Fixed stuck printer {printer['name']}")
-        
+
         if fixed_count > 0:
             save_data(PRINTERS_FILE, PRINTERS)
             logging.warning(f"EMERGENCY: Fixed {fixed_count} stuck printers")
-    
+
     return fixed_count
 
 # Enhanced mass ejection function
 def trigger_mass_ejection_for_finished_printers(socketio, app):
     """Trigger ejection for all FINISHED printers that have ejection enabled"""
-    
+
     if get_ejection_paused():
         logging.warning("Mass ejection requested but ejection is still paused - aborting")
         return 0
-    
+
     logging.info("=== MASS EJECTION INITIATED ===")
-    
+
     # Find printers ready for mass ejection
     ready_printers = []
     with ReadLock(printers_rwlock):
         for printer in PRINTERS:
-            if (printer.get('state') == 'FINISHED' and 
+            if (printer.get('state') == 'FINISHED' and
                 printer.get('status') == 'Print Complete (Ejection Paused)'):
-                
+
                 # Check if ejection is actually needed
                 order_id = printer.get('order_id')
                 if order_id:
@@ -2958,13 +2953,13 @@ def trigger_mass_ejection_for_finished_printers(socketio, app):
                                     'order_id': order_id,
                                     'file': printer.get('file', 'unknown')
                                 })
-    
+
     if not ready_printers:
         logging.info("No printers ready for mass ejection")
         return 0
-    
+
     logging.info(f"Found {len(ready_printers)} printers ready for mass ejection")
-    
+
     # Mark all as queued first, then start ejections
     ejection_count = 0
     with WriteLock(printers_rwlock):
@@ -2972,7 +2967,7 @@ def trigger_mass_ejection_for_finished_printers(socketio, app):
             if any(p['name'] == printer['name'] for p in ready_printers):
                 # Set ejection state to queued
                 set_printer_ejection_state(printer['name'], 'queued', {'trigger': 'mass_ejection'})
-                
+
                 logging.info(f"MASS EJECTION: Queuing {printer['name']} for ejection")
                 printer.update({
                     "state": 'FINISHED',
@@ -2980,12 +2975,12 @@ def trigger_mass_ejection_for_finished_printers(socketio, app):
                     "manually_set": False
                 })
                 ejection_count += 1
-        
+
         save_data(PRINTERS_FILE, PRINTERS)
-    
+
     # Trigger status update to process the queued ejections
     threading.Timer(1.0, lambda: start_background_distribution(socketio, app)).start()
-    
+
     logging.info(f"=== MASS EJECTION: {ejection_count} printers queued ===")
     return ejection_count
 
@@ -3013,12 +3008,12 @@ def mark_group_ready(group_name, socketio=None):
                 })
                 count += 1
                 logging.info(f"Marked {printer['name']} in group {group_name} as READY")
-        
+
         save_data(PRINTERS_FILE, PRINTERS)
-        
+
         if count > 0:
             logging.info(f"Marked {count} printers in group {group_name} as READY")
-            
+
             # Emit status update if socketio is available
             if socketio:
                 with SafeLock(filament_lock):
@@ -3026,11 +3021,11 @@ def mark_group_ready(group_name, socketio=None):
                 with SafeLock(orders_lock):
                     orders_data = ORDERS.copy()
                 printers_copy = prepare_printer_data_for_broadcast(PRINTERS)
-                
+
                 socketio.emit('status_update', {
                     'printers': printers_copy,
                     'total_filament': total_filament,
                     'orders': orders_data
                 })
-        
+
         return count

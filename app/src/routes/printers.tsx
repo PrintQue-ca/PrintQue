@@ -1,18 +1,10 @@
 import { createFileRoute } from '@tanstack/react-router'
+import { Loader2, Plus, Settings, Trash2 } from 'lucide-react'
 import { useState } from 'react'
-import { usePrinters, useAddPrinter, useDeletePrinter } from '@/hooks'
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
-import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
-import { Label } from '@/components/ui/label'
+import { toast } from 'sonner'
 import { Badge } from '@/components/ui/badge'
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select'
+import { Button } from '@/components/ui/button'
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import {
   Dialog,
   DialogContent,
@@ -22,6 +14,15 @@ import {
   DialogTitle,
   DialogTrigger,
 } from '@/components/ui/dialog'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 import {
   Table,
   TableBody,
@@ -30,9 +31,8 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
-import { Plus, Trash2, Loader2, Settings } from 'lucide-react'
-import type { PrinterType, PrinterFormData } from '@/types'
-import { toast } from 'sonner'
+import { useAddPrinter, useDeletePrinter, usePrinters } from '@/hooks'
+import type { PrinterFormData, PrinterType } from '@/types'
 
 export const Route = createFileRoute('/printers')({ component: PrintersPage })
 
@@ -51,7 +51,7 @@ function PrintersPage() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
-    
+
     if (!formData.name || !formData.ip) {
       toast.error('Name and IP address are required')
       return
@@ -62,7 +62,7 @@ function PrintersPage() {
       toast.success('Printer added successfully')
       setIsDialogOpen(false)
       setFormData({ name: '', ip: '', type: 'bambu', api_key: '', serial_number: '' })
-    } catch (error) {
+    } catch (_error) {
       toast.error('Failed to add printer')
     }
   }
@@ -72,7 +72,7 @@ function PrintersPage() {
       try {
         await deletePrinter.mutateAsync(name)
         toast.success('Printer deleted')
-      } catch (error) {
+      } catch (_error) {
         toast.error('Failed to delete printer')
       }
     }
@@ -93,9 +93,7 @@ function PrintersPage() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-3xl font-bold tracking-tight">Printers</h1>
-          <p className="text-muted-foreground">
-            Manage your connected printers
-          </p>
+          <p className="text-muted-foreground">Manage your connected printers</p>
         </div>
         <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
           <DialogTrigger asChild>
@@ -135,7 +133,9 @@ function PrintersPage() {
                   <Label htmlFor="type">Printer Type</Label>
                   <Select
                     value={formData.type}
-                    onValueChange={(value: PrinterType) => setFormData({ ...formData, type: value })}
+                    onValueChange={(value: PrinterType) =>
+                      setFormData({ ...formData, type: value })
+                    }
                   >
                     <SelectTrigger>
                       <SelectValue placeholder="Select type" />
@@ -154,7 +154,9 @@ function PrintersPage() {
                       <Input
                         id="serial"
                         value={formData.serial_number}
-                        onChange={(e) => setFormData({ ...formData, serial_number: e.target.value })}
+                        onChange={(e) =>
+                          setFormData({ ...formData, serial_number: e.target.value })
+                        }
                         placeholder="Serial number"
                       />
                     </div>
@@ -203,9 +205,7 @@ function PrintersPage() {
       <Card>
         <CardHeader>
           <CardTitle>Connected Printers</CardTitle>
-          <CardDescription>
-            View and manage all printers connected to PrintQue
-          </CardDescription>
+          <CardDescription>View and manage all printers connected to PrintQue</CardDescription>
         </CardHeader>
         <CardContent>
           {isLoading ? (

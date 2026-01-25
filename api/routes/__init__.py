@@ -1,10 +1,9 @@
 # API Routes Package
 import os
-import copy
 import logging
 import platform
 import json
-from flask import redirect, url_for, flash, jsonify, render_template, request, current_app
+from flask import redirect, url_for, flash, jsonify, request, current_app
 from werkzeug.utils import secure_filename
 from .printers import register_printer_routes
 from .orders import register_order_routes
@@ -14,7 +13,7 @@ from .history import register_history_routes
 from .ejection_codes import register_ejection_codes_routes
 from services.state import (
     get_ejection_paused, set_ejection_paused,
-    PRINTERS, ORDERS, TOTAL_FILAMENT_CONSUMPTION,
+    PRINTERS, ORDERS,
     printers_rwlock, orders_lock, filament_lock,
     ReadLock, WriteLock, SafeLock,
     save_data, load_data, PRINTERS_FILE, ORDERS_FILE, TOTAL_FILAMENT_FILE,
@@ -27,7 +26,7 @@ from utils.logger import debug_log
 __all__ = [
     'register_routes',
     'register_printer_routes',
-    'register_order_routes', 
+    'register_order_routes',
     'register_misc_routes',
     'register_support_routes',
     'register_history_routes',
@@ -41,7 +40,7 @@ def register_routes(app, socketio):
     register_support_routes(app, socketio)
     register_history_routes(app, socketio)
     register_ejection_codes_routes(app, socketio)
-    
+
     # Ejection control routes
     @app.route('/pause_ejection', methods=['POST'])
     def pause_ejection():
@@ -59,18 +58,18 @@ def register_routes(app, socketio):
         """Resume ejection globally"""
         try:
             set_ejection_paused(False)
-            
+
             # Import here to avoid circular imports
             from services.printer_manager import trigger_mass_ejection_for_finished_printers
-            
+
             # Trigger mass ejection for all waiting FINISHED printers
             ejection_count = trigger_mass_ejection_for_finished_printers(socketio, app)
-            
+
             if ejection_count > 0:
                 flash(f"✅ Ejection resumed globally. {ejection_count} printers now ejecting.", "success")
             else:
                 flash("✅ Ejection resumed globally. No printers were waiting for ejection.", "success")
-            
+
             return redirect(url_for('index'))
         except Exception as e:
             flash(f"❌ Error resuming ejection: {str(e)}", "error")
@@ -83,7 +82,7 @@ def register_routes(app, socketio):
             'paused': get_ejection_paused(),
             'status': 'paused' if get_ejection_paused() else 'active'
         })
-    
+
     # API v1 routes for React frontend
     @app.route('/api/v1/ejection/status', methods=['GET'])
     def api_ejection_status():
@@ -92,7 +91,7 @@ def register_routes(app, socketio):
             'paused': get_ejection_paused(),
             'status': 'paused' if get_ejection_paused() else 'active'
         })
-    
+
     @app.route('/api/v1/ejection/pause', methods=['POST'])
     def api_pause_ejection():
         """API: Pause ejection globally"""
@@ -101,7 +100,7 @@ def register_routes(app, socketio):
             return jsonify({'success': True, 'message': 'Ejection paused globally'})
         except Exception as e:
             return jsonify({'success': False, 'error': str(e)}), 500
-    
+
     @app.route('/api/v1/ejection/resume', methods=['POST'])
     def api_resume_ejection():
         """API: Resume ejection globally"""
@@ -110,7 +109,7 @@ def register_routes(app, socketio):
             from services.printer_manager import trigger_mass_ejection_for_finished_printers
             ejection_count = trigger_mass_ejection_for_finished_printers(socketio, app)
             return jsonify({
-                'success': True, 
+                'success': True,
                 'message': 'Ejection resumed globally',
                 'printers_ejecting': ejection_count
             })
@@ -118,7 +117,7 @@ def register_routes(app, socketio):
             return jsonify({'success': False, 'error': str(e)}), 500
 
     # ==================== API v1 Routes for React Frontend ====================
-    
+
     # System routes
     @app.route('/api/v1/system/stats', methods=['GET'])
     def api_system_stats():
@@ -127,33 +126,33 @@ def register_routes(app, socketio):
             with SafeLock(filament_lock):
                 filament_data = load_data(TOTAL_FILAMENT_FILE, {"total_filament_used_g": 0})
                 total_filament_kg = filament_data.get("total_filament_used_g", 0) / 1000
-            
+
             with ReadLock(printers_rwlock):
                 printers_count = len(PRINTERS)
                 active_prints = len([p for p in PRINTERS if p['state'] == 'PRINTING'])
                 idle_printers = len([p for p in PRINTERS if p['state'] == 'READY'])
-            
+
             with SafeLock(orders_lock):
                 # Library count: total available files (non-deleted orders)
                 library_count = len([o for o in ORDERS if not o.get('deleted', False)])
                 # In queue: orders actively being printed (sent > 0 but not complete)
                 in_queue_count = len([
-                    o for o in ORDERS 
+                    o for o in ORDERS
                     if not o.get('deleted', False)
-                    and o.get('sent', 0) > 0 
+                    and o.get('sent', 0) > 0
                     and o.get('sent', 0) < o.get('quantity', 1)
                 ])
                 # Count orders completed today
                 from datetime import datetime
                 today = datetime.now().date()
                 completed_today = len([
-                    o for o in ORDERS 
-                    if o.get('sent', 0) >= o.get('quantity', 1) 
+                    o for o in ORDERS
+                    if o.get('sent', 0) >= o.get('quantity', 1)
                     and not o.get('deleted', False)
-                    and o.get('completed_at') 
+                    and o.get('completed_at')
                     and datetime.fromisoformat(o.get('completed_at', '').replace('Z', '+00:00')).date() == today
                 ])
-            
+
             # Return flat structure matching frontend Stats type
             return jsonify({
                 'total_filament': total_filament_kg,
@@ -197,27 +196,27 @@ def register_routes(app, socketio):
             import sys
             import time
             import psutil
-            
+
             # Get app version (you can update this as needed)
             version = app.config.get('APP_VERSION', '1.0.0')
-            
+
             # Get uptime - use process start time
             process = psutil.Process()
             uptime_seconds = time.time() - process.create_time()
-            
+
             # Get memory usage percentage
             memory = psutil.virtual_memory()
             memory_usage = memory.percent
-            
+
             # Get CPU usage percentage
             cpu_usage = psutil.cpu_percent(interval=0.1)
-            
+
             # Get Python version
             python_version = f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
-            
+
             # Get platform info
             platform_info = f"{platform.system()} {platform.release()}"
-            
+
             return jsonify({
                 'version': version,
                 'uptime': int(uptime_seconds),
@@ -269,7 +268,7 @@ def register_routes(app, socketio):
             from utils.logger import set_console_log_level, get_console_log_level
             data = request.get_json()
             level = data.get('level', 'INFO').upper()
-            
+
             if set_console_log_level(level):
                 return jsonify({
                     'success': True,
@@ -301,10 +300,10 @@ def register_routes(app, socketio):
             data = request.get_json()
             flag = data.get('flag')
             enabled = data.get('enabled', False)
-            
+
             if not flag:
                 return jsonify({'error': 'Flag name required'}), 400
-            
+
             if set_debug_flag(flag, enabled):
                 return jsonify({
                     'success': True,
@@ -346,11 +345,11 @@ def register_routes(app, socketio):
 
             if not name or not ip:
                 return jsonify({'error': 'Name and IP address are required'}), 400
-            
+
             # Check license limits
             with ReadLock(printers_rwlock):
                 current_count = len(PRINTERS)
-            
+
             max_printers = app.config.get('MAX_PRINTERS', 3)
             if current_count >= max_printers:
                 return jsonify({'error': f'Printer limit reached ({max_printers})'}), 403
@@ -460,7 +459,7 @@ def register_routes(app, socketio):
                             start_background_distribution(socketio, app)
                             return jsonify({'success': True})
                         else:
-                            return jsonify({'error': f'Printer is not in FINISHED or EJECTING state'}), 400
+                            return jsonify({'error': 'Printer is not in FINISHED or EJECTING state'}), 400
             return jsonify({'error': 'Printer not found'}), 404
         except Exception as e:
             return jsonify({'error': str(e)}), 500
@@ -500,39 +499,39 @@ def register_routes(app, socketio):
             file = request.files.get('file')
             if not file:
                 return jsonify({'error': 'No file provided'}), 400
-            
+
             # Validate file type
             filename = secure_filename(file.filename)
             valid_extensions = ['.gcode', '.3mf', '.stl']
             if not any(filename.lower().endswith(ext) for ext in valid_extensions):
                 return jsonify({'error': 'Invalid file type. Must be .gcode, .3mf, or .stl'}), 400
-            
+
             quantity = int(request.form.get('quantity', 1))
-            
+
             # Handle optional order name
             order_name = request.form.get('name', '').strip()
-            
+
             # Handle groups - can be JSON string or list
             groups_raw = request.form.get('groups', '[]')
             try:
                 groups = json.loads(groups_raw) if groups_raw else []
             except json.JSONDecodeError:
                 groups = [groups_raw] if groups_raw else []
-            
-            # Sanitize group names  
+
+            # Sanitize group names
             groups = [sanitize_group_name(str(g)) for g in groups if g]
             if not groups:
                 groups = ['Default']
-            
+
             # Load default settings
             default_settings = load_default_settings()
-            
+
             # Handle ejection settings
             ejection_enabled = request.form.get('ejection_enabled', 'false').lower() == 'true'
             end_gcode = request.form.get('end_gcode', '').strip()
             ejection_code_id = request.form.get('ejection_code_id', '').strip() or None
             ejection_code_name = request.form.get('ejection_code_name', '').strip() or None
-            
+
             # Handle cooldown temperature (Bambu printers only)
             cooldown_temp_str = request.form.get('cooldown_temp', '').strip()
             cooldown_temp = None
@@ -547,20 +546,20 @@ def register_routes(app, socketio):
                 except ValueError:
                     debug_log('cooldown', f"Could not parse cooldown_temp '{cooldown_temp_str}'", 'warning')
                     cooldown_temp = None  # Invalid value
-            
+
             # Use default if ejection enabled but no custom gcode provided
             if ejection_enabled and not end_gcode:
                 end_gcode = default_settings.get('default_end_gcode', '')
-            
+
             # Save file
             upload_folder = current_app.config.get('UPLOAD_FOLDER', 'uploads')
             os.makedirs(upload_folder, exist_ok=True)
             filepath = os.path.join(upload_folder, filename)
             file.save(filepath)
-            
+
             # Extract filament usage
             filament_g = extract_filament_from_file(filepath)
-            
+
             with SafeLock(orders_lock):
                 # Find next available ID
                 existing_int_ids = []
@@ -570,9 +569,9 @@ def register_routes(app, socketio):
                         existing_int_ids.append(int_id)
                     except (ValueError, TypeError):
                         pass
-                
+
                 order_id = max(existing_int_ids, default=0) + 1
-                
+
                 order = {
                     'id': order_id,
                     'filename': filename,
@@ -594,16 +593,16 @@ def register_routes(app, socketio):
                 save_data(ORDERS_FILE, ORDERS)
                 logging.info(f"Created order {order_id}: {order_name or filename}, qty={quantity}")
                 debug_log('cooldown', f"Order {order_id} created with cooldown_temp={cooldown_temp}")
-            
+
             # Trigger distribution
             start_background_distribution(socketio, app)
-            
+
             return jsonify({
                 'success': True,
                 'message': f'Order created for {quantity} print(s) of {filename}',
                 'order_id': order_id
             })
-            
+
         except Exception as e:
             logging.error(f"Error creating order via API: {str(e)}")
             return jsonify({'error': str(e)}), 500
@@ -684,7 +683,7 @@ def register_routes(app, socketio):
         try:
             data = request.get_json()
             direction = data.get('direction', 'up')
-            
+
             with SafeLock(orders_lock):
                 # Find the order index
                 order_index = None
@@ -692,17 +691,17 @@ def register_routes(app, socketio):
                     if order.get('id') == order_id and not order.get('deleted', False):
                         order_index = i
                         break
-                
+
                 if order_index is None:
                     return jsonify({'error': 'Order not found'}), 404
-                
+
                 if direction == 'up' and order_index > 0:
                     ORDERS[order_index], ORDERS[order_index - 1] = ORDERS[order_index - 1], ORDERS[order_index]
                 elif direction == 'down' and order_index < len(ORDERS) - 1:
                     ORDERS[order_index], ORDERS[order_index + 1] = ORDERS[order_index + 1], ORDERS[order_index]
-                
+
                 save_data(ORDERS_FILE, ORDERS)
-            
+
             return jsonify({'success': True})
         except Exception as e:
             return jsonify({'error': str(e)}), 500
@@ -713,14 +712,14 @@ def register_routes(app, socketio):
         try:
             data = request.get_json()
             new_index = data.get('new_index')
-            
+
             if new_index is None:
                 return jsonify({'error': 'new_index is required'}), 400
-            
+
             with SafeLock(orders_lock):
                 # Filter to only non-deleted orders for reordering
                 active_indices = [i for i, order in enumerate(ORDERS) if not order.get('deleted', False)]
-                
+
                 # Find the order's current index in active orders
                 current_active_index = None
                 current_real_index = None
@@ -729,23 +728,23 @@ def register_routes(app, socketio):
                         current_active_index = active_idx
                         current_real_index = real_idx
                         break
-                
+
                 if current_active_index is None:
                     return jsonify({'error': 'Order not found'}), 404
-                
+
                 # Clamp new_index to valid range
                 new_index = max(0, min(new_index, len(active_indices) - 1))
-                
+
                 if current_active_index == new_index:
                     return jsonify({'success': True})  # No change needed
-                
+
                 # Remove the order from its current position
                 order = ORDERS.pop(current_real_index)
-                
+
                 # Calculate the new real index
                 # Re-calculate active indices after removal
                 active_indices_after = [i for i, o in enumerate(ORDERS) if not o.get('deleted', False)]
-                
+
                 if new_index >= len(active_indices_after):
                     # Insert at the end (after the last active order)
                     if active_indices_after:
@@ -754,10 +753,10 @@ def register_routes(app, socketio):
                         new_real_index = 0
                 else:
                     new_real_index = active_indices_after[new_index]
-                
+
                 ORDERS.insert(new_real_index, order)
                 save_data(ORDERS_FILE, ORDERS)
-            
+
             return jsonify({'success': True})
         except Exception as e:
             return jsonify({'error': str(e)}), 500
@@ -781,19 +780,19 @@ def register_routes(app, socketio):
         """API: Save default ejection settings"""
         try:
             data = request.get_json()
-            
+
             # Load current settings
             current_settings = load_default_settings()
-            
+
             # Update settings
             if 'ejection_enabled' in data:
                 current_settings['default_ejection_enabled'] = bool(data['ejection_enabled'])
             if 'end_gcode' in data:
                 current_settings['default_end_gcode'] = data['end_gcode'].strip()
-            
+
             # Save settings
             success = save_default_settings(current_settings)
-            
+
             if success:
                 logging.info(f"API: Saved default ejection settings: enabled={current_settings.get('default_ejection_enabled')}")
                 return jsonify({
@@ -802,7 +801,7 @@ def register_routes(app, socketio):
                 })
             else:
                 return jsonify({'error': 'Failed to save settings'}), 500
-                
+
         except Exception as e:
             logging.error(f"Error saving default ejection settings: {str(e)}")
             return jsonify({'error': str(e)}), 500

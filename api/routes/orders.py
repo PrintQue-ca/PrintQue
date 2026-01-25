@@ -1,17 +1,14 @@
 import os
-import asyncio
 from datetime import datetime
 from flask import Blueprint, request, redirect, url_for, flash, jsonify
 from werkzeug.utils import secure_filename
 from services.state import (
-    PRINTERS, TOTAL_FILAMENT_CONSUMPTION, ORDERS, 
-    save_data, load_data, encrypt_api_key, decrypt_api_key, 
-    logging, orders_lock, filament_lock, printers_rwlock, SafeLock, ReadLock, WriteLock, get_order_lock,
-    PRINTERS_FILE, TOTAL_FILAMENT_FILE, ORDERS_FILE,
-    validate_gcode_file, increment_order_sent_count, sanitize_group_name
+    PRINTERS, TOTAL_FILAMENT_CONSUMPTION, ORDERS,
+    save_data, logging, orders_lock, filament_lock, printers_rwlock, SafeLock, ReadLock, get_order_lock,
+    ORDERS_FILE,
+    validate_gcode_file, sanitize_group_name
 )
-from services.printer_manager import distribute_orders_async, extract_filament_from_file, start_background_distribution
-from utils.config import Config
+from services.printer_manager import extract_filament_from_file, start_background_distribution
 from services.default_settings import load_default_settings, save_default_settings
 from utils.logger import debug_log
 
@@ -37,25 +34,25 @@ def register_order_routes(app, socketio):
     @app.route('/start_print', methods=['POST'])
     def start_print():
         global TOTAL_FILAMENT_CONSUMPTION, ORDERS
-        
+
         file = request.files.get('gcode_file')
         valid, message = validate_gcode_file(file)
         if not valid:
             flash(message)
             return redirect(url_for('index'))
-        
+
         quantity = request.form.get('quantity', type=int, default=1)
         # Updated to handle text-based groups with sanitization
         groups = [sanitize_group_name(g) for g in request.form.getlist('groups') if g.strip()]
         if not groups:
             flash("No printer groups selected")
             return redirect(url_for('index'))
-            
+
         default_settings = load_default_settings()
-        default_ejection = default_settings.get('default_ejection_enabled', False)
-        
+        default_settings.get('default_ejection_enabled', False)
+
         ejection_enabled = request.form.get('ejection_enabled') == 'on'
-        
+
         end_gcode = request.form.get('end_gcode', '').strip()
         if ejection_enabled and not end_gcode:
             end_gcode = default_settings.get('default_end_gcode', '')
@@ -89,10 +86,10 @@ def register_order_routes(app, socketio):
                 except (ValueError, TypeError):
                     # If it fails, it's a UUID or other string - skip for max calculation
                     pass
-            
+
             # Find next available integer ID
             order_id = max(existing_int_ids, default=0) + 1
-            
+
             order = {
                 'id': order_id,  # Always use integer for new orders
                 'filename': filename,
@@ -111,11 +108,11 @@ def register_order_routes(app, socketio):
             save_data(ORDERS_FILE, ORDERS)
             logging.info(f"Created order {order_id}: {filename}, qty={quantity}")
             debug_log('cooldown', f"Order {order_id} created with cooldown_temp={cooldown_temp}")
-        
+
         flash(f"✅ Order for {quantity} print(s) of {filename} added successfully")
-        
+
         start_background_distribution(socketio, app)
-        
+
         return redirect(url_for('index'))
 
     @app.route('/save_default_end_gcode', methods=['POST'])
@@ -125,34 +122,34 @@ def register_order_routes(app, socketio):
             data = request.get_json()
             default_gcode = data.get('default_gcode', '').strip()
             ejection_enabled = data.get('ejection_enabled', False)
-            
+
             # Load current settings
             current_settings = load_default_settings()
-            
+
             # Update settings
             current_settings['default_end_gcode'] = default_gcode
             current_settings['default_ejection_enabled'] = ejection_enabled
-            
+
             # Save settings
             success = save_default_settings(current_settings)
-            
+
             if success:
                 logging.info(f"Default settings saved: ejection_enabled={ejection_enabled}, gcode_length={len(default_gcode)}")
                 return jsonify({
-                    'success': True, 
+                    'success': True,
                     'message': 'Default end G-code settings saved successfully!'
                 })
             else:
                 logging.error("Failed to save default settings")
                 return jsonify({
-                    'success': False, 
+                    'success': False,
                     'message': 'Failed to save default settings. Please check the logs.'
                 }), 500
-                
+
         except Exception as e:
             logging.error(f"Error saving default end G-code: {str(e)}")
             return jsonify({
-                'success': False, 
+                'success': False,
                 'message': f'Error saving settings: {str(e)}'
             }), 500
 
@@ -160,7 +157,7 @@ def register_order_routes(app, socketio):
     def start_specific_print():
         order_id = request.form.get('order_id', type=int)
         printer_id = request.form.get('printer_id', type=int)
-        
+
         # Find the order
         selected_order = None
         with SafeLock(orders_lock):
@@ -168,11 +165,11 @@ def register_order_routes(app, socketio):
                 if compare_order_ids(order['id'], order_id):
                     selected_order = order.copy()
                     break
-        
+
         if not selected_order:
             flash(f"Order {order_id} not found")
             return redirect(url_for('index'))
-        
+
         # Find the printer
         with ReadLock(printers_rwlock):
             if 0 <= printer_id < len(PRINTERS):
@@ -183,10 +180,10 @@ def register_order_routes(app, socketio):
             else:
                 flash("Printer not found")
                 return redirect(url_for('index'))
-        
+
         # Trigger a background distribution
         start_background_distribution(socketio, app)
-        
+
         flash(f"Print distribution started. Checking if order {order_id} can be sent to printer {printer_id}...")
         return redirect(url_for('index'))
 
@@ -194,7 +191,7 @@ def register_order_routes(app, socketio):
     def move_order_up():
         data = request.get_json()
         order_id = data.get('order_id')
-            
+
         with SafeLock(orders_lock):
             for i, order in enumerate(ORDERS):
                 if compare_order_ids(order['id'], order_id) and i > 0:
@@ -214,7 +211,7 @@ def register_order_routes(app, socketio):
     def move_order_down():
         data = request.get_json()
         order_id = data.get('order_id')
-            
+
         with SafeLock(orders_lock):
             for i, order in enumerate(ORDERS):
                 if compare_order_ids(order['id'], order_id) and i < len(ORDERS) - 1:
@@ -239,16 +236,16 @@ def register_order_routes(app, socketio):
                     # Use safe comparison function
                     if compare_order_ids(order['id'], order_id):
                         # Hard delete the order by removing it from the list
-                        removed_order = ORDERS.pop(i)
+                        ORDERS.pop(i)
                         save_data(ORDERS_FILE, ORDERS)
                         logging.debug(f"Hard deleted order {order_id}. Remaining ORDERS IDs: {[o['id'] for o in ORDERS]}")
-                        
+
                         with SafeLock(filament_lock):
                             total_filament = TOTAL_FILAMENT_CONSUMPTION / 1000
                         orders_data = ORDERS.copy()
                         with ReadLock(printers_rwlock):
                             socketio.emit('status_update', {'printers': PRINTERS, 'total_filament': total_filament, 'orders': orders_data})
-                        
+
                         flash(f"✅ Order {order_id} permanently deleted")
                         return redirect(url_for('index'))
                 flash(f"⚠️ Order {order_id} not found")
@@ -260,15 +257,15 @@ def register_order_routes(app, socketio):
         try:
             data = request.get_json()
             new_quantity = data.get('quantity')
-            
+
             if new_quantity is None:
                 return jsonify({'success': False, 'error': 'No quantity provided'}), 400
-            
+
             try:
                 new_quantity = int(new_quantity)
             except ValueError:
                 return jsonify({'success': False, 'error': 'Invalid quantity value'}), 400
-            
+
             with SafeLock(get_order_lock(order_id)):
                 with SafeLock(orders_lock):
                     # Find the order
@@ -276,18 +273,18 @@ def register_order_routes(app, socketio):
                     for order in ORDERS:
                         if compare_order_ids(order['id'], order_id):
                             order_found = True
-                            
+
                             # Validate new quantity
                             if new_quantity < order['sent']:
                                 return jsonify({
-                                    'success': False, 
+                                    'success': False,
                                     'error': f'Quantity cannot be less than {order["sent"]} (already sent)'
                                 }), 400
-                            
+
                             # Update the quantity
                             old_quantity = order['quantity']
                             order['quantity'] = new_quantity
-                            
+
                             # Update status based on new quantity
                             # Use 'fulfilled' instead of 'completed' to keep it in active orders
                             if order['sent'] >= order['quantity']:
@@ -298,21 +295,21 @@ def register_order_routes(app, socketio):
                                 order['status'] = 'partial'
                             else:
                                 order['status'] = 'pending'
-                            
+
                             save_data(ORDERS_FILE, ORDERS)
-                            
+
                             # Emit update
                             with SafeLock(filament_lock):
                                 total_filament = TOTAL_FILAMENT_CONSUMPTION / 1000
                             with ReadLock(printers_rwlock):
                                 printers_data = PRINTERS.copy()
-                            
+
                             socketio.emit('status_update', {
                                 'printers': printers_data,
                                 'total_filament': total_filament,
                                 'orders': ORDERS.copy()
                             })
-                            
+
                             return jsonify({
                                 'success': True,
                                 'order_id': order_id,
@@ -321,10 +318,10 @@ def register_order_routes(app, socketio):
                                 'sent': order['sent'],
                                 'status': order['status']
                             })
-                    
+
                     if not order_found:
                         return jsonify({'success': False, 'error': 'Order not found'}), 404
-                        
+
         except Exception as e:
             logging.error(f"Error updating order quantity: {str(e)}")
             return jsonify({'success': False, 'error': str(e)}), 500

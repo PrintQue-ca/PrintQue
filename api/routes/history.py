@@ -1,10 +1,10 @@
-from flask import render_template, jsonify, request
-from datetime import datetime, timedelta
+from flask import render_template, jsonify
+from datetime import datetime
 import os
 import json
 import logging
 import uuid
-from services.state import ORDERS, SafeLock, orders_lock, load_data
+from services.state import ORDERS, SafeLock, orders_lock
 import traceback
 
 def register_history_routes(app, socketio):
@@ -25,7 +25,7 @@ def register_history_routes(app, socketio):
                 # Fallback to default location
                 log_dir = os.path.join(os.path.expanduser("~"), "PrintQueData")
                 logging.warning(f"LOG_DIR not found in app config, using fallback: {log_dir}")
-            
+
             # Use direct path to history file (not nested in 'logs' subfolder)
             history_file = os.path.join(log_dir, 'print_history.json')
             history_data = []
@@ -64,16 +64,16 @@ def register_history_routes(app, socketio):
                     logging.error(f"Error reading history file: {e}")
             else:
                 logging.info("No history file found - starting with empty history")
-            
+
             # Get all orders (both active and completed) from current state
             with SafeLock(orders_lock):
                 active_order_count = 0
                 logging.info(f"Processing {len(ORDERS)} orders from current state")
-                
+
                 for order in ORDERS:
                     if not order.get('deleted', False):  # Include all non-deleted orders
                         active_order_count += 1
-                        
+
                         # Calculate duration if we have timestamps
                         duration = None
                         if 'created_at' in order and order['created_at']:
@@ -83,7 +83,7 @@ def register_history_routes(app, socketio):
                                 if created_str.endswith('Z'):
                                     created_str = created_str.replace('Z', '+00:00')
                                 created = datetime.fromisoformat(created_str)
-                                
+
                                 if order.get('completed_at'):
                                     completed_str = order['completed_at']
                                     if completed_str.endswith('Z'):
@@ -134,14 +134,14 @@ def register_history_routes(app, socketio):
                         existing_entry = next((h for h in history_data if h.get('id') == order.get('id') and not h.get('is_active')), None)
                         if not existing_entry:
                             history_data.append(history_item)
-                            
+
                             # If it's truly completed (fulfilled and deleted), save to history file
                             if is_truly_completed:
                                 try:
                                     save_completed_order_to_history(order, history_file)
                                 except Exception as e:
                                     logging.error(f"Error saving completed order to history: {e}")
-                
+
                 logging.info(f"Processed {active_order_count} active orders from current state")
 
             # Sort by creation date (newest first), with active orders at the top
@@ -175,7 +175,7 @@ def register_history_routes(app, socketio):
                 'history': history_data,
                 'groups': sorted(all_groups_str)  # Now all strings, can be sorted
             }
-            
+
             logging.info(f"Returning {len(history_data)} history items with {len(all_groups_str)} unique groups")
             return jsonify(result)
 
@@ -192,7 +192,7 @@ def register_history_routes(app, socketio):
         try:
             # Ensure the directory exists
             os.makedirs(os.path.dirname(history_file), exist_ok=True)
-            
+
             # Prepare history entry
             history_entry = {
                 'id': order.get('id'),
@@ -208,7 +208,7 @@ def register_history_routes(app, socketio):
                 'completed_at': order.get('completed_at', datetime.now().isoformat()),
                 'duration_seconds': None
             }
-            
+
             # Calculate duration if possible
             if 'created_at' in order and order['created_at']:
                 try:
@@ -216,7 +216,7 @@ def register_history_routes(app, socketio):
                     if created_str.endswith('Z'):
                         created_str = created_str.replace('Z', '+00:00')
                     created = datetime.fromisoformat(created_str)
-                    
+
                     if order.get('completed_at'):
                         completed_str = order['completed_at']
                         if completed_str.endswith('Z'):
@@ -227,24 +227,24 @@ def register_history_routes(app, socketio):
                         if created.tzinfo:
                             from datetime import timezone
                             completed = completed.replace(tzinfo=timezone.utc)
-                    
+
                     duration = (completed - created).total_seconds()
                     history_entry['duration_seconds'] = duration
                 except (ValueError, TypeError) as e:
                     logging.warning(f"Error calculating duration for completed order {order.get('id')}: {e}")
-            
+
             # Ensure groups is a list
             if isinstance(history_entry['groups'], str):
                 history_entry['groups'] = [history_entry['groups']]
             elif not history_entry['groups']:
                 history_entry['groups'] = ['Unknown']
-            
+
             # Append to history file (one JSON object per line)
             with open(history_file, 'a', encoding='utf-8') as f:
                 f.write(json.dumps(history_entry) + '\n')
-                
+
             logging.info(f"Saved completed order {order.get('id')} to history file")
-            
+
         except Exception as e:
             logging.error(f"Error saving order to history file: {e}")
             raise

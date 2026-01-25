@@ -1,16 +1,26 @@
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import {
+  AlertTriangle,
+  CheckCircle,
+  MoreVertical,
+  Pause,
+  Play,
+  RefreshCw,
+  Snowflake,
+  Square,
+  Thermometer,
+} from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Progress } from '@/components/ui/progress'
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
-import { MoreVertical, Play, Pause, Square, CheckCircle, Thermometer, AlertTriangle, RefreshCw, Snowflake } from 'lucide-react'
+import { Progress } from '@/components/ui/progress'
+import { useClearError, useMarkReady, usePausePrint, useResumePrint, useStopPrint } from '@/hooks'
 import type { Printer } from '@/types'
-import { useStopPrint, usePausePrint, useResumePrint, useMarkReady, useClearError } from '@/hooks'
 
 interface PrinterCardProps {
   printer: Printer
@@ -86,7 +96,9 @@ export function PrinterCard({ printer }: PrinterCardProps) {
         {isPrinting || isPaused ? (
           <div className="space-y-2">
             <div className="flex items-center justify-between text-sm">
-              <span className="truncate max-w-[200px]">{printer.current_file || 'Unknown file'}</span>
+              <span className="truncate max-w-[200px]">
+                {printer.current_file || 'Unknown file'}
+              </span>
               <span className="font-medium">{printer.progress || 0}%</span>
             </div>
             <Progress value={printer.progress || 0} className="h-2" />
@@ -184,7 +196,9 @@ export function PrinterCard({ printer }: PrinterCardProps) {
                       </p>
                       <ul className="text-xs text-red-600 dark:text-red-400 list-disc list-inside">
                         {printer.hms_alerts.map((alert, index) => (
-                          <li key={index} className="break-all">{alert}</li>
+                          <li key={index} className="break-all">
+                            {alert}
+                          </li>
                         ))}
                       </ul>
                     </div>
@@ -192,17 +206,19 @@ export function PrinterCard({ printer }: PrinterCardProps) {
                 </div>
               </div>
             </div>
-            
+
             {/* Action Buttons */}
             <div className="flex gap-2">
-              <Button 
-                size="sm" 
+              <Button
+                size="sm"
                 variant="outline"
                 onClick={handleClearError}
                 disabled={clearError.isPending}
                 className="flex-1"
               >
-                <RefreshCw className={`h-4 w-4 mr-1 ${clearError.isPending ? 'animate-spin' : ''}`} />
+                <RefreshCw
+                  className={`h-4 w-4 mr-1 ${clearError.isPending ? 'animate-spin' : ''}`}
+                />
                 {clearError.isPending ? 'Clearing...' : 'Clear Error'}
               </Button>
             </div>
@@ -226,7 +242,7 @@ export function PrinterCard({ printer }: PrinterCardProps) {
             </DropdownMenu>
           </div>
         )}
-        
+
         {/* Temperature display */}
         {showTemps && (
           <div className="flex items-center gap-4 mt-3 pt-3 border-t text-xs text-muted-foreground">

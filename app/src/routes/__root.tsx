@@ -1,16 +1,21 @@
-import { HeadContent, Scripts, Link, Outlet, createRootRouteWithContext } from '@tanstack/react-router'
-import { TanStackRouterDevtoolsPanel } from '@tanstack/react-router-devtools'
 import { TanStackDevtools } from '@tanstack/react-devtools'
-import { ReactQueryDevtools } from '@tanstack/react-query-devtools'
-import { QueryClientProvider } from '@tanstack/react-query'
 import type { QueryClient } from '@tanstack/react-query'
-import { Toaster } from 'sonner'
+import { QueryClientProvider } from '@tanstack/react-query'
+import { ReactQueryDevtools } from '@tanstack/react-query-devtools'
+import {
+  createRootRouteWithContext,
+  HeadContent,
+  Link,
+  Outlet,
+  Scripts,
+} from '@tanstack/react-router'
+import { TanStackRouterDevtoolsPanel } from '@tanstack/react-router-devtools'
 import { useEffect } from 'react'
-
+import { Toaster } from 'sonner'
+import { Button } from '@/components/ui/button'
+import { useTheme } from '@/hooks'
 import { initSocket } from '@/lib/socket'
 import { queryClient } from '@/router'
-import { useTheme } from '@/hooks'
-import { Button } from '@/components/ui/button'
 import appCss from '../styles.css?url'
 
 function NotFound() {
@@ -63,7 +68,7 @@ export const Route = createRootRouteWithContext<{
 
 function ThemeToggle() {
   const { theme, toggleTheme } = useTheme()
-  
+
   return (
     <Button
       variant="ghost"
@@ -182,7 +187,7 @@ function Footer() {
 
 function RootComponent() {
   const { theme } = useTheme()
-  
+
   // Initialize socket connection when app loads
   useEffect(() => {
     initSocket(queryClient)

@@ -1,6 +1,15 @@
 // Printer types
 export type PrinterType = 'bambu' | 'prusa' | 'octoprint'
-export type PrinterStatus = 'IDLE' | 'READY' | 'PRINTING' | 'FINISHED' | 'ERROR' | 'EJECTING' | 'COOLING' | 'PAUSED' | 'OFFLINE'
+export type PrinterStatus =
+  | 'IDLE'
+  | 'READY'
+  | 'PRINTING'
+  | 'FINISHED'
+  | 'ERROR'
+  | 'EJECTING'
+  | 'COOLING'
+  | 'PAUSED'
+  | 'OFFLINE'
 
 export interface Printer {
   name: string
@@ -22,7 +31,7 @@ export interface Printer {
   enabled?: boolean
   // Error state information
   error_message?: string
-  hms_alerts?: string[]  // Bambu HMS (Health Management System) alerts
+  hms_alerts?: string[] // Bambu HMS (Health Management System) alerts
 }
 
 export interface PrinterFormData {
@@ -40,7 +49,7 @@ export type OrderStatus = 'active' | 'completed' | 'paused'
 export interface Order {
   id: number
   filename: string
-  name?: string  // Optional custom name for the order
+  name?: string // Optional custom name for the order
   quantity: number
   sent: number
   priority: number
@@ -49,10 +58,10 @@ export interface Order {
   created_at?: string
   filepath?: string
   ejection_enabled?: boolean
-  ejection_code_id?: string  // Reference to saved ejection code
-  ejection_code_name?: string  // Name of the ejection code (for display)
-  end_gcode?: string  // The actual G-code content
-  cooldown_temp?: number  // Bed temperature to wait for before ejection (Bambu only)
+  ejection_code_id?: string // Reference to saved ejection code
+  ejection_code_name?: string // Name of the ejection code (for display)
+  end_gcode?: string // The actual G-code content
+  cooldown_temp?: number // Bed temperature to wait for before ejection (Bambu only)
 }
 
 export interface OrderFormData {

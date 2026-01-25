@@ -4,7 +4,6 @@ eventlet.monkey_patch()
 
 import os
 import sys
-import uuid
 import webbrowser
 import threading
 from flask import Flask, send_from_directory, send_file
@@ -12,7 +11,7 @@ from flask_socketio import SocketIO
 from flask_cors import CORS
 from routes import register_routes
 from services.state import initialize_state
-from services.printer_manager import start_background_tasks, close_connection_pool, get_minutes_since_finished
+from services.printer_manager import start_background_tasks, close_connection_pool
 from utils.config import Config
 import asyncio
 import logging
@@ -26,7 +25,7 @@ os.makedirs(LOG_DIR, exist_ok=True)
 LOG_FILE = os.path.join(LOG_DIR, "app.log")
 
 # Import log level configuration from logger module
-from utils.logger import get_console_log_level, LOG_LEVELS, console_handler as logger_console_handler
+from utils.logger import get_console_log_level, LOG_LEVELS
 
 # Set up logging with file handler at DEBUG (captures everything) and console at configured level
 file_handler = logging.FileHandler(LOG_FILE)
@@ -111,25 +110,25 @@ def serve_frontend(path):
     # Skip API routes and socket.io
     if path.startswith('api/') or path.startswith('socket.io'):
         return '', 404
-    
+
     # Skip static files
     if path.startswith('static/'):
         return send_from_directory(static_folder, path[7:])
-    
+
     # Check if frontend_dist exists (packaged build)
     if os.path.exists(frontend_folder):
         # Try to serve the exact file first
         file_path = os.path.join(frontend_folder, path)
         if path and os.path.exists(file_path) and os.path.isfile(file_path):
             return send_from_directory(frontend_folder, path)
-        
+
         # For SPA routing, return the main HTML file
         # TanStack Start uses _shell.html, standard builds use index.html
         for html_file in ['index.html', '_shell.html']:
             html_path = os.path.join(frontend_folder, html_file)
             if os.path.exists(html_path):
                 return send_file(html_path)
-    
+
     # Fallback: Return a simple status page if no frontend is available
     return '''
     <!DOCTYPE html>

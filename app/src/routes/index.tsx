@@ -1,12 +1,12 @@
 import { createFileRoute } from '@tanstack/react-router'
-import { usePrinters, useOrders } from '@/hooks'
-import { StatsCards } from '@/components/layout/StatsCards'
-import { PrinterCard } from '@/components/printers/PrinterCard'
-import { OrdersTable } from '@/components/orders/OrdersTable'
-import { NewOrderForm } from '@/components/orders/NewOrderForm'
-import { EjectionCodesManager } from '@/components/orders/EjectionCodesManager'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Loader2 } from 'lucide-react'
+import { StatsCards } from '@/components/layout/StatsCards'
+import { EjectionCodesManager } from '@/components/orders/EjectionCodesManager'
+import { NewOrderForm } from '@/components/orders/NewOrderForm'
+import { OrdersTable } from '@/components/orders/OrdersTable'
+import { PrinterCard } from '@/components/printers/PrinterCard'
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { useOrders, usePrinters } from '@/hooks'
 
 export const Route = createFileRoute('/')({ component: Dashboard })
 
@@ -18,9 +18,7 @@ function Dashboard() {
     <div className="space-y-6">
       <div>
         <h1 className="text-3xl font-bold tracking-tight">Dashboard</h1>
-        <p className="text-muted-foreground">
-          Monitor and manage your print library
-        </p>
+        <p className="text-muted-foreground">Monitor and manage your print library</p>
       </div>
 
       {/* Stats Overview */}

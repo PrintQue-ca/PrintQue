@@ -1,8 +1,8 @@
 import { createFileRoute } from '@tanstack/react-router'
-import { useLicense } from '@/hooks'
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
+import { CheckCircle, Github, Heart, Loader2, Printer, Shield } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
-import { Loader2, Shield, CheckCircle, Printer, Heart, Github } from 'lucide-react'
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { useLicense } from '@/hooks'
 
 export const Route = createFileRoute('/license')({ component: LicensePage })
 
@@ -21,9 +21,7 @@ function LicensePage() {
     <div className="space-y-6">
       <div>
         <h1 className="text-3xl font-bold tracking-tight">License</h1>
-        <p className="text-muted-foreground">
-          PrintQue Open Source Edition
-        </p>
+        <p className="text-muted-foreground">PrintQue Open Source Edition</p>
       </div>
 
       <div className="grid gap-6 md:grid-cols-2">
@@ -33,9 +31,7 @@ function LicensePage() {
               <Shield className="h-5 w-5" />
               License Status
             </CardTitle>
-            <CardDescription>
-              Open source software - all features enabled
-            </CardDescription>
+            <CardDescription>Open source software - all features enabled</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="flex items-center justify-between">
@@ -48,9 +44,7 @@ function LicensePage() {
 
             <div className="flex items-center justify-between">
               <span className="text-sm text-muted-foreground">Edition</span>
-              <Badge className="bg-green-600">
-                {license?.tier || 'Open Source'}
-              </Badge>
+              <Badge className="bg-green-600">{license?.tier || 'Open Source'}</Badge>
             </div>
 
             <div className="flex items-center justify-between">
@@ -71,9 +65,7 @@ function LicensePage() {
               <Printer className="h-5 w-5" />
               Features
             </CardTitle>
-            <CardDescription>
-              All features included - no restrictions
-            </CardDescription>
+            <CardDescription>All features included - no restrictions</CardDescription>
           </CardHeader>
           <CardContent>
             <ul className="space-y-3">
@@ -116,37 +108,35 @@ function LicensePage() {
             <Heart className="h-5 w-5 text-red-500" />
             Support the Project
           </CardTitle>
-          <CardDescription>
-            PrintQue is free and open source software
-          </CardDescription>
+          <CardDescription>PrintQue is free and open source software</CardDescription>
         </CardHeader>
         <CardContent>
           <div className="space-y-4">
             <p className="text-muted-foreground">
-              PrintQue is developed and maintained by the community. If you find it useful, 
-              consider supporting the project:
+              PrintQue is developed and maintained by the community. If you find it useful, consider
+              supporting the project:
             </p>
             <div className="flex flex-wrap gap-4">
-              <a 
-                href="https://github.com/PrintQue/PrintQue" 
-                target="_blank" 
+              <a
+                href="https://github.com/PrintQue/PrintQue"
+                target="_blank"
                 rel="noopener noreferrer"
                 className="inline-flex items-center gap-2 px-4 py-2 rounded-md bg-secondary hover:bg-secondary/80 transition-colors"
               >
                 <Github className="h-4 w-4" />
                 Star on GitHub
               </a>
-              <a 
-                href="https://github.com/PrintQue/PrintQue/issues" 
-                target="_blank" 
+              <a
+                href="https://github.com/PrintQue/PrintQue/issues"
+                target="_blank"
                 rel="noopener noreferrer"
                 className="inline-flex items-center gap-2 px-4 py-2 rounded-md bg-secondary hover:bg-secondary/80 transition-colors"
               >
                 Report Issues
               </a>
-              <a 
-                href="https://github.com/PrintQue/PrintQue/blob/main/CONTRIBUTING.md" 
-                target="_blank" 
+              <a
+                href="https://github.com/PrintQue/PrintQue/blob/main/CONTRIBUTING.md"
+                target="_blank"
                 rel="noopener noreferrer"
                 className="inline-flex items-center gap-2 px-4 py-2 rounded-md bg-secondary hover:bg-secondary/80 transition-colors"
               >

@@ -1,10 +1,21 @@
-import { useState, useRef, useEffect } from 'react'
+import {
+  ChevronDown,
+  ChevronUp,
+  FileCode,
+  FolderOpen,
+  Plus,
+  Save,
+  Thermometer,
+  Trash2,
+  Upload,
+} from 'lucide-react'
+import { useEffect, useRef, useState } from 'react'
+import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { GcodeEditor } from '@/components/ui/gcode-editor'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import { Switch } from '@/components/ui/switch'
-import { GcodeEditor } from '@/components/ui/gcode-editor'
 import {
   Select,
   SelectContent,
@@ -12,9 +23,14 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import { Upload, Plus, FileCode, Save, Trash2, ChevronDown, ChevronUp, FolderOpen, Thermometer } from 'lucide-react'
-import { useCreateOrder, useGroups, useDefaultEjectionSettings, useSaveDefaultEjectionSettings, useEjectionCodes } from '@/hooks'
-import { toast } from 'sonner'
+import { Switch } from '@/components/ui/switch'
+import {
+  useCreateOrder,
+  useDefaultEjectionSettings,
+  useEjectionCodes,
+  useGroups,
+  useSaveDefaultEjectionSettings,
+} from '@/hooks'
 
 export function NewOrderForm() {
   const [file, setFile] = useState<File | null>(null)
@@ -28,7 +44,7 @@ export function NewOrderForm() {
   const [cooldownTemp, setCooldownTemp] = useState<string>('')
   const fileInputRef = useRef<HTMLInputElement>(null)
   const gcodeFileInputRef = useRef<HTMLInputElement>(null)
-  
+
   const createOrder = useCreateOrder()
   const { data: groups } = useGroups()
   const { data: defaultSettings } = useDefaultEjectionSettings()
@@ -46,20 +62,20 @@ export function NewOrderForm() {
   // Handle ejection code selection
   const handleEjectionCodeSelect = (codeId: string) => {
     setSelectedEjectionCodeId(codeId)
-    
+
     if (codeId === 'custom') {
       // Keep custom/current gcode, just switch mode
       return
     }
-    
+
     if (codeId === 'default') {
       // Load default settings
       setEndGcode(defaultSettings?.end_gcode || '')
       return
     }
-    
+
     // Find and load the selected ejection code
-    const selectedCode = ejectionCodes?.find(code => code.id === codeId)
+    const selectedCode = ejectionCodes?.find((code) => code.id === codeId)
     if (selectedCode) {
       setEndGcode(selectedCode.gcode)
       toast.success(`Loaded "${selectedCode.name}" ejection code`)
@@ -71,7 +87,7 @@ export function NewOrderForm() {
     if (selectedFile) {
       // Check for valid file types
       const validExtensions = ['.gcode', '.3mf', '.stl']
-      const hasValidExt = validExtensions.some(ext => 
+      const hasValidExt = validExtensions.some((ext) =>
         selectedFile.name.toLowerCase().endsWith(ext)
       )
       if (!hasValidExt) {
@@ -86,7 +102,7 @@ export function NewOrderForm() {
     const selectedFile = e.target.files?.[0]
     if (selectedFile) {
       const validExtensions = ['.txt', '.gcode', '.gc', '.nc']
-      const hasValidExt = validExtensions.some(ext => 
+      const hasValidExt = validExtensions.some((ext) =>
         selectedFile.name.toLowerCase().endsWith(ext)
       )
       if (!hasValidExt) {
@@ -107,33 +123,11 @@ export function NewOrderForm() {
     }
   }
 
-  const handleGcodeDrop = (e: React.DragEvent) => {
-    e.preventDefault()
-    const droppedFile = e.dataTransfer.files[0]
-    if (droppedFile) {
-      const validExtensions = ['.txt', '.gcode', '.gc', '.nc']
-      const hasValidExt = validExtensions.some(ext => 
-        droppedFile.name.toLowerCase().endsWith(ext)
-      )
-      if (hasValidExt) {
-        const reader = new FileReader()
-        reader.onload = (event) => {
-          const content = event.target?.result as string
-          setEndGcode(content)
-          toast.success(`Loaded G-code from ${droppedFile.name}`)
-        }
-        reader.readAsText(droppedFile)
-      } else {
-        toast.error('Please drop a valid G-code file (.txt, .gcode, .gc, .nc)')
-      }
-    }
-  }
-
   const handleSaveAsDefault = async () => {
     try {
       await saveDefaultSettings.mutateAsync({
         ejection_enabled: ejectionEnabled,
-        end_gcode: endGcode
+        end_gcode: endGcode,
       })
       toast.success('Default ejection settings saved')
     } catch {
@@ -148,7 +142,7 @@ export function NewOrderForm() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
-    
+
     if (!file) {
       toast.error('Please select a file')
       return
@@ -173,7 +167,7 @@ export function NewOrderForm() {
       if (selectedEjectionCodeId === 'default') {
         formData.append('ejection_code_name', 'Default')
       } else {
-        const selectedCode = ejectionCodes?.find(code => code.id === selectedEjectionCodeId)
+        const selectedCode = ejectionCodes?.find((code) => code.id === selectedEjectionCodeId)
         if (selectedCode) {
           formData.append('ejection_code_name', selectedCode.name)
         }
@@ -181,11 +175,11 @@ export function NewOrderForm() {
     } else if (ejectionEnabled) {
       formData.append('ejection_code_name', 'Custom')
     }
-    
+
     // Add cooldown temperature if set (for Bambu printers)
     if (ejectionEnabled && cooldownTemp) {
-      const tempValue = parseInt(cooldownTemp)
-      if (!isNaN(tempValue) && tempValue >= 0 && tempValue <= 100) {
+      const tempValue = parseInt(cooldownTemp, 10)
+      if (!Number.isNaN(tempValue) && tempValue >= 0 && tempValue <= 100) {
         formData.append('cooldown_temp', tempValue.toString())
       }
     }
@@ -212,7 +206,7 @@ export function NewOrderForm() {
     const droppedFile = e.dataTransfer.files[0]
     if (droppedFile) {
       const validExtensions = ['.gcode', '.3mf', '.stl']
-      const hasValidExt = validExtensions.some(ext => 
+      const hasValidExt = validExtensions.some((ext) =>
         droppedFile.name.toLowerCase().endsWith(ext)
       )
       if (hasValidExt) {
@@ -279,7 +273,7 @@ export function NewOrderForm() {
                 type="number"
                 min={1}
                 value={quantity}
-                onChange={(e) => setQuantity(parseInt(e.target.value) || 1)}
+                onChange={(e) => setQuantity(parseInt(e.target.value, 10) || 1)}
               />
             </div>
 
@@ -291,7 +285,7 @@ export function NewOrderForm() {
                   if (value === 'all') {
                     setSelectedGroups([])
                   } else {
-                    setSelectedGroups([parseInt(value)])
+                    setSelectedGroups([parseInt(value, 10)])
                   }
                 }}
               >
@@ -344,10 +338,7 @@ export function NewOrderForm() {
                 {/* Ejection Code Selector */}
                 <div className="space-y-2">
                   <Label>Select Ejection Code</Label>
-                  <Select
-                    value={selectedEjectionCodeId}
-                    onValueChange={handleEjectionCodeSelect}
-                  >
+                  <Select value={selectedEjectionCodeId} onValueChange={handleEjectionCodeSelect}>
                     <SelectTrigger>
                       <SelectValue placeholder="Select an ejection code" />
                     </SelectTrigger>
@@ -429,12 +420,7 @@ export function NewOrderForm() {
                     <Save className="h-4 w-4 mr-1" />
                     Save as Default
                   </Button>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    onClick={handleClearGcode}
-                  >
+                  <Button type="button" variant="outline" size="sm" onClick={handleClearGcode}>
                     <Trash2 className="h-4 w-4 mr-1" />
                     Clear
                   </Button>
@@ -459,18 +445,15 @@ export function NewOrderForm() {
                     <span className="text-sm text-muted-foreground">°C</span>
                   </div>
                   <p className="text-xs text-muted-foreground mt-2">
-                    If set, PrintQue will wait for the bed to cool to this temperature before running the ejection G-code on Bambu printers.
+                    If set, PrintQue will wait for the bed to cool to this temperature before
+                    running the ejection G-code on Bambu printers.
                   </p>
                 </div>
               </div>
             )}
           </div>
 
-          <Button 
-            type="submit" 
-            className="w-full" 
-            disabled={!file || createOrder.isPending}
-          >
+          <Button type="submit" className="w-full" disabled={!file || createOrder.isPending}>
             <Plus className="h-4 w-4 mr-2" />
             {createOrder.isPending ? 'Adding...' : 'Add to Library'}
           </Button>

@@ -1,4 +1,5 @@
 from datetime import datetime
+import importlib.util
 import json
 import os
 import threading
@@ -8,9 +9,8 @@ from cryptography.fernet import Fernet
 from utils.config import Config
 import copy
 import uuid
-import paho.mqtt.client as mqtt
 import re
-from flask import current_app, render_template, jsonify, request
+from flask import current_app
 
 # Set up logging directory
 LOG_DIR = os.path.join(os.path.expanduser("~"), "PrintQueData")
@@ -101,60 +101,60 @@ class NamedLock:
         self.name = name or str(id(self._lock))
         self._owner = None
         self._acquire_time = None
-    
+
     def acquire(self, timeout=None):
         current_thread = threading.get_ident()
         if self._owner == current_thread:
             logging.warning(f"Thread {current_thread} attempting to re-acquire lock {self.name} it already holds")
             return True
-            
+
         if timeout is None:
             result = self._lock.acquire()
         else:
             result = self._lock.acquire(timeout=timeout)
-            
+
         if result:
             self._owner = current_thread
             self._acquire_time = time.time()
         return result
-    
+
     def release(self):
         self._owner = None
         self._acquire_time = None
         return self._lock.release()
-    
+
     def __enter__(self):
         self.acquire()
         return self
-    
+
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.release()
 
 class SafeLock:
     def __init__(self, lock, timeout=None, name=None):
         self.lock = lock
-        
+
         # Handle common mistake where name is passed as second parameter
         if isinstance(timeout, str):
             # If timeout is a string, assume it's meant to be the name
             if name is None:
                 name = timeout
             timeout = None
-            
+
         self.timeout = timeout or Config.SAFE_LOCK_TIMEOUT  # Use config value
         self.name = name or getattr(lock, 'name', str(id(lock)))
         self.start_time = None
-        
+
     def __enter__(self):
         logging.debug(f"Acquiring lock {self.name}")
         self.start_time = time.time()
         self.thread_id = threading.get_ident()
         self.thread_name = threading.current_thread().name
-        
+
         logging.debug(f"Thread {self.thread_name} (ID: {self.thread_id}) is trying to acquire {self.name}")
-        
+
         acquired = self.lock.acquire(timeout=self.timeout)
-        
+
         if not acquired:
             logging.error(f"Lock acquisition timed out for {self.name} after {self.timeout}s")
             if self._attempt_deadlock_recovery():
@@ -163,17 +163,17 @@ class SafeLock:
                     raise TimeoutError(f"Lock acquisition timed out for {self.name} after recovery attempt")
             else:
                 raise TimeoutError(f"Lock acquisition timed out for {self.name}")
-        
+
         with lock_owners_lock:
             thread_id = threading.get_ident()
             lock_owners[self.name] = thread_id
-        
+
         duration = time.time() - self.start_time
         if duration > 1.0:
             logging.warning(f"Slow lock acquisition for {self.name}: {duration:.2f}s")
-            
+
         return self
-    
+
     def _attempt_deadlock_recovery(self):
         logging.warning(f"Attempting deadlock recovery for {self.name}")
         try:
@@ -181,32 +181,32 @@ class SafeLock:
                 for lock_name, owner_thread_id in lock_owners.items():
                     if owner_thread_id == self.thread_id:
                         logging.critical(f"Thread {self.thread_id} already owns lock {lock_name} while trying to acquire {self.name}")
-                
+
                 ownership_info = ", ".join([f"{name}:{tid}" for name, tid in lock_owners.items()])
                 logging.warning(f"Current lock ownerships: {ownership_info}")
-                
+
             return check_deadlock()
         except Exception as e:
             logging.error(f"Error during deadlock recovery attempt: {e}")
             return False
-        
+
     def __exit__(self, exc_type, exc_val, exc_tb):
         end_time = time.time()
         duration = end_time - self.start_time
-        
+
         with lock_stats_lock:
             if self.name in lock_stats:
                 lock_stats[self.name]["acquire_count"] += 1
                 lock_stats[self.name]["total_time"] += duration
                 lock_stats[self.name]["max_time"] = max(lock_stats[self.name]["max_time"], duration)
-        
+
         with lock_owners_lock:
             if self.name in lock_owners:
                 del lock_owners[self.name]
-        
+
         self.lock.release()
         logging.debug(f"Released lock {self.name} after {duration:.4f}s")
-        
+
         if exc_type:
             logging.error(f"Exception in lock {self.name} context: {exc_type.__name__}: {exc_val}")
 
@@ -216,12 +216,12 @@ class ReadWriteLock:
         self._readers = 0
         self._writers = 0
         self.name = name or str(id(self))
-    
+
     def acquire_read(self, timeout=None):
         with self._read_ready:
             start_time = time.time()
             remaining_timeout = timeout
-            
+
             while self._writers > 0:
                 if timeout is not None:
                     if not self._read_ready.wait(timeout=remaining_timeout):
@@ -230,21 +230,21 @@ class ReadWriteLock:
                     remaining_timeout = max(0.1, timeout - elapsed)
                 else:
                     self._read_ready.wait()
-            
+
             self._readers += 1
         return True
-    
+
     def release_read(self):
         with self._read_ready:
             self._readers -= 1
             if not self._readers:
                 self._read_ready.notify_all()
-    
+
     def acquire_write(self, timeout=None):
         with self._read_ready:
             start_time = time.time()
             remaining_timeout = timeout
-            
+
             while self._writers > 0 or self._readers > 0:
                 if timeout is not None:
                     if not self._read_ready.wait(timeout=remaining_timeout):
@@ -253,10 +253,10 @@ class ReadWriteLock:
                     remaining_timeout = max(0.1, timeout - elapsed)
                 else:
                     self._read_ready.wait()
-            
+
             self._writers += 1
         return True
-    
+
     def release_write(self):
         with self._read_ready:
             self._writers -= 1
@@ -267,25 +267,25 @@ class ReadLock:
         self.rwlock = rwlock
         self.timeout = timeout or Config.READ_LOCK_TIMEOUT  # Use config value
         self.name = rwlock.name + "_read"
-        
+
     def __enter__(self):
         logging.debug(f"Acquiring read lock {self.name}")
         start_time = time.time()
-        
+
         if not self.rwlock.acquire_read(timeout=self.timeout):
             logging.error(f"Read lock acquisition timed out for {self.name}")
             raise TimeoutError(f"Read lock acquisition timed out for {self.name}")
-        
+
         duration = time.time() - start_time
         if duration > 1.0:
             logging.warning(f"Slow read lock acquisition for {self.name}: {duration:.2f}s")
-        
+
         return self
-    
+
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.rwlock.release_read()
         logging.debug(f"Released read lock {self.name}")
-        
+
         if exc_type:
             logging.error(f"Exception in read lock {self.name}: {exc_type.__name__}: {exc_val}")
 
@@ -294,25 +294,25 @@ class WriteLock:
         self.rwlock = rwlock
         self.timeout = timeout or Config.WRITE_LOCK_TIMEOUT  # Use config value
         self.name = rwlock.name + "_write"
-        
+
     def __enter__(self):
         logging.debug(f"Acquiring write lock {self.name}")
         start_time = time.time()
-        
+
         if not self.rwlock.acquire_write(timeout=self.timeout):
             logging.error(f"Write lock acquisition timed out for {self.name}")
             raise TimeoutError(f"Write lock acquisition timed out for {self.name}")
-        
+
         duration = time.time() - start_time
         if duration > 1.0:
             logging.warning(f"Slow write lock acquisition for {self.name}: {duration:.2f}s")
-        
+
         return self
-    
+
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.rwlock.release_write()
         logging.debug(f"Released write lock {self.name}")
-        
+
         if exc_type:
             logging.error(f"Exception in write lock {self.name}: {exc_type.__name__}: {exc_val}")
 
@@ -346,37 +346,37 @@ lock_owners_lock = NamedLock("lock_owners_lock")
 
 def acquire_locks(*locks, timeout=10):
     sorted_locks = sorted(locks, key=lambda x: LOCK_ACQUISITION_ORDER.get(getattr(x, 'name', str(id(x))), 999))
-    
+
     class MultiLock:
         def __enter__(self):
             self.acquired_locks = []
             start_time = time.time()
             remaining_timeout = timeout
-            
+
             for lock in sorted_locks:
                 name = getattr(lock, 'name', str(id(lock)))
                 logging.debug(f"Acquiring lock {name} as part of group")
-                
+
                 if not lock.acquire(timeout=remaining_timeout):
                     for acquired in self.acquired_locks:
                         acquired.release()
                     raise TimeoutError(f"Lock acquisition timed out for {name} in group lock")
-                
+
                 self.acquired_locks.append(lock)
                 elapsed = time.time() - start_time
                 remaining_timeout = max(0.1, timeout - elapsed)
-            
+
             return self
-        
+
         def __exit__(self, exc_type, exc_val, exc_tb):
             for lock in reversed(self.acquired_locks):
                 name = getattr(lock, 'name', str(id(lock)))
                 lock.release()
                 logging.debug(f"Released lock {name} from group")
-            
+
             if exc_type:
                 logging.error(f"Exception in multi-lock context: {exc_type.__name__}: {exc_val}")
-    
+
     return MultiLock()
 
 # Enhanced ejection state management functions
@@ -453,35 +453,35 @@ def reset_all_ejection_states():
         cleared_count = len(EJECTION_STATES)
         EJECTION_STATES.clear()
         logging.warning(f"EMERGENCY: Reset {cleared_count} ejection states")
-        
+
     with EJECTION_LOCKS_LOCK:
         released_count = 0
         for printer_name, lock in EJECTION_LOCKS.items():
             try:
                 lock.release()
                 released_count += 1
-            except:
+            except Exception:
                 pass  # Lock may not be acquired
         logging.warning(f"EMERGENCY: Released {released_count} ejection locks")
-        
+
     return cleared_count + released_count
 
 def debug_ejection_system():
     """Debug function to show current ejection system state"""
     print("\n=== EJECTION SYSTEM DEBUG ===")
-    
+
     with EJECTION_STATES_LOCK:
         print(f"Active ejection states: {len(EJECTION_STATES)}")
         for printer_name, state in EJECTION_STATES.items():
             elapsed = time.time() - state['timestamp']
             print(f"  {printer_name}: {state['state']} ({elapsed:.1f}s ago)")
-    
+
     with EJECTION_LOCKS_LOCK:
         print(f"Ejection locks: {len(EJECTION_LOCKS)}")
         for printer_name in EJECTION_LOCKS.keys():
             in_progress = is_ejection_in_progress(printer_name)
             print(f"  {printer_name}: {'LOCKED' if in_progress else 'FREE'}")
-    
+
     print(f"Global ejection paused: {get_ejection_paused()}")
     print("============================\n")
 
@@ -549,22 +549,22 @@ def set_ejection_paused(paused):
 def validate_gcode_file(file):
     if not file:
         return False, "No file uploaded"
-    
+
     filename = file.filename.lower()
-    
+
     # Accept .gcode, .bgcode, .3mf, and .gcode.3mf files
     valid_extensions = ['.gcode', '.bgcode', '.3mf']
-    
+
     # Special handling for .gcode.3mf files
     if filename.endswith('.gcode.3mf'):
         return True, ""
-    
+
     # Check other extensions
     if any(filename.endswith(ext) for ext in valid_extensions):
         return True, ""
-    
+
     return False, "Invalid file format. Accepted formats: .gcode, .bgcode, .3mf, .gcode.3mf"
-    
+
 # NEW FUNCTION: Validation for Ejection G-code files
 def validate_ejection_file(file):
     """Validate uploaded ejection G-code files"""
@@ -601,10 +601,10 @@ def save_order_to_history_direct(order):
     try:
         # Use the global LOG_DIR constant
         history_file = os.path.join(LOG_DIR, 'print_history.json')
-        
+
         # Ensure the directory exists
         os.makedirs(os.path.dirname(history_file), exist_ok=True)
-        
+
         # Prepare history entry with extra_data
         history_entry = {
             'id': order.get('id'),
@@ -619,7 +619,7 @@ def save_order_to_history_direct(order):
             'completed_at': order.get('completed_at', datetime.now().isoformat()),
             'duration_seconds': None
         }
-        
+
         # Calculate duration if possible
         if 'created_at' in order and 'completed_at' in order:
             try:
@@ -627,19 +627,19 @@ def save_order_to_history_direct(order):
                 completed = datetime.fromisoformat(order['completed_at'])
                 duration = (completed - created).total_seconds()
                 history_entry['duration_seconds'] = duration
-            except:
+            except Exception:
                 pass
-        
+
         # Ensure groups is a list
         if isinstance(history_entry['groups'], str):
             history_entry['groups'] = [history_entry['groups']]
-        
+
         # Append to history file
         with open(history_file, 'a') as f:
             f.write(json.dumps(history_entry) + '\n')
-            
+
         logging.info(f"Saved completed order {order.get('id')} to history with {len(history_entry.get('extra_data', {}))} extra fields")
-        
+
     except Exception as e:
         logging.error(f"Error saving order to history directly: {e}")
 
@@ -654,26 +654,26 @@ def increment_order_sent_count(order_id, increment=1):
         current_thread = threading.current_thread().name
         thread_id = threading.get_ident()
         logging.debug(f"Thread {current_thread} (ID: {thread_id}) beginning increment_order_sent_count for order {order_id}")
-        
+
         # Copy the current orders list for verification purposes
         orders_before = copy.deepcopy(ORDERS)
-        
+
         for i, order in enumerate(ORDERS):
             if order['id'] == order_id:
                 previous_sent = order['sent']
-                
+
                 # Additional check to prevent over-counting - but don't stop incrementing
                 if previous_sent >= order['quantity']:
                     logging.info(f"Order {order_id} has sent count {previous_sent} >= quantity {order['quantity']}, but still incrementing as requested")
-                
+
                 # Verify no other thread has modified this order since we started the function
                 if i < len(orders_before) and orders_before[i]['id'] == order_id and orders_before[i]['sent'] != previous_sent:
                     logging.warning(f"Order {order_id} sent count changed during processing from {orders_before[i]['sent']} to {previous_sent}, not incrementing")
                     return False, ORDERS[i].copy()
-                
+
                 # Increment without capping at quantity - allow over-fulfillment
                 order['sent'] = previous_sent + increment
-                
+
                 # Update status to show fulfillment progress but DON'T mark as completed
                 if order['sent'] >= order['quantity']:
                     # Change status to 'fulfilled' instead of 'completed' to keep it visible
@@ -684,10 +684,10 @@ def increment_order_sent_count(order_id, increment=1):
                     logging.info(f"Order {order_id} fulfilled (sent={order['sent']}, quantity={order['quantity']}) but keeping in active orders")
                 elif order['sent'] > 0:
                     order['status'] = 'partial'
-                
+
                 save_data(ORDERS_FILE, ORDERS)
                 logging.debug(f"Saved ORDERS_FILE after increment for order {order_id} to {order['sent']}")
-                
+
                 # Save to history when order reaches or exceeds quantity
                 if order['sent'] >= order['quantity']:
                     try:
@@ -710,11 +710,11 @@ def increment_order_sent_count(order_id, increment=1):
                         # Other errors
                         logging.debug(f"Could not use Flask app function, saving directly: {e}")
                         save_order_to_history_direct(ORDERS[i])
-                
+
                 elapsed = time.time() - start_time
                 logging.debug(f"Thread {current_thread} completed order {order_id} increment operation in {elapsed:.4f}s (new sent={order['sent']})")
                 return True, ORDERS[i].copy()
-        
+
         logging.error(f"Failed to increment order {order_id}: order not found in {len(ORDERS)} orders")
         return False, None
 
@@ -728,16 +728,15 @@ def _do_reset_order_counts():
             if 'status' in order:
                 order['status'] = 'completed'
             corrections += 1
-    
+
     if corrections > 0:
         save_data(ORDERS_FILE, ORDERS)
         logging.info(f"Fixed {corrections} orders with excessive sent counts")
-    
+
     return corrections
 
 def reset_order_counts(inside_lock=False):
     """Reset order counts that exceed their quantity"""
-    corrections = 0
     try:
         # Only acquire the lock if we're not already inside a lock
         if not inside_lock:
@@ -785,8 +784,8 @@ def get_print_transaction(transaction_id):
 def get_pending_transactions():
     """Get all pending print transactions that haven't been confirmed"""
     with SafeLock(print_transactions_lock):
-        return {tid: tx.copy() for tid, tx in PRINT_TRANSACTIONS.items() 
-                if tx['status'] in ['pending', 'verifying'] and 
+        return {tid: tx.copy() for tid, tx in PRINT_TRANSACTIONS.items()
+                if tx['status'] in ['pending', 'verifying'] and
                 time.time() - tx['start_time'] < 3600}  # Only consider transactions from the last hour
 
 def reconcile_order_counts():
@@ -796,18 +795,18 @@ def reconcile_order_counts():
     """
     changed_orders = []
     corrections = 0
-    
+
     # Get all active orders
     with SafeLock(orders_lock):
         active_orders = [o for o in ORDERS if o['status'] != 'completed']
         if not active_orders:
             logging.debug("No active orders to reconcile")
             return 0, []
-    
+
     # Get all printers
     with ReadLock(printers_rwlock):
         all_printers = copy.deepcopy(PRINTERS)
-    
+
     # Build a map of what's actually printing
     order_print_count = {}
     for printer in all_printers:
@@ -816,14 +815,14 @@ def reconcile_order_counts():
             if order_id not in order_print_count:
                 order_print_count[order_id] = 0
             order_print_count[order_id] += 1
-    
+
     # Compare with the recorded sent counts
     with SafeLock(orders_lock):
         for order in ORDERS:
             if order['id'] in order_print_count:
                 actual_count = order_print_count[order['id']]
                 max_count = order['quantity']
-                
+
                 # Only increase count if necessary and never exceed the quantity
                 if order['sent'] < actual_count and actual_count <= max_count:
                     old_count = order['sent']
@@ -833,42 +832,42 @@ def reconcile_order_counts():
                     changed_orders.append(order['id'])
                 elif actual_count > max_count:
                     logging.error(f"Order {order['id']} has {actual_count} actual prints but quantity is only {max_count}. This suggests a synchronization issue.")
-        
+
         if corrections > 0:
             save_data(ORDERS_FILE, ORDERS)
             logging.info(f"Corrected {corrections} order counts during reconciliation")
-    
+
     return corrections, changed_orders
 
 def check_deadlock():
     with SafeLock(lock_owners_lock):
         threads_waiting = {}
         current_thread_id = threading.get_ident()
-        
+
         for thread_id, thread in threading._active.items():
             for lock_name, owner_id in lock_owners.items():
                 if owner_id != thread_id:
                     if thread_id not in threads_waiting:
                         threads_waiting[thread_id] = set()
                     threads_waiting[thread_id].add(lock_name)
-        
+
         for thread_id, waiting_for in threads_waiting.items():
             cycle = detect_cycle(thread_id, threads_waiting)
             if cycle:
                 cycle_str = " -> ".join(str(t) for t in cycle)
                 logging.critical(f"Potential deadlock detected! Thread chain: {cycle_str}")
-                
+
                 if current_thread_id in cycle:
                     logging.critical(f"Current thread {current_thread_id} is in a deadlock. Will attempt recovery.")
-                    
+
                     owned_locks = []
                     for lock_name, owner_id in lock_owners.items():
                         if owner_id == current_thread_id:
                             owned_locks.append(lock_name)
-                    
+
                     if owned_locks:
                         logging.warning(f"Thread {current_thread_id} owns these locks: {owned_locks}")
-                
+
                 return True
     return False
 
@@ -877,10 +876,10 @@ def detect_cycle(start, graph, visited=None, path=None):
         visited = set()
     if path is None:
         path = []
-    
+
     visited.add(start)
     path.append(start)
-    
+
     if start in graph:
         for node in graph[start]:
             if node not in visited:
@@ -889,26 +888,26 @@ def detect_cycle(start, graph, visited=None, path=None):
             elif node in path:
                 path.append(node)
                 return path
-    
+
     path.pop()
     return None
 
 def emergency_lock_reset():
     global lock_owners, lock_stats
-    
+
     logging.critical("EMERGENCY: Resetting all locks due to deadlock")
-    
+
     with lock_owners_lock:
         lock_owners.clear()
-    
+
     with lock_stats_lock:
         for lock_data in lock_stats.values():
             lock_data["acquire_count"] = 0
             lock_data["total_time"] = 0
             lock_data["max_time"] = 0
-    
+
     logging.critical(f"Active thread count: {threading.active_count()}")
-    
+
     return True
 
 def monitor_locks():
@@ -921,13 +920,13 @@ def monitor_locks():
                     if data["acquire_count"] > 0:
                         avg_time = data["total_time"] / data["acquire_count"]
                         stats_to_report.append(f"{lock_name}: count={data['acquire_count']}, avg={avg_time:.4f}s, max={data['max_time']:.4f}s")
-                
+
                 if stats_to_report:
                     for lock_data in lock_stats.values():
                         lock_data["acquire_count"] = 0
                         lock_data["total_time"] = 0
                         lock_data["max_time"] = 0
-            
+
             if stats_to_report:
                 logging.info(f"Lock statistics: {', '.join(stats_to_report)}")
         except Exception as e:
@@ -939,17 +938,17 @@ def monitor_memory_usage():
     try:
         import psutil
         process = psutil.Process(os.getpid())
-        
+
         while True:
             try:
                 memory_info = process.memory_info()
                 memory_mb = memory_info.rss / (1024 * 1024)
-                
+
                 logging.info(f"Memory usage: {memory_mb:.2f} MB")
-                
+
                 if memory_mb > 500:
                     logging.warning(f"High memory usage detected: {memory_mb:.2f} MB")
-                    
+
                 time.sleep(300)
             except Exception as e:
                 logging.error(f"Error monitoring memory: {e}")
@@ -962,10 +961,10 @@ def reap_threads():
         try:
             active_count = threading.active_count()
             logging.debug(f"Active thread count: {active_count}")
-            
+
             clean_order_locks()
             cleanup_ejection_locks()  # Clean up ejection locks too
-            
+
             time.sleep(60)
         except Exception as e:
             logging.error(f"Error in thread reaper: {e}")
@@ -976,13 +975,13 @@ def initialize_state():
     global PRINTERS, ORDERS, TOTAL_FILAMENT_CONSUMPTION, EJECTION_PAUSED, EJECTION_CODES, _STATE_INITIALIZED        # CRITICAL: Prevent re-initialization to avoid duplicates
     if _STATE_INITIALIZED:
         logging.warning("⚠️ BLOCKED RE-INITIALIZATION - State already loaded. This prevents duplicates.")
-        return        
+        return
     logging.info("🔄 Initializing state for the first time...")
-    
+
     with SafeLock(filament_lock):
         filament_data = load_data(TOTAL_FILAMENT_FILE, {"total_filament_used_g": 0})
         TOTAL_FILAMENT_CONSUMPTION = filament_data.get("total_filament_used_g", 0)
-    
+
     with SafeLock(orders_lock):
         ORDERS.extend(load_data(ORDERS_FILE, []))
         for order in ORDERS:
@@ -998,7 +997,7 @@ def initialize_state():
                         logger.warning(f"Order {order.get('id', 'unknown')} has non-numeric group: {g}")
                         processed_groups.append(g)
                 order['groups'] = processed_groups
-            
+
             if 'sent' not in order:
                 order['sent'] = 0
             if 'status' not in order:
@@ -1007,13 +1006,13 @@ def initialize_state():
                 order['filament_g'] = 0
             if 'deleted' not in order:
                 order['deleted'] = False
-        
+
         # Fix any incorrect order counts - pass True to indicate we're already inside the lock
         try:
             reset_order_counts(inside_lock=True)
         except Exception as e:
             logging.error(f"Error in reset_order_counts during initialization: {str(e)}")
-    
+
     with WriteLock(printers_rwlock):
         PRINTERS.extend(load_data(PRINTERS_FILE, []))
         for printer in PRINTERS:
@@ -1028,30 +1027,30 @@ def initialize_state():
                         # Keep the string value
                         logger.warning(f"Printer {printer.get('name', 'unknown')} has non-numeric group: {group_value}")
                 # If it's already an int or a non-numeric string, leave it as-is
-                
+
             if 'filament_used_g' not in printer:
                 printer['filament_used_g'] = 0
             if 'service_mode' not in printer:
                 printer['service_mode'] = False
             if 'temps' not in printer:
                 printer['temps'] = {"nozzle": 0, "bed": 0}
-    
+
     # Load ejection paused state
     EJECTION_PAUSED = load_data(EJECTION_PAUSED_FILE, False)
-    
+
     # Load ejection codes
     with SafeLock(ejection_codes_lock):
         EJECTION_CODES.extend(load_data(EJECTION_CODES_FILE, []))
         logger.debug(f"Loaded {len(EJECTION_CODES)} ejection codes")
-    
+
     # Clean up all ejection states on startup
     cleanup_all_ejection_states()
-    
+
     # Emergency reset on startup
     reset_all_ejection_states()
-    
+
     logger.debug(f"State initialized: {len(PRINTERS)} printers, {len(ORDERS)} orders, {len(EJECTION_CODES)} ejection codes, {TOTAL_FILAMENT_CONSUMPTION}g filament, ejection_paused={EJECTION_PAUSED}")
-    
+
     # Initialize Bambu connections
     from services.bambu_handler import connect_bambu_printer
     for printer in PRINTERS:
@@ -1060,7 +1059,7 @@ def initialize_state():
                 connect_bambu_printer(printer)
             except Exception as e:
                 logger.error(f"Failed to connect Bambu printer {printer['name']} during initialization: {str(e)}")
-    
+
     # Mark state as initialized to prevent duplicates
     _STATE_INITIALIZED = True
     logging.info("✅ State initialization complete - locked to prevent re-initialization")
@@ -1083,39 +1082,39 @@ def update_task_progress(task_id, completed=None, increment=None, message=None):
     with SafeLock(tasks_lock):
         if task_id not in TASKS:
             return None
-        
+
         task = TASKS[task_id]
         if completed is not None:
             task['completed'] = completed
         elif increment is not None:
             task['completed'] += increment
-        
+
         task['progress'] = int((task['completed'] / task['total']) * 100) if task['total'] > 0 else 0
-        
+
         if message:
             task['message'] = message
-            
+
         return task.copy()
 
 def complete_task(task_id, success=True, message=None):
     with SafeLock(tasks_lock):
         if task_id not in TASKS:
             return None
-        
+
         task = TASKS[task_id]
         task['status'] = 'success' if success else 'failed'
         task['end_time'] = time.time()
         task['progress'] = 100 if success else task['progress']
-        
+
         if message:
             task['message'] = message
-            
+
         return task.copy()
 
 def validate_ejection_system():
     """Validate ejection system configuration"""
     issues = []
-    
+
     # Check if Config is properly loaded
     try:
         timeout_config = Config.get_ejection_config()
@@ -1123,22 +1122,22 @@ def validate_ejection_system():
             issues.append("Ejection timeout should be at least 5 minutes")
     except Exception as e:
         issues.append(f"Config validation failed: {e}")
-    
+
     # Check ejection states
     with EJECTION_STATES_LOCK:
         active_ejections = len([s for s in EJECTION_STATES.values() if s['state'] in ['queued', 'in_progress']])
         if active_ejections > 0:
             issues.append(f"Found {active_ejections} active ejections on startup")
-    
+
     return issues
 
 # Start background threads
 threading.Thread(target=monitor_locks, daemon=True).start()
-try:
-    import psutil
+# Check if psutil is available before starting memory monitoring
+if importlib.util.find_spec("psutil") is not None:
     threading.Thread(target=monitor_memory_usage, daemon=True).start()
     logging.info("Memory monitoring started")
-except ImportError:
+else:
     logging.warning("psutil not installed, memory monitoring disabled")
 threading.Thread(target=reap_threads, daemon=True).start()
 
