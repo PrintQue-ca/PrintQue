@@ -35,7 +35,7 @@ def isolate_state(temp_data_dir, monkeypatch):
     """Isolate state for each test by using temp directory and resetting globals."""
     # Patch data directory paths before importing state
     monkeypatch.setenv('DATA_DIR', temp_data_dir)
-    
+
     # Create empty data files
     for filename in ['printers.json', 'orders.json', 'total_filament.json', 'ejection_codes.json']:
         filepath = os.path.join(temp_data_dir, filename)
@@ -52,16 +52,16 @@ def app(temp_data_dir, monkeypatch):
     """Create Flask application for testing."""
     # Set environment before imports
     monkeypatch.setenv('DATA_DIR', temp_data_dir)
-    
+
     # Mock eventlet monkey patching
     with patch('eventlet.monkey_patch'):
         # Import after patching
         from app import app as flask_app
-        
+
         flask_app.config['TESTING'] = True
         flask_app.config['UPLOAD_FOLDER'] = os.path.join(temp_data_dir, 'uploads')
         os.makedirs(flask_app.config['UPLOAD_FOLDER'], exist_ok=True)
-        
+
         yield flask_app
 
 
@@ -169,13 +169,13 @@ def populated_state(temp_data_dir, mock_printers, mock_orders):
     """Populate state files with test data."""
     printers_file = os.path.join(temp_data_dir, 'printers.json')
     orders_file = os.path.join(temp_data_dir, 'orders.json')
-    
+
     with open(printers_file, 'w') as f:
         json.dump(mock_printers, f)
-    
+
     with open(orders_file, 'w') as f:
         json.dump(mock_orders, f)
-    
+
     return {
         'printers_file': printers_file,
         'orders_file': orders_file,

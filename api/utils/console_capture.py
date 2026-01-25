@@ -1,9 +1,7 @@
 import sys
-import io
 import threading
 from datetime import datetime, timedelta
 from collections import deque
-import time
 import logging
 
 class ConsoleCapture:
@@ -26,17 +24,17 @@ class ConsoleCapture:
         """Start capturing console output by replacing sys.stdout and sys.stderr."""
         if self._started:
             return
-            
+
         self._started = True
-        
+
         # Create tee outputs
         self.tee_stdout = TeeOutput(self.original_stdout, self, 'stdout')
         self.tee_stderr = TeeOutput(self.original_stderr, self, 'stderr')
-        
+
         # Replace stdout and stderr
         sys.stdout = self.tee_stdout
         sys.stderr = self.tee_stderr
-        
+
         # Also capture logging output by adding a handler
         self.setup_logging_capture()
 
@@ -47,7 +45,7 @@ class ConsoleCapture:
             def __init__(self, console_capture):
                 super().__init__()
                 self.console_capture = console_capture
-                
+
             def emit(self, record):
                 try:
                     msg = self.format(record)
@@ -57,16 +55,16 @@ class ConsoleCapture:
                     self.console_capture.write(msg, 'logging')
                 except Exception:
                     pass
-        
+
         # Add handler to root logger
         capture_handler = CaptureHandler(self)
         capture_handler.setLevel(logging.DEBUG)
         capture_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
-        
+
         # Get root logger and add our handler
         root_logger = logging.getLogger()
         root_logger.addHandler(capture_handler)
-        
+
         # Also add to werkzeug logger (Flask's built-in server)
         werkzeug_logger = logging.getLogger('werkzeug')
         werkzeug_logger.addHandler(capture_handler)
@@ -83,14 +81,14 @@ class ConsoleCapture:
         """Write text to buffer with timestamp and perform buffer cleanup."""
         if not text:  # Skip completely empty writes
             return
-            
+
         with self.lock:
             timestamp = datetime.now()
-            
+
             # Handle different types of text input
             if isinstance(text, bytes):
                 text = text.decode('utf-8', errors='replace')
-            
+
             # Store the text as-is, preserving all formatting
             self.buffer.append({
                 'timestamp': timestamp,
@@ -118,7 +116,7 @@ class ConsoleCapture:
                     # Format: timestamp - [type] text
                     timestamp_str = entry['timestamp'].strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
                     type_label = f"[{entry['type'].upper()}]" if entry['type'] != 'stdout' else ""
-                    
+
                     # Split text into lines and format each
                     text_lines = entry['text'].splitlines(True)
                     for line in text_lines:
@@ -135,14 +133,14 @@ class ConsoleCapture:
             for entry in self.buffer:
                 timestamp_str = entry['timestamp'].strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
                 type_label = f"[{entry['type'].upper()}]" if entry['type'] != 'stdout' else ""
-                
+
                 # Split text into lines and format each
                 text_lines = entry['text'].splitlines(True)
                 for line in text_lines:
                     if line.strip():  # Only include non-empty lines
                         formatted_line = f"{timestamp_str} {type_label} {line}"
                         all_lines.append(formatted_line)
-                        
+
             return all_lines
 
 class TeeOutput:
@@ -158,9 +156,9 @@ class TeeOutput:
             # Write to original stream
             self.stream.write(text)
             self.stream.flush()
-        except:
+        except Exception:
             pass  # Ignore errors writing to original stream
-        
+
         # Always capture to buffer
         self.console_capture.write(text, self.stream_type)
         return len(text)
@@ -168,7 +166,7 @@ class TeeOutput:
     def flush(self):
         try:
             self.stream.flush()
-        except:
+        except Exception:
             pass
 
     def fileno(self):

@@ -11,9 +11,8 @@ Tests the /api/v1/orders/* endpoints including:
 - Order reordering
 """
 
-import pytest
 import io
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
 
 class TestListOrders:
@@ -23,7 +22,7 @@ class TestListOrders:
         """Test getting orders when none exist."""
         with patch('routes.ORDERS', []):
             response = client.get('/api/v1/orders')
-            
+
             assert response.status_code == 200
             data = response.get_json()
             assert isinstance(data, list)
@@ -33,10 +32,10 @@ class TestListOrders:
         """Test that deleted orders are excluded."""
         orders_with_deleted = mock_orders.copy()
         orders_with_deleted[0]['deleted'] = True
-        
+
         with patch('routes.ORDERS', orders_with_deleted):
             response = client.get('/api/v1/orders')
-            
+
             assert response.status_code == 200
             data = response.get_json()
             # Should only return non-deleted orders
@@ -47,10 +46,10 @@ class TestListOrders:
         """Test that orders contain expected fields."""
         with patch('routes.ORDERS', mock_orders):
             response = client.get('/api/v1/orders')
-            
+
             assert response.status_code == 200
             data = response.get_json()
-            
+
             order = data[0]
             assert 'id' in order
             assert 'filename' in order
@@ -67,7 +66,7 @@ class TestGetOrder:
         """Test getting a specific order by ID."""
         with patch('routes.ORDERS', mock_orders):
             response = client.get('/api/v1/orders/1')
-            
+
             assert response.status_code == 200
             data = response.get_json()
             assert data['id'] == 1
@@ -77,7 +76,7 @@ class TestGetOrder:
         """Test getting non-existent order returns 404."""
         with patch('routes.ORDERS', mock_orders):
             response = client.get('/api/v1/orders/999')
-            
+
             assert response.status_code == 404
             data = response.get_json()
             assert 'error' in data
@@ -89,7 +88,7 @@ class TestCreateOrder:
     def test_create_order_no_file(self, client):
         """Test creating order without file returns error."""
         response = client.post('/api/v1/orders')
-        
+
         assert response.status_code == 400
         data = response.get_json()
         assert 'error' in data
@@ -103,7 +102,7 @@ class TestCreateOrder:
         response = client.post('/api/v1/orders',
                               data=data,
                               content_type='multipart/form-data')
-        
+
         assert response.status_code == 400
         data = response.get_json()
         assert 'error' in data
@@ -118,7 +117,7 @@ class TestUpdateOrder:
         with patch('routes.ORDERS', mock_orders):
             response = client.patch('/api/v1/orders/1',
                                    json={'quantity': 10})
-            
+
             assert response.status_code == 200
             data = response.get_json()
             assert data['success'] is True
@@ -128,7 +127,7 @@ class TestUpdateOrder:
         with patch('routes.ORDERS', mock_orders):
             response = client.patch('/api/v1/orders/1',
                                    json={'name': 'New Order Name'})
-            
+
             assert response.status_code == 200
 
     def test_update_order_not_found(self, client, mock_orders):
@@ -136,7 +135,7 @@ class TestUpdateOrder:
         with patch('routes.ORDERS', mock_orders):
             response = client.patch('/api/v1/orders/999',
                                    json={'quantity': 10})
-            
+
             assert response.status_code == 404
 
 
@@ -147,7 +146,7 @@ class TestDeleteOrder:
         """Test soft-deleting an order."""
         with patch('routes.ORDERS', mock_orders):
             response = client.delete('/api/v1/orders/1')
-            
+
             assert response.status_code == 200
             data = response.get_json()
             assert data['success'] is True
@@ -156,7 +155,7 @@ class TestDeleteOrder:
         """Test deleting non-existent order returns 404."""
         with patch('routes.ORDERS', mock_orders):
             response = client.delete('/api/v1/orders/999')
-            
+
             assert response.status_code == 404
 
 
@@ -171,7 +170,7 @@ class TestOrderEjection:
                                        'ejection_enabled': True,
                                        'end_gcode': 'G28 X Y\nM84'
                                    })
-            
+
             assert response.status_code == 200
             data = response.get_json()
             assert data['success'] is True
@@ -185,7 +184,7 @@ class TestOrderMove:
         with patch('routes.ORDERS', mock_orders):
             response = client.post('/api/v1/orders/2/move',
                                   json={'direction': 'up'})
-            
+
             assert response.status_code == 200
 
     def test_move_order_down(self, client, mock_orders):
@@ -193,7 +192,7 @@ class TestOrderMove:
         with patch('routes.ORDERS', mock_orders):
             response = client.post('/api/v1/orders/1/move',
                                   json={'direction': 'down'})
-            
+
             assert response.status_code == 200
 
 
@@ -207,7 +206,7 @@ class TestDefaultEjection:
             'default_end_gcode': ''
         }):
             response = client.get('/api/v1/settings/default-ejection')
-            
+
             assert response.status_code == 200
             data = response.get_json()
             assert 'ejection_enabled' in data
@@ -217,13 +216,13 @@ class TestDefaultEjection:
         """Test saving default ejection settings."""
         with patch('routes.load_default_settings', return_value={}), \
              patch('routes.save_default_settings', return_value=True):
-            
+
             response = client.post('/api/v1/settings/default-ejection',
                                   json={
                                       'ejection_enabled': True,
                                       'end_gcode': 'G28 X Y'
                                   })
-            
+
             assert response.status_code == 200
             data = response.get_json()
             assert data['success'] is True

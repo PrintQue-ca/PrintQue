@@ -1,0 +1,18 @@
+# Ruff configuration for PrintQue API
+
+# Set line length to 150 (generous for modern wide displays)
+line-length = 150
+
+[lint]
+# Enable common rules, but ignore line-too-long (E501) as it's just style preference
+# and many logging statements legitimately need long context
+select = ["E", "F", "W"]
+ignore = ["E501"]
+
+# Per-file ignores
+[lint.per-file-ignores]
+# app.py requires eventlet.monkey_patch() before all other imports
+# This is a fundamental requirement of eventlet and cannot be restructured
+"app.py" = ["E402"]
+# printer_manager.py has a late import to avoid circular dependency
+"services/printer_manager.py" = ["E402"]

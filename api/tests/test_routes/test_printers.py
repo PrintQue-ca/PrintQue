@@ -10,8 +10,7 @@ Tests the /api/v1/printers/* endpoints including:
 - Printer actions (ready, stop, pause, resume)
 """
 
-import pytest
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
 
 class TestListPrinters:
@@ -22,7 +21,7 @@ class TestListPrinters:
         with patch('routes.PRINTERS', []), \
              patch('routes.prepare_printer_data_for_broadcast', return_value=[]):
             response = client.get('/api/v1/printers')
-            
+
             assert response.status_code == 200
             data = response.get_json()
             assert isinstance(data, list)
@@ -33,7 +32,7 @@ class TestListPrinters:
         with patch('routes.PRINTERS', mock_printers), \
              patch('routes.prepare_printer_data_for_broadcast', return_value=mock_printers):
             response = client.get('/api/v1/printers')
-            
+
             assert response.status_code == 200
             data = response.get_json()
             assert isinstance(data, list)
@@ -44,10 +43,10 @@ class TestListPrinters:
         with patch('routes.PRINTERS', mock_printers), \
              patch('routes.prepare_printer_data_for_broadcast', return_value=mock_printers):
             response = client.get('/api/v1/printers')
-            
+
             data = response.get_json()
             printer = data[0]
-            
+
             assert 'name' in printer
             assert 'ip' in printer
             assert 'type' in printer
@@ -61,10 +60,10 @@ class TestGetPrinter:
     def test_get_printer_exists(self, client, mock_printers):
         """Test getting a specific printer by name."""
         with patch('routes.PRINTERS', mock_printers), \
-             patch('routes.prepare_printer_data_for_broadcast', 
+             patch('routes.prepare_printer_data_for_broadcast',
                    return_value=[mock_printers[0]]):
             response = client.get('/api/v1/printers/Test%20Printer%201')
-            
+
             assert response.status_code == 200
             data = response.get_json()
             assert data['name'] == 'Test Printer 1'
@@ -73,7 +72,7 @@ class TestGetPrinter:
         """Test getting non-existent printer returns 404."""
         with patch('routes.PRINTERS', mock_printers):
             response = client.get('/api/v1/printers/NonExistent')
-            
+
             assert response.status_code == 404
 
 
@@ -92,7 +91,7 @@ class TestAddPrinter:
                                       'api_key': 'test_key',
                                       'group': 'Default'
                                   })
-            
+
             assert response.status_code == 200
             data = response.get_json()
             assert data['success'] is True
@@ -104,7 +103,7 @@ class TestAddPrinter:
                                   'ip': '192.168.1.50',
                                   'type': 'prusa'
                               })
-        
+
         assert response.status_code == 400
         data = response.get_json()
         assert 'error' in data
@@ -116,7 +115,7 @@ class TestAddPrinter:
                                   'name': 'Test',
                                   'type': 'prusa'
                               })
-        
+
         assert response.status_code == 400
 
     def test_add_prusa_missing_api_key(self, client):
@@ -128,7 +127,7 @@ class TestAddPrinter:
                                       'ip': '192.168.1.50',
                                       'type': 'prusa'
                                   })
-            
+
             assert response.status_code == 400
             data = response.get_json()
             assert 'API Key' in data['error']
@@ -143,7 +142,7 @@ class TestAddPrinter:
                                       'type': 'bambu',
                                       'access_code': 'code'
                                   })
-            
+
             assert response.status_code == 400
 
 
@@ -155,7 +154,7 @@ class TestUpdatePrinter:
         with patch('routes.PRINTERS', mock_printers):
             response = client.patch('/api/v1/printers/Test%20Printer%201',
                                    json={'group': 'New Group'})
-            
+
             assert response.status_code == 200
             data = response.get_json()
             assert data['success'] is True
@@ -165,7 +164,7 @@ class TestUpdatePrinter:
         with patch('routes.PRINTERS', mock_printers):
             response = client.patch('/api/v1/printers/NonExistent',
                                    json={'group': 'New Group'})
-            
+
             assert response.status_code == 404
 
 
@@ -177,7 +176,7 @@ class TestDeletePrinter:
         printers_copy = mock_printers.copy()
         with patch('routes.PRINTERS', printers_copy):
             response = client.delete('/api/v1/printers/Test%20Printer%201')
-            
+
             assert response.status_code == 200
             data = response.get_json()
             assert data['success'] is True
@@ -186,7 +185,7 @@ class TestDeletePrinter:
         """Test deleting non-existent printer returns 404."""
         with patch('routes.PRINTERS', mock_printers):
             response = client.delete('/api/v1/printers/NonExistent')
-            
+
             assert response.status_code == 404
 
 
@@ -197,11 +196,11 @@ class TestPrinterReady:
         """Test marking a FINISHED printer as ready."""
         printers = mock_printers.copy()
         printers[0]['state'] = 'FINISHED'
-        
+
         with patch('routes.PRINTERS', printers), \
              patch('routes.start_background_distribution'):
             response = client.post('/api/v1/printers/Test%20Printer%201/ready')
-            
+
             assert response.status_code == 200
 
     def test_mark_non_finished_printer_ready_fails(self, client, mock_printers):
@@ -209,7 +208,7 @@ class TestPrinterReady:
         with patch('routes.PRINTERS', mock_printers):
             # First printer is in READY state
             response = client.post('/api/v1/printers/Test%20Printer%201/ready')
-            
+
             assert response.status_code == 400
 
 
@@ -219,7 +218,7 @@ class TestPrinterActions:
     def test_stop_printer(self, client, mock_printers):
         """Test stopping a printer."""
         response = client.post('/api/v1/printers/Test%20Printer%202/stop')
-        
+
         assert response.status_code == 200
         data = response.get_json()
         assert data['success'] is True
@@ -227,11 +226,11 @@ class TestPrinterActions:
     def test_pause_printer(self, client, mock_printers):
         """Test pausing a printer."""
         response = client.post('/api/v1/printers/Test%20Printer%202/pause')
-        
+
         assert response.status_code == 200
 
     def test_resume_printer(self, client, mock_printers):
         """Test resuming a printer."""
         response = client.post('/api/v1/printers/Test%20Printer%202/resume')
-        
+
         assert response.status_code == 200

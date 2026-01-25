@@ -10,14 +10,14 @@ def load_default_settings():
     """Load default settings from file or return defaults if file doesn't exist"""
     # Ensure directory exists
     os.makedirs(USER_DATA_DIR, exist_ok=True)
-    
+
     if os.path.exists(DEFAULT_SETTINGS_FILE):
         try:
             with open(DEFAULT_SETTINGS_FILE, 'r') as f:
                 return json.load(f)
         except Exception as e:
             logging.error(f"Error loading default settings from {DEFAULT_SETTINGS_FILE}: {e}")
-    
+
     # Default settings if file doesn't exist or can't be loaded
     return {
         "default_end_gcode": "",
@@ -29,7 +29,7 @@ def save_default_settings(settings):
     try:
         # Ensure directory exists
         os.makedirs(USER_DATA_DIR, exist_ok=True)
-        
+
         with open(DEFAULT_SETTINGS_FILE, 'w') as f:
             json.dump(settings, f, indent=4)
         logging.debug(f"Saved default settings to {DEFAULT_SETTINGS_FILE}: {settings}")

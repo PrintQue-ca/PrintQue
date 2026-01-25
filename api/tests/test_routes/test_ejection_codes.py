@@ -5,8 +5,7 @@ Tests the /api/v1/ejection-codes/* endpoints for managing
 G-code presets used for automatic print ejection.
 """
 
-import pytest
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
 
 class TestListEjectionCodes:
@@ -16,7 +15,7 @@ class TestListEjectionCodes:
         """Test getting codes when none exist."""
         with patch('routes.ejection_codes.EJECTION_CODES', []):
             response = client.get('/api/v1/ejection-codes')
-            
+
             assert response.status_code == 200
             data = response.get_json()
             assert data['success'] is True
@@ -26,7 +25,7 @@ class TestListEjectionCodes:
         """Test getting codes returns expected list."""
         with patch('routes.ejection_codes.EJECTION_CODES', mock_ejection_codes):
             response = client.get('/api/v1/ejection-codes')
-            
+
             assert response.status_code == 200
             data = response.get_json()
             assert len(data['ejection_codes']) == 2
@@ -39,7 +38,7 @@ class TestGetEjectionCode:
         """Test getting a specific ejection code."""
         with patch('routes.ejection_codes.EJECTION_CODES', mock_ejection_codes):
             response = client.get('/api/v1/ejection-codes/ejection-1')
-            
+
             assert response.status_code == 200
             data = response.get_json()
             assert data['success'] is True
@@ -49,7 +48,7 @@ class TestGetEjectionCode:
         """Test getting non-existent code returns 404."""
         with patch('routes.ejection_codes.EJECTION_CODES', mock_ejection_codes):
             response = client.get('/api/v1/ejection-codes/nonexistent')
-            
+
             assert response.status_code == 404
 
 
@@ -64,7 +63,7 @@ class TestCreateEjectionCode:
                                       'name': 'New Code',
                                       'gcode': 'G28 X Y\nM84'
                                   })
-            
+
             assert response.status_code in [200, 201]
             data = response.get_json()
             assert data['success'] is True
@@ -73,14 +72,14 @@ class TestCreateEjectionCode:
         """Test creating code without name returns error."""
         response = client.post('/api/v1/ejection-codes',
                               json={'gcode': 'G28'})
-        
+
         assert response.status_code == 400
 
     def test_create_code_missing_gcode(self, client):
         """Test creating code without gcode returns error."""
         response = client.post('/api/v1/ejection-codes',
                               json={'name': 'Test'})
-        
+
         assert response.status_code == 400
 
 
@@ -92,7 +91,7 @@ class TestUpdateEjectionCode:
         with patch('routes.ejection_codes.EJECTION_CODES', mock_ejection_codes):
             response = client.patch('/api/v1/ejection-codes/ejection-1',
                                    json={'name': 'Updated Name'})
-            
+
             assert response.status_code == 200
 
     def test_update_code_not_found(self, client, mock_ejection_codes):
@@ -100,7 +99,7 @@ class TestUpdateEjectionCode:
         with patch('routes.ejection_codes.EJECTION_CODES', mock_ejection_codes):
             response = client.patch('/api/v1/ejection-codes/nonexistent',
                                    json={'name': 'Test'})
-            
+
             assert response.status_code == 404
 
 
@@ -112,12 +111,12 @@ class TestDeleteEjectionCode:
         codes = mock_ejection_codes.copy()
         with patch('routes.ejection_codes.EJECTION_CODES', codes):
             response = client.delete('/api/v1/ejection-codes/ejection-1')
-            
+
             assert response.status_code == 200
 
     def test_delete_code_not_found(self, client, mock_ejection_codes):
         """Test deleting non-existent code returns 404."""
         with patch('routes.ejection_codes.EJECTION_CODES', mock_ejection_codes):
             response = client.delete('/api/v1/ejection-codes/nonexistent')
-            
+
             assert response.status_code == 404

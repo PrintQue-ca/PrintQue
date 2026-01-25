@@ -100,7 +100,7 @@ def _apply_saved_settings():
         level = settings.get('console_level', 'INFO')
         if level in LOG_LEVELS:
             console_handler.setLevel(LOG_LEVELS[level])
-        
+
         # Apply debug flags
         saved_flags = settings.get('debug_flags', {})
         with _debug_flags_lock:
@@ -124,18 +124,18 @@ def set_console_log_level(level: str, save: bool = True) -> bool:
     level = level.upper()
     if level not in LOG_LEVELS:
         return False
-    
+
     new_level = LOG_LEVELS[level]
-    
+
     # Update the PrintQue logger's console handler
     console_handler.setLevel(new_level)
-    
+
     # Also update the root logger's StreamHandlers to ensure all console output respects the level
     root_logger = logging.getLogger()
     for handler in root_logger.handlers:
         if isinstance(handler, logging.StreamHandler) and not isinstance(handler, logging.FileHandler):
             handler.setLevel(new_level)
-    
+
     logger.info(f"Console log level changed to {level}")
     if save:
         _save_logging_settings()
@@ -166,7 +166,7 @@ def debug_log(flag: str, message: str, level: str = 'debug'):
     """
     Log a message only if the specified debug flag is enabled.
     This allows feature-specific verbose logging without flooding the console.
-    
+
     Args:
         flag: Debug flag name (e.g., 'cooldown', 'ejection')
         message: The message to log
@@ -174,9 +174,9 @@ def debug_log(flag: str, message: str, level: str = 'debug'):
     """
     if not is_debug_enabled(flag):
         return
-    
+
     prefixed_message = f"[{flag.upper()}] {message}"
-    
+
     if level == 'error':
         logger.error(prefixed_message)
     elif level == 'warning':
@@ -203,7 +203,7 @@ def log_state_change(printer_name, old_state, new_state, reason=""):
     if reason:
         message += f" - Reason: {reason}"
     logger.info(message)
-    
+
 def log_job_assignment(printer_name, job_name, order_id):
     """Log when jobs are assigned to printers"""
     # Changed from â†’ to -> for ASCII compatibility
@@ -231,12 +231,12 @@ def log_state_transition(printer_name, old_state, new_state, trigger, details=No
         "stack_trace": [str(frame) for frame in traceback.extract_stack()[-10:-1]],  # Last 10 frames excluding this one
         "details": details or {}
     }
-    
+
     # Write to JSON file for easy parsing
     transitions_file = os.path.join(LOG_DIR, 'state_transitions.json')
     with open(transitions_file, 'a', encoding='utf-8') as f:
         f.write(json.dumps(transition) + '\n')
-    
+
     # Also log to regular log - Changed from â†’ to -> for ASCII compatibility
     message = f"STATE TRANSITION: {printer_name} [{old_state} -> {new_state}] Trigger: {trigger}"
     if details:
@@ -251,11 +251,11 @@ def log_distribution_event(event_type, details):
         "thread": threading.current_thread().name,
         "details": details
     }
-    
+
     dist_file = os.path.join(LOG_DIR, 'distribution_events.json')
     with open(dist_file, 'a', encoding='utf-8') as f:
         f.write(json.dumps(event) + '\n')
-    
+
     logger.info(f"DISTRIBUTION EVENT: {event_type} - {details}")
 
 def log_job_lifecycle(job_id, printer_name, event, details=None):
@@ -267,11 +267,11 @@ def log_job_lifecycle(job_id, printer_name, event, details=None):
         "event": event,
         "details": details or {}
     }
-    
+
     lifecycle_file = os.path.join(LOG_DIR, 'job_lifecycle.json')
     with open(lifecycle_file, 'a', encoding='utf-8') as f:
         f.write(json.dumps(lifecycle) + '\n')
-    
+
     logger.info(f"JOB LIFECYCLE: Job {job_id} on {printer_name} - {event}")
 
 def log_manual_action(action, printer_name, user_info=None, details=None):
@@ -283,11 +283,11 @@ def log_manual_action(action, printer_name, user_info=None, details=None):
         "user_info": user_info or "Unknown",
         "details": details or {}
     }
-    
+
     manual_file = os.path.join(LOG_DIR, 'manual_actions.json')
     with open(manual_file, 'a', encoding='utf-8') as f:
         f.write(json.dumps(manual_action) + '\n')
-    
+
     logger.info(f"MANUAL ACTION: {action} on {printer_name} by {user_info or 'Unknown'}")
 
 def log_api_poll_event(printer_name, api_state, stored_state, action, details=None):
@@ -300,11 +300,11 @@ def log_api_poll_event(printer_name, api_state, stored_state, action, details=No
         "action": action,
         "details": details or {}
     }
-    
+
     api_file = os.path.join(LOG_DIR, 'api_poll_events.json')
     with open(api_file, 'a', encoding='utf-8') as f:
         f.write(json.dumps(event) + '\n')
-    
+
     if action != "no_change":
         logger.debug(f"API POLL: {printer_name} - API: {api_state}, Stored: {stored_state}, Action: {action}")
 
@@ -312,25 +312,25 @@ def analyze_printer_history(printer_name, hours=24):
     """Analyze recent history for a specific printer"""
     history = []
     cutoff_time = datetime.now() - timedelta(hours=hours)
-    
+
     # Check all log files
-    log_files = ['state_transitions.json', 'distribution_events.json', 
+    log_files = ['state_transitions.json', 'distribution_events.json',
                  'job_lifecycle.json', 'manual_actions.json', 'api_poll_events.json']
-    
+
     for log_file in log_files:
         file_path = os.path.join(LOG_DIR, log_file)
         if not os.path.exists(file_path):
             continue
-            
+
         with open(file_path, 'r', encoding='utf-8') as f:
             for line in f:
                 try:
                     event = json.loads(line)
                     event['log_source'] = log_file.replace('.json', '')
-                    
+
                     # Check if this event is related to our printer
                     if ('printer_name' in event and event['printer_name'] == printer_name) or \
-                       ('details' in event and isinstance(event.get('details'), dict) and 
+                       ('details' in event and isinstance(event.get('details'), dict) and
                         event['details'].get('printer_name') == printer_name):
                         timestamp = datetime.fromisoformat(event['timestamp'])
                         if timestamp > cutoff_time:
@@ -338,7 +338,7 @@ def analyze_printer_history(printer_name, hours=24):
                 except Exception as e:
                     logger.debug(f"Error parsing log line from {log_file}: {e}")
                     continue
-    
+
     # Sort by timestamp
     history.sort(key=lambda x: x['timestamp'])
     return history
@@ -351,30 +351,30 @@ def get_problem_patterns(hours=24):
         'manual_flag_cleared': [],
         'rapid_state_changes': []
     }
-    
+
     transitions_file = os.path.join(LOG_DIR, 'state_transitions.json')
     dist_file = os.path.join(LOG_DIR, 'distribution_events.json')
-    
+
     cutoff_time = datetime.now() - timedelta(hours=hours)
-    
+
     # Check state transitions
     if os.path.exists(transitions_file):
         with open(transitions_file, 'r', encoding='utf-8') as f:
             last_transition = {}
-            
+
             for line in f:
                 try:
                     event = json.loads(line)
                     timestamp = datetime.fromisoformat(event['timestamp'])
-                    
+
                     if timestamp > cutoff_time:
                         printer_name = event['printer_name']
-                        
+
                         # Check for unexpected READY transitions
                         if event['new_state'] == 'READY' and \
                            event['trigger'] not in ['MANUAL_MARK_READY', 'GROUP_MARK_READY', 'USER_ACTION']:
                             patterns['unexpected_ready_transitions'].append(event)
-                        
+
                         # Check for rapid state changes
                         if printer_name in last_transition:
                             last_time = datetime.fromisoformat(last_transition[printer_name]['timestamp'])
@@ -385,13 +385,13 @@ def get_problem_patterns(hours=24):
                                     'second': event,
                                     'interval_seconds': (timestamp - last_time).total_seconds()
                                 })
-                        
+
                         last_transition[printer_name] = event
-                        
+
                 except Exception as e:
                     logger.debug(f"Error parsing transition: {e}")
                     continue
-    
+
     # Check distribution events
     if os.path.exists(dist_file):
         with open(dist_file, 'r', encoding='utf-8') as f:
@@ -399,43 +399,43 @@ def get_problem_patterns(hours=24):
                 try:
                     event = json.loads(line)
                     timestamp = datetime.fromisoformat(event['timestamp'])
-                    
+
                     if timestamp > cutoff_time:
                         # Check for midnight distributions
                         if timestamp.hour >= 23 or timestamp.hour <= 1:
                             patterns['midnight_distributions'].append(event)
-                            
+
                 except Exception as e:
                     logger.debug(f"Error parsing distribution event: {e}")
                     continue
-    
+
     return patterns
 
 def get_recent_logs(minutes=5):
     """Get console output and logs from the last N minutes"""
     import sys
-    
+
     logs_content = []
     current_time = datetime.now()
     cutoff_time = current_time - timedelta(minutes=minutes)
-    
+
     # Add header
-    logs_content.append(f"=== PrintQue Console Output and Logs ===\n")
+    logs_content.append("=== PrintQue Console Output and Logs ===\n")
     logs_content.append(f"Generated: {current_time.strftime('%Y-%m-%d %H:%M:%S')}\n")
     logs_content.append(f"Time Range: Last {minutes} minutes\n")
     logs_content.append(f"From: {cutoff_time.strftime('%Y-%m-%d %H:%M:%S')}\n")
     logs_content.append(f"To: {current_time.strftime('%Y-%m-%d %H:%M:%S')}\n")
     logs_content.append("=" * 70 + "\n\n")
-    
+
     # Get console output
     try:
         from utils.console_capture import console_capture
-        
+
         logs_content.append("=== CONSOLE OUTPUT (Command Prompt) ===\n")
         logs_content.append("=" * 70 + "\n")
-        
+
         console_lines = console_capture.get_recent_output(minutes=minutes)
-        
+
         if console_lines:
             logs_content.append(f"Found {len(console_lines)} console output lines:\n\n")
             for line in console_lines:
@@ -444,11 +444,11 @@ def get_recent_logs(minutes=5):
                     logs_content.append('\n')
         else:
             logs_content.append("No console output in the specified time range.\n")
-            
+
             # Show last 100 lines regardless of time
             all_lines = console_capture.get_all_output()
             if all_lines:
-                logs_content.append(f"\nShowing last 100 console output lines:\n")
+                logs_content.append("\nShowing last 100 console output lines:\n")
                 logs_content.append("-" * 50 + "\n")
                 for line in all_lines[-100:]:
                     logs_content.append(line)
@@ -457,7 +457,7 @@ def get_recent_logs(minutes=5):
             else:
                 logs_content.append("No console output captured yet.\n")
                 logs_content.append("\nNote: Console capture might not be started. Make sure console_capture.start() is called.\n")
-                
+
     except ImportError:
         logs_content.append("Console capture module not available.\n")
         logs_content.append("Make sure console_capture.py is in your project directory.\n")
@@ -466,20 +466,20 @@ def get_recent_logs(minutes=5):
         logs_content.append(f"Error type: {type(e).__name__}\n")
         import traceback
         logs_content.append(f"Traceback: {traceback.format_exc()}\n")
-    
+
     # Also include file logs
     logs_content.append("\n\n=== FILE LOGS ===\n")
     logs_content.append("=" * 70 + "\n\n")
-    
+
     # Read from the main log file
     log_file_path = os.path.join(LOG_DIR, 'printque.log')
-    
+
     if os.path.exists(log_file_path):
         logs_content.append("--- Main Log File ---\n")
         try:
             with open(log_file_path, 'r', encoding='utf-8', errors='ignore') as f:
                 lines = f.readlines()
-            
+
             # Get lines from time range
             recent_lines = []
             for line in lines:
@@ -489,11 +489,11 @@ def get_recent_logs(minutes=5):
                         log_time = datetime.strptime(timestamp_str, '%Y-%m-%d %H:%M:%S')
                         if log_time >= cutoff_time:
                             recent_lines.append(line)
-                except:
+                except Exception:
                     # Include continuation lines of multi-line log entries
                     if recent_lines and not line.startswith('20'):
                         recent_lines.append(line)
-            
+
             if recent_lines:
                 logs_content.append(f"Found {len(recent_lines)} log entries:\n")
                 logs_content.extend(recent_lines)
@@ -503,12 +503,12 @@ def get_recent_logs(minutes=5):
                 if lines:
                     logs_content.append("\nShowing last 20 lines from log file:\n")
                     logs_content.extend(lines[-20:])
-                
+
         except Exception as e:
             logs_content.append(f"Error reading log file: {str(e)}\n")
     else:
         logs_content.append("Main log file not found.\n")
-    
+
     # State changes log
     state_log_path = os.path.join(LOG_DIR, 'state_changes.log')
     if os.path.exists(state_log_path):
@@ -516,7 +516,7 @@ def get_recent_logs(minutes=5):
         try:
             with open(state_log_path, 'r', encoding='utf-8', errors='ignore') as f:
                 lines = f.readlines()
-            
+
             recent_lines = []
             for line in lines:
                 try:
@@ -525,25 +525,25 @@ def get_recent_logs(minutes=5):
                         log_time = datetime.strptime(timestamp_str, '%Y-%m-%d %H:%M:%S')
                         if log_time >= cutoff_time:
                             recent_lines.append(line)
-                except:
+                except Exception:
                     if recent_lines and not line.startswith('20'):
                         recent_lines.append(line)
-            
+
             if recent_lines:
                 logs_content.extend(recent_lines)
             else:
                 logs_content.append("No recent state changes.\n")
-                
+
         except Exception as e:
             logs_content.append(f"Error reading state changes log: {str(e)}\n")
-    
+
     # Summary information
     logs_content.append("\n\n=== SYSTEM INFORMATION ===\n")
     logs_content.append("=" * 70 + "\n")
     logs_content.append(f"Log Directory: {LOG_DIR}\n")
     logs_content.append(f"Working Directory: {os.getcwd()}\n")
     logs_content.append(f"Python Version: {sys.version}\n")
-    
+
     # List all log files
     if os.path.exists(LOG_DIR):
         log_files = os.listdir(LOG_DIR)
@@ -554,5 +554,5 @@ def get_recent_logs(minutes=5):
                 size = os.path.getsize(file_path)
                 mtime = datetime.fromtimestamp(os.path.getmtime(file_path))
                 logs_content.append(f"  - {file}: {size:,} bytes (modified: {mtime.strftime('%Y-%m-%d %H:%M:%S')})\n")
-    
+
     return ''.join(logs_content)
