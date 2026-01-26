@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v1.1.1 (2026-01-26)
+
+### Bug Fixes
+
+- **ci**: Prevent semantic-release from creating GitHub releases
+  ([`eecff41`](https://github.com/Sam-Hoult/PrintQue/commit/eecff415df9e69786818b81b99c47cc058a919df))
+
+
 ## v1.1.0 (2026-01-26)
 
 ### Chores
