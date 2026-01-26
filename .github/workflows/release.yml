@@ -86,29 +86,6 @@ jobs:
       - name: Build executable
         run: python build.py --skip-deps --version ${{ steps.get_version.outputs.version }}
 
-      - name: Sign Windows executable
-        if: matrix.platform == 'Windows' && env.CERTIFICATE_BASE64 != ''
-        env:
-          CERTIFICATE_BASE64: ${{ secrets.CODE_SIGNING_CERT_BASE64 }}
-          CERTIFICATE_PASSWORD: ${{ secrets.CODE_SIGNING_CERT_PASSWORD }}
-        run: |
-          # Decode certificate
-          echo "$CERTIFICATE_BASE64" | base64 -d > certificate.pfx
-          
-          # Sign the executable
-          & "C:\Program Files (x86)\Windows Kits\10\bin\x64\signtool.exe" sign `
-            /f certificate.pfx `
-            /p "$env:CERTIFICATE_PASSWORD" `
-            /tr http://timestamp.digicert.com `
-            /td sha256 `
-            /fd sha256 `
-            /d "PrintQue" `
-            "dist\PrintQue-${{ steps.get_version.outputs.version }}-Windows\PrintQue.exe"
-          
-          # Clean up
-          Remove-Item certificate.pfx
-        shell: pwsh
-
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
