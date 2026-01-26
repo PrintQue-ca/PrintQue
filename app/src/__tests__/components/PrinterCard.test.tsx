@@ -15,6 +15,15 @@ vi.mock('../../hooks', () => ({
   useResumePrint: () => ({ mutate: vi.fn(), isPending: false }),
   useMarkReady: () => ({ mutate: vi.fn(), isPending: false }),
   useClearError: () => ({ mutate: vi.fn(), isPending: false }),
+  useDeletePrinter: () => ({ mutate: vi.fn(), mutateAsync: vi.fn(), isPending: false }),
+}))
+
+// Mock sonner toast
+vi.mock('sonner', () => ({
+  toast: {
+    success: vi.fn(),
+    error: vi.fn(),
+  },
 }))
 
 const createWrapper = () => {
