@@ -261,8 +261,6 @@ Logs are stored in your user directory:
 
 For assistance with PrintQue:
 - **Discord**: [Join our community](https://discord.gg/UhFBCKdq)
-- **Email**: zhartley@hotmail.ca
-- **Website**: www.printque.ca
 
 ## Development
 
