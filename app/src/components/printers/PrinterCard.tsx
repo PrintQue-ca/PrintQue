@@ -9,6 +9,7 @@ import {
   Square,
   Thermometer,
 } from 'lucide-react'
+import { toast } from 'sonner'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -19,7 +20,14 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { Progress } from '@/components/ui/progress'
-import { useClearError, useMarkReady, usePausePrint, useResumePrint, useStopPrint } from '@/hooks'
+import {
+  useClearError,
+  useDeletePrinter,
+  useMarkReady,
+  usePausePrint,
+  useResumePrint,
+  useStopPrint,
+} from '@/hooks'
 import type { Printer } from '@/types'
 
 interface PrinterCardProps {
@@ -56,12 +64,23 @@ export function PrinterCard({ printer }: PrinterCardProps) {
   const resumePrint = useResumePrint()
   const markReady = useMarkReady()
   const clearError = useClearError()
+  const deletePrinter = useDeletePrinter()
 
   const handleStop = () => stopPrint.mutate(printer.name)
   const handlePause = () => pausePrint.mutate(printer.name)
   const handleResume = () => resumePrint.mutate(printer.name)
   const handleMarkReady = () => markReady.mutate(printer.name)
   const handleClearError = () => clearError.mutate(printer.name)
+  const handleDelete = async () => {
+    if (confirm(`Are you sure you want to delete printer "${printer.name}"?`)) {
+      try {
+        await deletePrinter.mutateAsync(printer.name)
+        toast.success('Printer deleted')
+      } catch (_error) {
+        toast.error('Failed to delete printer')
+      }
+    }
+  }
 
   const isPrinting = printer.status === 'PRINTING'
   const isPaused = printer.status === 'PAUSED'
@@ -237,7 +256,9 @@ export function PrinterCard({ printer }: PrinterCardProps) {
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end">
                 <DropdownMenuItem>Edit</DropdownMenuItem>
-                <DropdownMenuItem className="text-destructive">Delete</DropdownMenuItem>
+                <DropdownMenuItem className="text-destructive" onClick={handleDelete}>
+                  Delete
+                </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
           </div>

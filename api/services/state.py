@@ -13,7 +13,8 @@ import re
 from flask import current_app
 
 # Set up logging directory
-LOG_DIR = os.path.join(os.path.expanduser("~"), "PrintQueData")
+# Support DATA_DIR environment variable for test isolation
+LOG_DIR = os.path.join(os.getenv('DATA_DIR', os.path.expanduser("~")), "PrintQueData")
 os.makedirs(LOG_DIR, exist_ok=True)
 LOG_FILE = os.path.join(LOG_DIR, "app.log")
 
