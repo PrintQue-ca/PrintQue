@@ -13,8 +13,6 @@ version_variables = ["api/__version__.py:__version__"]
 
 # Branch configuration
 branch = "main"
-upload_to_repository = false
-upload_to_release = false
 build_command = ""
 
 # Commit message format
@@ -24,9 +22,8 @@ commit_parser = "conventional"
 # Tag format
 tag_format = "v{version}"
 
-# Changelog
-changelog_generate = true
-changelog_file = "CHANGELOG.md"
+# Disable changelog (we generate it in release workflow)
+changelog_generate = false
 
 [tool.semantic_release.commit_parser_options]
 # Conventional commit parser options
@@ -50,4 +47,6 @@ type = "github"
 token = { env = "GH_TOKEN" }
 
 [tool.semantic_release.publish]
+# Don't create GitHub releases - the Release Build workflow handles that
 upload_to_vcs_release = false
+dist_glob_patterns = []

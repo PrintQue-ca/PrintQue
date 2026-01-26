@@ -84,9 +84,20 @@ jobs:
           
           echo ""
           echo "=== Running semantic-release ==="
-          semantic-release version
+          # This will update version files, commit, and create tag
+          # --no-vcs-release prevents creating GitHub Release (Release Build workflow does that)
+          semantic-release version --no-push --no-vcs-release
+          
+          echo ""
+          echo "=== Version files after bump ==="
+          cat api/__version__.py
+          echo ""
+          grep "^version" pyproject.toml
           
       - name: Push changes
         run: |
-          # Push any new commits and tags created by semantic-release
-          git push origin main --follow-tags 2>/dev/null || echo "Nothing to push"
+          echo "=== Pushing commit and tags ==="
+          # Push the version commit first
+          git push origin main
+          # Then push tags
+          git push origin --tags
