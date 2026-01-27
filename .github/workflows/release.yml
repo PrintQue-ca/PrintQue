@@ -155,6 +155,7 @@ jobs:
       - name: Create Release
         uses: softprops/action-gh-release@v1
         with:
+          tag_name: v${{ steps.get_version.outputs.version }}
           name: PrintQue v${{ steps.get_version.outputs.version }}
           body: |
             ## PrintQue v${{ steps.get_version.outputs.version }}
