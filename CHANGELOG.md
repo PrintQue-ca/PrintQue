@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v1.1.2 (2026-01-27)
+
+### Bug Fixes
+
+- **ci**: Add explicit tag_name for manual workflow dispatch releases
+  ([`bc6b624`](https://github.com/Sam-Hoult/PrintQue/commit/bc6b6248ad33d1e4b0e90a646c9df1b67e790da7))
+
+
 ## v1.1.1 (2026-01-26)
 
 ### Bug Fixes
