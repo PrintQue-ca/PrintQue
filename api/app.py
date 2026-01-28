@@ -245,10 +245,32 @@ def cleanup_on_exit():
 # Register the cleanup function
 atexit.register(cleanup_on_exit)
 
-def open_browser():
+def find_available_port(start_port: int, max_attempts: int = 10) -> int:
+    """Find an available port, starting from start_port and incrementing if taken."""
+    import socket
+
+    for attempt in range(max_attempts):
+        port = start_port + attempt
+        try:
+            # Try to bind to the port to check availability
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            sock.bind(('0.0.0.0', port))
+            sock.close()
+
+            if port != start_port:
+                logging.warning(f"Port {start_port} was in use, using port {port} instead")
+            return port
+        except OSError:
+            logging.debug(f"Port {port} is in use, trying next...")
+            continue
+
+    raise RuntimeError(f"Could not find available port after {max_attempts} attempts starting from {start_port}")
+
+def open_browser(port: int):
     """Open the default web browser after a short delay"""
     time.sleep(2)  # Wait for server to start
-    url = f"http://localhost:{Config.PORT}"
+    url = f"http://localhost:{port}"
     try:
         webbrowser.open(url)
         logging.info(f"Opened browser to {url}")
@@ -258,6 +280,9 @@ def open_browser():
 if __name__ == '__main__':
     # Start console capture
     console_capture.start()
+
+    # Find available port (auto-increment if default is taken)
+    actual_port = find_available_port(Config.PORT)
 
     # Start the application without password check
     start_background_tasks(socketio, app)
@@ -274,8 +299,8 @@ if __name__ == '__main__':
     logging.info("    ║                                               ║")
     logging.info("    ╚═══════════════════════════════════════════════╝")
     logging.info("")
-    logging.info(f"    Server running at: http://localhost:{Config.PORT}")
-    logging.info(f"    Network access:    http://0.0.0.0:{Config.PORT}")
+    logging.info(f"    Server running at: http://localhost:{actual_port}")
+    logging.info(f"    Network access:    http://0.0.0.0:{actual_port}")
     logging.info("")
     logging.info("=" * 60)
     logging.info("=" * 60)
@@ -283,9 +308,9 @@ if __name__ == '__main__':
 
     # Open browser automatically (only for packaged builds or when explicitly requested)
     if getattr(sys, 'frozen', False) or os.environ.get('OPEN_BROWSER', '').lower() == 'true':
-        browser_thread = threading.Thread(target=open_browser, daemon=True)
+        browser_thread = threading.Thread(target=open_browser, args=(actual_port,), daemon=True)
         browser_thread.start()
 
     # Run the Flask app
     # Added app.config['DEBUG'] for the debug flag
-    socketio.run(app, host='0.0.0.0', port=Config.PORT, debug=app.config.get('DEBUG', False))
+    socketio.run(app, host='0.0.0.0', port=actual_port, debug=app.config.get('DEBUG', False))

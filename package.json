@@ -2,6 +2,7 @@
   "name": "printque",
   "private": true,
   "type": "module",
+  "license": "MIT",
   "description": "PrintQue - Open Source Print Farm Manager",
   "scripts": {
     "commit": "cz",

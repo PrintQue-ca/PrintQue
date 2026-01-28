@@ -4,7 +4,7 @@ version = "1.1.2"
 description = "PrintQue - Open Source Print Farm Manager"
 readme = "README.md"
 requires-python = ">=3.9"
-license = {text = "GPL-3.0"}
+license = {text = "MIT"}
 
 [tool.semantic_release]
 # Version locations - semantic-release will update these automatically
