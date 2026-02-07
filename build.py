@@ -263,7 +263,7 @@ def create_pyinstaller_spec():
     if IS_WINDOWS:
         exe_name = APP_NAME
         icon_file = "printque.ico"
-        console = True  # Show console for debugging; set to False for release
+        console = False  # No console window - standalone app opens browser only
     elif IS_MAC:
         exe_name = APP_NAME
         icon_file = "printque.icns"
@@ -474,7 +474,7 @@ def create_distribution():
     # Create distribution folder
     dist_folder.mkdir(parents=True, exist_ok=True)
     
-    # Copy executable
+    # Copy executable (single-file release; app uses %USERPROFILE%\PrintQueData for data/logs/uploads)
     if IS_WINDOWS:
         src_exe = DIST_DIR / f"{APP_NAME}.exe"
         if src_exe.exists():
@@ -488,48 +488,8 @@ def create_distribution():
         if src_exe.exists():
             shutil.copy(src_exe, dist_folder)
     
-    # Create data directories
-    for dirname in ["data", "uploads", "logs"]:
-        (dist_folder / dirname).mkdir(exist_ok=True)
-    
-    # Create launcher script
-    if IS_WINDOWS:
-        launcher = dist_folder / "Start_PrintQue.bat"
-        launcher.write_text(f'''@echo off
-title {APP_NAME} Server
-echo ================================================
-echo           {APP_NAME} - Print Farm Manager
-echo ================================================
-echo.
-echo Starting {APP_NAME} server...
-echo.
-echo The web interface will be available at:
-echo   http://localhost:5000
-echo.
-echo Press Ctrl+C to stop the server.
-echo ================================================
-echo.
-{APP_NAME}.exe
-pause
-''')
-    else:
-        launcher = dist_folder / f"start_{APP_NAME.lower()}.sh"
-        launcher.write_text(f'''#!/bin/bash
-echo "================================================"
-echo "          {APP_NAME} - Print Farm Manager"
-echo "================================================"
-echo ""
-echo "Starting {APP_NAME} server..."
-echo ""
-echo "The web interface will be available at:"
-echo "  http://localhost:5000"
-echo ""
-echo "Press Ctrl+C to stop the server."
-echo "================================================"
-echo ""
-./{APP_NAME.lower() if IS_LINUX else APP_NAME + '.app/Contents/MacOS/' + APP_NAME}
-''')
-        launcher.chmod(0o755)
+    # No data/logs/uploads folders in release - app uses user app data folder
+    # No .bat/.sh launcher - run the exe (or .app) directly
     
     # Create README
     readme = dist_folder / "README.txt"
@@ -537,14 +497,19 @@ echo ""
 {'=' * 40}
 
 Quick Start:
-1. {'Double-click Start_PrintQue.bat' if IS_WINDOWS else 'Run ./start_printque.sh'}
-2. Open your browser to: http://localhost:5000
+1. {'Double-click ' + APP_NAME + '.exe (browser opens automatically).' if IS_WINDOWS else 'Run ./' + APP_NAME.lower() if IS_LINUX else 'Open ' + APP_NAME + '.app'}
+2. Open http://localhost:5000 if it doesn't open automatically.
 3. Add your printers and start managing!
 
-Data Storage:
-- Configuration: data/
-- Uploaded files: uploads/
-- Logs: logs/
+Data Storage (user app data folder, not next to the exe):
+- Windows: %USERPROFILE%\\PrintQueData\\
+- macOS/Linux: ~/PrintQueData/
+- Config, uploads, and logs are stored there automatically.
+
+Code signing:
+- The executable is not currently signed. On Windows you may see SmartScreen
+  or your antivirus flagging it; you can choose "Run anyway" or add an
+  exception. We plan to sign releases in the future.
 
 Open Source:
 - All features enabled, no printer limits
@@ -552,7 +517,7 @@ Open Source:
 - GitHub: https://github.com/PrintQue/PrintQue
 
 Support:
-- Check logs/ for error details
+- Logs: PrintQueData\\app.log (or printque.log in PrintQueData\\logs)
 - GitHub Issues: https://github.com/PrintQue/PrintQue/issues
 
 Version: {VERSION}
@@ -632,12 +597,12 @@ def main():
         dist_name = f"{APP_NAME}-{VERSION}-{platform_name}"
         if IS_WINDOWS:
             print(f"  cd dist\\{dist_name}")
-            print("  Start_PrintQue.bat")
+            print(f"  {APP_NAME}.exe")
         elif IS_MAC:
             print(f"  open dist/{dist_name}/{APP_NAME}.app")
         else:
             print(f"  cd dist/{dist_name}")
-            print(f"  ./start_printque.sh")
+            print(f"  ./{APP_NAME.lower()}")
         
         return 0
         
