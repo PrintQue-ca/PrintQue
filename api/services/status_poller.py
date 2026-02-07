@@ -177,19 +177,21 @@ def update_bambu_printer_states():
             if current_state == 'COOLING':
                 continue
 
-            # Skip state updates for manually set printers (e.g., user clicked Mark Ready)
-            # The manually_set flag protects the READY state from being overwritten by MQTT
-            if printer.get('manually_set', False) and current_state == 'READY':
-                logging.debug(f"Bambu {printer_name}: skipping MQTT state update - printer is manually set to READY")
+            # Get the new state from Bambu MQTT
+            new_state = bambu_state.get('state', current_state)
+
+            # Protect manually-set READY state from being overwritten by stale MQTT states
+            # (e.g., FINISHED), but still allow real activity (PRINTING, EJECTING, PREPARE)
+            # to come through so the printer can transition when a job actually starts.
+            if (printer.get('manually_set', False) and current_state == 'READY'
+                    and new_state not in ['PRINTING', 'EJECTING', 'PREPARE', 'PAUSED']):
+                logging.debug(f"Bambu {printer_name}: preserving manually-set READY state (ignoring MQTT state {new_state})")
                 # Still update temperatures even when preserving manual state
                 if 'nozzle_temp' in bambu_state:
                     printer['nozzle_temp'] = bambu_state['nozzle_temp']
                 if 'bed_temp' in bambu_state:
                     printer['bed_temp'] = bambu_state['bed_temp']
                 continue
-
-            # Get the new state from Bambu MQTT
-            new_state = bambu_state.get('state', current_state)
 
             # Update temperatures
             if 'nozzle_temp' in bambu_state:
@@ -221,6 +223,11 @@ def update_bambu_printer_states():
                     printer['state'] = new_state
                     printer['status'] = state_map.get(new_state, 'Unknown')
                     updates_made = True
+
+                    # Clear manually_set when printer starts real activity
+                    if new_state in ['PRINTING', 'EJECTING', 'PREPARE'] and printer.get('manually_set', False):
+                        logging.info(f"Bambu {printer_name}: clearing manually_set flag on transition to {new_state}")
+                        printer['manually_set'] = False
 
                     # Set finish_time when transitioning to FINISHED
                     if new_state == 'FINISHED' and current_state != 'FINISHED':
