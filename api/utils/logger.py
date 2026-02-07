@@ -29,7 +29,7 @@ state_handler = logging.FileHandler(os.path.join(LOG_DIR, 'state_changes.log'), 
 state_handler.setLevel(logging.INFO)
 state_handler.setFormatter(detailed_formatter)
 
-# Console handler
+# Console handler (default: INFO so console is not noisy)
 console_handler = logging.StreamHandler()
 console_handler.setLevel(logging.INFO)
 console_handler.setFormatter(detailed_formatter)
@@ -53,6 +53,9 @@ LOG_LEVELS = {
     'ERROR': logging.ERROR,
     'CRITICAL': logging.CRITICAL
 }
+
+# Default console level on startup (use INFO, not DEBUG)
+DEFAULT_CONSOLE_LEVEL = 'INFO'
 
 # Feature-specific debug flags - these enable verbose logging for specific features
 # Can be toggled via API without changing the overall log level
@@ -93,11 +96,11 @@ def _save_logging_settings():
         print(f"Could not save logging settings: {e}")
 
 def _apply_saved_settings():
-    """Apply saved logging settings on startup"""
+    """Apply saved logging settings on startup. Default console level is INFO."""
     settings = _load_logging_settings()
     if settings:
-        # Apply console level
-        level = settings.get('console_level', 'INFO')
+        # Apply console level (default INFO when key missing)
+        level = settings.get('console_level', DEFAULT_CONSOLE_LEVEL)
         if level in LOG_LEVELS:
             console_handler.setLevel(LOG_LEVELS[level])
 
@@ -117,7 +120,7 @@ def get_console_log_level() -> str:
     for name, value in LOG_LEVELS.items():
         if value == level:
             return name
-    return 'INFO'
+    return DEFAULT_CONSOLE_LEVEL
 
 def set_console_log_level(level: str, save: bool = True) -> bool:
     """Set console log level. Returns True if successful."""

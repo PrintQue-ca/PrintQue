@@ -1,7 +1,8 @@
 import { createFileRoute } from '@tanstack/react-router'
-import { Loader2, Plus, Settings, Trash2 } from 'lucide-react'
+import { Eye, EyeOff, Loader2, Plus, Settings, Trash2 } from 'lucide-react'
 import { useState } from 'react'
 import { toast } from 'sonner'
+import { EditPrinterDialog } from '@/components/printers/EditPrinterDialog'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -32,7 +33,7 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import { useAddPrinter, useDeletePrinter, usePrinters } from '@/hooks'
-import type { PrinterFormData, PrinterType } from '@/types'
+import type { Printer, PrinterFormData, PrinterType } from '@/types'
 
 export const Route = createFileRoute('/printers')({ component: PrintersPage })
 
@@ -41,6 +42,8 @@ function PrintersPage() {
   const addPrinter = useAddPrinter()
   const deletePrinter = useDeletePrinter()
   const [isDialogOpen, setIsDialogOpen] = useState(false)
+  const [editingPrinter, setEditingPrinter] = useState<Printer | null>(null)
+  const [showAccessCode, setShowAccessCode] = useState(false)
   const [formData, setFormData] = useState<PrinterFormData>({
     name: '',
     ip: '',
@@ -56,14 +59,31 @@ function PrintersPage() {
       toast.error('Name and IP address are required')
       return
     }
+    if (
+      formData.type === 'bambu' &&
+      (!formData.serial_number?.trim() || !formData.api_key?.trim())
+    ) {
+      toast.error('Serial number and access code are required for Bambu printers')
+      return
+    }
 
     try {
       await addPrinter.mutateAsync(formData)
-      toast.success('Printer added successfully')
+      toast.success('Printer added successfully', { duration: 4000 })
       setIsDialogOpen(false)
+      setShowAccessCode(false)
       setFormData({ name: '', ip: '', type: 'bambu', api_key: '', serial_number: '' })
-    } catch (_error) {
-      toast.error('Failed to add printer')
+    } catch (error) {
+      let message = 'Failed to add printer'
+      if (error instanceof Error && error.message) {
+        try {
+          const parsed = JSON.parse(error.message) as { error?: string }
+          message = parsed.error ?? error.message
+        } catch {
+          message = error.message
+        }
+      }
+      toast.error(message)
     }
   }
 
@@ -162,13 +182,30 @@ function PrintersPage() {
                     </div>
                     <div className="grid gap-2">
                       <Label htmlFor="api_key">Access Code</Label>
-                      <Input
-                        id="api_key"
-                        type="password"
-                        value={formData.api_key}
-                        onChange={(e) => setFormData({ ...formData, api_key: e.target.value })}
-                        placeholder="Access code from printer"
-                      />
+                      <div className="relative">
+                        <Input
+                          id="api_key"
+                          type={showAccessCode ? 'text' : 'password'}
+                          value={formData.api_key}
+                          onChange={(e) => setFormData({ ...formData, api_key: e.target.value })}
+                          placeholder="Access code from printer"
+                          className="pr-9"
+                        />
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon"
+                          className="absolute right-0 top-0 h-full px-3 py-2 hover:bg-transparent"
+                          onClick={() => setShowAccessCode((prev) => !prev)}
+                          aria-label={showAccessCode ? 'Hide access code' : 'Show access code'}
+                        >
+                          {showAccessCode ? (
+                            <EyeOff className="h-4 w-4 text-muted-foreground" />
+                          ) : (
+                            <Eye className="h-4 w-4 text-muted-foreground" />
+                          )}
+                        </Button>
+                      </div>
                     </div>
                   </>
                 )}
@@ -246,7 +283,12 @@ function PrintersPage() {
                     </TableCell>
                     <TableCell className="text-right">
                       <div className="flex justify-end gap-2">
-                        <Button variant="ghost" size="sm">
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => setEditingPrinter(printer)}
+                          aria-label="Edit printer"
+                        >
                           <Settings className="h-4 w-4" />
                         </Button>
                         <Button
@@ -271,6 +313,12 @@ function PrintersPage() {
           )}
         </CardContent>
       </Card>
+
+      <EditPrinterDialog
+        printer={editingPrinter}
+        open={!!editingPrinter}
+        onOpenChange={(open) => !open && setEditingPrinter(null)}
+      />
     </div>
   )
 }

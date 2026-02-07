@@ -1,10 +1,10 @@
-import { createFileRoute } from '@tanstack/react-router'
-import { Loader2 } from 'lucide-react'
+import { createFileRoute, Link } from '@tanstack/react-router'
+import { Loader2, Plus } from 'lucide-react'
 import { StatsCards } from '@/components/layout/StatsCards'
-import { EjectionCodesManager } from '@/components/orders/EjectionCodesManager'
 import { NewOrderForm } from '@/components/orders/NewOrderForm'
 import { OrdersTable } from '@/components/orders/OrdersTable'
 import { PrinterCard } from '@/components/printers/PrinterCard'
+import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { useOrders, usePrinters } from '@/hooks'
 
@@ -43,9 +43,15 @@ function Dashboard() {
                   ))}
                 </div>
               ) : (
-                <div className="text-center py-8 text-muted-foreground">
+                <div className="flex flex-col items-center justify-center gap-4 py-8 text-muted-foreground">
                   <p>No printers configured.</p>
-                  <p className="text-sm">Go to the Printers page to add one.</p>
+                  <p className="text-sm">Add a printer to get started.</p>
+                  <Button asChild>
+                    <Link to="/printers">
+                      <Plus className="h-4 w-4" />
+                      Add printer
+                    </Link>
+                  </Button>
                 </div>
               )}
             </CardContent>
@@ -71,7 +77,6 @@ function Dashboard() {
         {/* New Order Form - Sidebar */}
         <div className="space-y-4">
           <NewOrderForm />
-          <EjectionCodesManager />
         </div>
       </div>
     </div>

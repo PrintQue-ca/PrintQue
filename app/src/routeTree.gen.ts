@@ -9,11 +9,12 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from './routes/__root'
-import { Route as SystemRouteImport } from './routes/system'
-import { Route as StatsRouteImport } from './routes/stats'
-import { Route as PrintersRouteImport } from './routes/printers'
-import { Route as LicenseRouteImport } from './routes/license'
+import { Route as EjectionCodesRouteImport } from './routes/ejection-codes'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as LicenseRouteImport } from './routes/license'
+import { Route as PrintersRouteImport } from './routes/printers'
+import { Route as StatsRouteImport } from './routes/stats'
+import { Route as SystemRouteImport } from './routes/system'
 
 const SystemRoute = SystemRouteImport.update({
   id: '/system',
@@ -35,6 +36,11 @@ const LicenseRoute = LicenseRouteImport.update({
   path: '/license',
   getParentRoute: () => rootRouteImport,
 } as any)
+const EjectionCodesRoute = EjectionCodesRouteImport.update({
+  id: '/ejection-codes',
+  path: '/ejection-codes',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
@@ -43,6 +49,7 @@ const IndexRoute = IndexRouteImport.update({
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/ejection-codes': typeof EjectionCodesRoute
   '/license': typeof LicenseRoute
   '/printers': typeof PrintersRoute
   '/stats': typeof StatsRoute
@@ -50,6 +57,7 @@ export interface FileRoutesByFullPath {
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/ejection-codes': typeof EjectionCodesRoute
   '/license': typeof LicenseRoute
   '/printers': typeof PrintersRoute
   '/stats': typeof StatsRoute
@@ -58,6 +66,7 @@ export interface FileRoutesByTo {
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
+  '/ejection-codes': typeof EjectionCodesRoute
   '/license': typeof LicenseRoute
   '/printers': typeof PrintersRoute
   '/stats': typeof StatsRoute
@@ -65,14 +74,15 @@ export interface FileRoutesById {
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/license' | '/printers' | '/stats' | '/system'
+  fullPaths: '/' | '/ejection-codes' | '/license' | '/printers' | '/stats' | '/system'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/license' | '/printers' | '/stats' | '/system'
-  id: '__root__' | '/' | '/license' | '/printers' | '/stats' | '/system'
+  to: '/' | '/ejection-codes' | '/license' | '/printers' | '/stats' | '/system'
+  id: '__root__' | '/' | '/ejection-codes' | '/license' | '/printers' | '/stats' | '/system'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
+  EjectionCodesRoute: typeof EjectionCodesRoute
   LicenseRoute: typeof LicenseRoute
   PrintersRoute: typeof PrintersRoute
   StatsRoute: typeof StatsRoute
@@ -109,6 +119,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof LicenseRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/ejection-codes': {
+      id: '/ejection-codes'
+      path: '/ejection-codes'
+      fullPath: '/ejection-codes'
+      preLoaderRoute: typeof EjectionCodesRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/': {
       id: '/'
       path: '/'
@@ -121,6 +138,7 @@ declare module '@tanstack/react-router' {
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
+  EjectionCodesRoute: EjectionCodesRoute,
   LicenseRoute: LicenseRoute,
   PrintersRoute: PrintersRoute,
   StatsRoute: StatsRoute,
@@ -130,8 +148,9 @@ export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
   ._addFileTypes<FileRouteTypes>()
 
-import type { getRouter } from './router.tsx'
 import type { createStart } from '@tanstack/react-start'
+import type { getRouter } from './router.tsx'
+
 declare module '@tanstack/react-start' {
   interface Register {
     ssr: true

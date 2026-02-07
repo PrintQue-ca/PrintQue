@@ -8,7 +8,7 @@ from services.state import (
     ORDERS_FILE,
     validate_gcode_file, sanitize_group_name
 )
-from services.printer_manager import extract_filament_from_file, start_background_distribution
+from services.printer_manager import extract_filament_from_file, start_background_distribution, prepare_printer_data_for_broadcast
 from services.default_settings import load_default_settings, save_default_settings
 from utils.logger import debug_log
 
@@ -41,7 +41,7 @@ def register_order_routes(app, socketio):
             flash(message)
             return redirect(url_for('index'))
 
-        quantity = request.form.get('quantity', type=int, default=1)
+        quantity = request.form.get('quantity', type=int, default=0)
         # Updated to handle text-based groups with sanitization
         groups = [sanitize_group_name(g) for g in request.form.getlist('groups') if g.strip()]
         if not groups:
@@ -109,7 +109,10 @@ def register_order_routes(app, socketio):
             logging.info(f"Created order {order_id}: {filename}, qty={quantity}")
             debug_log('cooldown', f"Order {order_id} created with cooldown_temp={cooldown_temp}")
 
-        flash(f"✅ Order for {quantity} print(s) of {filename} added successfully")
+        flash(
+            "✅ Order added to library (set quantity to start printing)" if quantity == 0
+            else f"✅ Order for {quantity} print(s) of {filename} added successfully"
+        )
 
         start_background_distribution(socketio, app)
 
@@ -202,7 +205,8 @@ def register_order_routes(app, socketio):
                         total_filament = TOTAL_FILAMENT_CONSUMPTION / 1000
                     orders_data = ORDERS.copy()
                     with ReadLock(printers_rwlock):
-                        socketio.emit('status_update', {'printers': PRINTERS, 'total_filament': total_filament, 'orders': orders_data})
+                        printers_copy = prepare_printer_data_for_broadcast(PRINTERS)
+                        socketio.emit('status_update', {'printers': printers_copy, 'total_filament': total_filament, 'orders': orders_data})
                     return '', 200
             logging.error(f"Failed to move order {order_id} up: not found or already at top")
             return 'Order not found or already at top', 400
@@ -222,7 +226,8 @@ def register_order_routes(app, socketio):
                         total_filament = TOTAL_FILAMENT_CONSUMPTION / 1000
                     orders_data = ORDERS.copy()
                     with ReadLock(printers_rwlock):
-                        socketio.emit('status_update', {'printers': PRINTERS, 'total_filament': total_filament, 'orders': orders_data})
+                        printers_copy = prepare_printer_data_for_broadcast(PRINTERS)
+                        socketio.emit('status_update', {'printers': printers_copy, 'total_filament': total_filament, 'orders': orders_data})
                     return '', 200
             logging.error(f"Failed to move order {order_id} down: not found or already at bottom")
             return 'Order not found or already at bottom', 400
@@ -244,7 +249,8 @@ def register_order_routes(app, socketio):
                             total_filament = TOTAL_FILAMENT_CONSUMPTION / 1000
                         orders_data = ORDERS.copy()
                         with ReadLock(printers_rwlock):
-                            socketio.emit('status_update', {'printers': PRINTERS, 'total_filament': total_filament, 'orders': orders_data})
+                            printers_copy = prepare_printer_data_for_broadcast(PRINTERS)
+                            socketio.emit('status_update', {'printers': printers_copy, 'total_filament': total_filament, 'orders': orders_data})
 
                         flash(f"✅ Order {order_id} permanently deleted")
                         return redirect(url_for('index'))
@@ -302,13 +308,16 @@ def register_order_routes(app, socketio):
                             with SafeLock(filament_lock):
                                 total_filament = TOTAL_FILAMENT_CONSUMPTION / 1000
                             with ReadLock(printers_rwlock):
-                                printers_data = PRINTERS.copy()
+                                printers_data = prepare_printer_data_for_broadcast(PRINTERS)
 
                             socketio.emit('status_update', {
                                 'printers': printers_data,
                                 'total_filament': total_filament,
                                 'orders': ORDERS.copy()
                             })
+
+                            if new_quantity > 0:
+                                start_background_distribution(socketio, app)
 
                             return jsonify({
                                 'success': True,

@@ -241,7 +241,8 @@ def handle_finished_state_ejection(printer, printer_name, current_file, current_
                 "time_remaining": 0,
                 "manually_set": False,
                 "ejection_in_progress": False,
-                "cooldown_target": cooldown_temp
+                "cooldown_target_temp": cooldown_temp,
+                "cooldown_order_id": current_order_id
             })
             return
 

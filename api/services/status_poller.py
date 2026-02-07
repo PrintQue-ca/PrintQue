@@ -192,7 +192,10 @@ def update_bambu_printer_states():
                     printer['progress'] = bambu_state['progress']
                 if 'time_remaining' in bambu_state:
                     printer['time_remaining'] = bambu_state['time_remaining']
-                if 'file' in bambu_state:
+                # Bambu MQTT stores current file under 'current_file'; support both for compatibility
+                if 'current_file' in bambu_state:
+                    printer['file'] = bambu_state['current_file']
+                elif 'file' in bambu_state:
                     printer['file'] = bambu_state['file']
 
             # Handle state transitions

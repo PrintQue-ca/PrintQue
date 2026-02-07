@@ -1,7 +1,6 @@
 import { createFileRoute } from '@tanstack/react-router'
 import { Bug, Clock, Cpu, HardDrive, Loader2, Server, Settings2 } from 'lucide-react'
 import { toast } from 'sonner'
-import { EjectionCodesManager } from '@/components/orders/EjectionCodesManager'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Label } from '@/components/ui/label'
 import {
@@ -120,9 +119,6 @@ function SystemPage() {
           </dl>
         </CardContent>
       </Card>
-
-      {/* Ejection Codes Manager */}
-      <EjectionCodesManager />
 
       {/* Logging Settings */}
       <LoggingSettings />

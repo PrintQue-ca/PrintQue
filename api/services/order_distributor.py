@@ -102,7 +102,8 @@ async def distribute_orders_async(socketio, app, task_id=None, batch_size=10):
     active_orders = []
     with SafeLock(orders_lock):
         active_orders = [o.copy() for o in ORDERS
-                        if o['status'] != 'completed'
+                        if not o.get('deleted', False)
+                        and o['status'] != 'completed'
                         and o['sent'] < o['quantity']]
         logging.debug(f"Active orders: {[(o['id'], o['sent'], o['quantity']) for o in active_orders]}")
 

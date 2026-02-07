@@ -503,8 +503,8 @@ export function GcodeEditor({
 
   if (isEditing || !value.trim()) {
     return (
-      <div className={cn('space-y-2', className)}>
-        <div className="flex items-center gap-2 justify-end">
+      <div className={cn('flex min-h-0 flex-col space-y-2', className)}>
+        <div className="flex shrink-0 items-center gap-2 justify-end">
           {value.trim() && (
             <button
               type="button"
@@ -521,8 +521,8 @@ export function GcodeEditor({
           placeholder={placeholder}
           readOnly={readOnly}
           className={cn(
-            'w-full min-h-[500px] p-3 font-mono text-xs rounded-md border bg-background resize-none focus:outline-none focus:ring-2 focus:ring-ring',
-            readOnly && 'opacity-75 cursor-not-allowed'
+            'min-h-[120px] w-full flex-1 resize-none rounded-md border bg-background p-3 font-mono text-xs focus:outline-none focus:ring-2 focus:ring-ring',
+            readOnly && 'cursor-not-allowed opacity-75'
           )}
         />
       </div>
@@ -530,8 +530,8 @@ export function GcodeEditor({
   }
 
   return (
-    <div className={cn('space-y-2', className)}>
-      <div className="flex items-center gap-2 justify-between">
+    <div className={cn('flex min-h-0 flex-col space-y-2', className)}>
+      <div className="flex shrink-0 items-center gap-2 justify-between">
         <div className="flex items-center gap-2">
           <button
             type="button"
@@ -553,15 +553,15 @@ export function GcodeEditor({
         )}
       </div>
 
-      <div className="flex gap-4">
-        <div className="flex-1 rounded-md border-2 border-border bg-background overflow-hidden">
-          <div className="bg-muted/50 px-3 py-1.5 border-b border-border flex items-center justify-between">
+      <div className="flex min-h-0 min-w-0 flex-1 gap-4 overflow-hidden">
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-md border-2 border-border bg-background">
+          <div className="flex shrink-0 items-center justify-between border-b border-border bg-muted/50 px-3 py-1.5">
             <span className="text-xs font-medium text-muted-foreground">
               G-code • {parsedLines.length} lines
             </span>
             <span className="text-xs text-muted-foreground">Click a line for details</span>
           </div>
-          <div className="max-h-[60vh] min-h-[400px] overflow-auto scrollbar-thin scrollbar-thumb-muted-foreground/30 scrollbar-track-transparent">
+          <div className="min-h-0 flex-1 overflow-auto scrollbar-thin scrollbar-thumb-muted-foreground/30 scrollbar-track-transparent">
             {parsedLines.map((parsed) => (
               <GcodeLine
                 key={parsed.lineNumber}

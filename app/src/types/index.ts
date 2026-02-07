@@ -19,6 +19,7 @@ export interface Printer {
   progress?: number
   current_file?: string
   groups?: number[]
+  group?: string
   api_key?: string
   serial_number?: string
   model?: string
@@ -41,6 +42,7 @@ export interface PrinterFormData {
   api_key?: string
   serial_number?: string
   groups?: number[]
+  group?: string
 }
 
 // Order types
