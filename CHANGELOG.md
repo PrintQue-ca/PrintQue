@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v1.2.2 (2026-02-07)
+
+### Bug Fixes
+
+- **status_poller**: Correct the polling status and release pipeline
+  ([#14](https://github.com/PrintQue-ca/PrintQue/pull/14),
+  [`e1a36eb`](https://github.com/PrintQue-ca/PrintQue/commit/e1a36eb4b8f91b2a08dc49eefc32c2ab9ab42973))
+
+
 ## v1.2.1 (2026-02-07)
 
 ### Bug Fixes
