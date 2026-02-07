@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v1.2.3 (2026-02-07)
+
+### Bug Fixes
+
+- **status_poller.py**: Fix status overrides
+  ([#15](https://github.com/PrintQue-ca/PrintQue/pull/15),
+  [`e02b768`](https://github.com/PrintQue-ca/PrintQue/commit/e02b7686e72d8e747177ca5580f02d637f263b7d))
+
+
 ## v1.2.2 (2026-02-07)
 
 ### Bug Fixes
