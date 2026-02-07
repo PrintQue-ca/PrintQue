@@ -99,5 +99,21 @@ jobs:
           echo "=== Pushing commit and tags ==="
           # Push the version commit first
           git push origin main
-          # Then push tags
+          # Then push tags (pushes from Actions do not trigger other workflows, so we trigger Release below)
           git push origin --tags
+
+      # GITHUB_TOKEN cannot trigger other workflows (403). Per GitHub docs, use a PAT stored as a repo secret.
+      # Create a PAT with "workflow" scope → Settings → Secrets → Actions → New secret (e.g. name: RELEASE_DISPATCH_TOKEN).
+      - name: Trigger Release workflow
+        run: |
+          VERSION=$(git describe --tags --abbrev=0 2>/dev/null | sed 's/^v//')
+          if [ -z "$VERSION" ]; then
+            echo "Could not determine version, skipping release trigger"
+            exit 0
+          fi
+          echo "Triggering Release workflow for version: $VERSION"
+          curl -sS -X POST \
+            -H "Authorization: token ${{ secrets.RELEASE_DISPATCH_TOKEN }}" \
+            -H "Accept: application/vnd.github.v3+json" \
+            "https://api.github.com/repos/${{ github.repository }}/actions/workflows/release.yml/dispatches" \
+            -d "{\"ref\":\"main\",\"inputs\":{\"version\":\"$VERSION\"}}"

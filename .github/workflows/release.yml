@@ -1,10 +1,13 @@
 name: Release Build
 
+# Triggered automatically when a version tag is pushed (e.g. by Version Bump workflow).
+# Manual run: use the "Run workflow" button in the Actions tab (requires write access).
+# Note: Triggering workflow_dispatch via API (e.g. gh workflow run) requires a PAT with
+# "workflow" scope; the default GITHUB_TOKEN cannot trigger workflows (403).
 on:
   push:
     tags:
       - 'v*.*.*'
-  # Manual trigger from GitHub Actions UI
   workflow_dispatch:
     inputs:
       version:
@@ -175,9 +178,9 @@ jobs:
             1. Download the ZIP file for your platform
             2. Extract to a folder
             3. Run the executable:
-               - **Windows**: Double-click `Start_PrintQue.bat`
+               - **Windows**: Double-click `PrintQue.exe`
                - **macOS**: Open `PrintQue.app`
-               - **Linux**: Run `./start_printque.sh`
+               - **Linux**: Run `./printque`
             4. Open http://localhost:5000 in your browser
             
           files: |

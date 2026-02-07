@@ -251,3 +251,9 @@ export function useSetDebugFlag() {
     },
   })
 }
+
+export function useShutdown() {
+  return useMutation({
+    mutationFn: () => api.post<ApiResponse & { message?: string }>('/system/shutdown'),
+  })
+}

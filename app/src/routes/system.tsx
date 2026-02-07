@@ -1,7 +1,17 @@
 import { createFileRoute } from '@tanstack/react-router'
-import { Bug, Clock, Cpu, HardDrive, Loader2, Server, Settings2 } from 'lucide-react'
+import { Bug, Clock, Cpu, HardDrive, Loader2, Power, Server, Settings2 } from 'lucide-react'
+import { useState } from 'react'
 import { toast } from 'sonner'
+import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
 import { Label } from '@/components/ui/label'
 import {
   Select,
@@ -11,7 +21,13 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { Switch } from '@/components/ui/switch'
-import { useLoggingConfig, useSetDebugFlag, useSetLogLevel, useSystemInfo } from '@/hooks'
+import {
+  useLoggingConfig,
+  useSetDebugFlag,
+  useSetLogLevel,
+  useShutdown,
+  useSystemInfo,
+} from '@/hooks'
 
 export const Route = createFileRoute('/system')({ component: SystemPage })
 
@@ -122,6 +138,9 @@ function SystemPage() {
 
       {/* Logging Settings */}
       <LoggingSettings />
+
+      {/* Shut down (when running in background with no console) */}
+      <ShutDownCard />
 
       <Card>
         <CardHeader>
@@ -267,5 +286,77 @@ function LoggingSettings() {
         </p>
       </CardContent>
     </Card>
+  )
+}
+
+// Shut down PrintQue from the browser when running in background (no console)
+function ShutDownCard() {
+  const [confirmOpen, setConfirmOpen] = useState(false)
+  const shutdown = useShutdown()
+
+  const handleShutdown = async () => {
+    try {
+      await shutdown.mutateAsync()
+      toast.success(
+        'PrintQue is shutting down. Start it again from the executable or Start_PrintQue.bat when needed.'
+      )
+      setConfirmOpen(false)
+      // Page will stop loading when server exits
+    } catch {
+      toast.error('Failed to shut down')
+    }
+  }
+
+  return (
+    <>
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Power className="h-5 w-5" />
+            Shut down PrintQue
+          </CardTitle>
+          <CardDescription>
+            When the app runs in the background (no console window), you can stop it from here. You
+            can start it again by running PrintQue.exe or Start_PrintQue.bat.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <Button
+            variant="destructive"
+            onClick={() => setConfirmOpen(true)}
+            disabled={shutdown.isPending}
+          >
+            {shutdown.isPending ? (
+              <>
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                Shutting down…
+              </>
+            ) : (
+              'Shut down PrintQue'
+            )}
+          </Button>
+        </CardContent>
+      </Card>
+
+      <Dialog open={confirmOpen} onOpenChange={setConfirmOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Shut down PrintQue?</DialogTitle>
+            <DialogDescription>
+              The server will stop and this page will no longer load. To use PrintQue again, run
+              PrintQue.exe or Start_PrintQue.bat.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setConfirmOpen(false)}>
+              Cancel
+            </Button>
+            <Button variant="destructive" onClick={handleShutdown} disabled={shutdown.isPending}>
+              {shutdown.isPending ? 'Shutting down…' : 'Shut down'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </>
   )
 }
