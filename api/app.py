@@ -79,8 +79,7 @@ app.config['LOG_DIR'] = LOG_DIR
 allowed_origins = [
     "http://localhost:3000", "http://127.0.0.1:3000",
     "http://localhost:5173", "http://127.0.0.1:5173",
-    "http://localhost:5000", "http://127.0.0.1:5000",  # Same-origin for packaged builds
-    "*"  # Allow all for packaged single-executable builds
+    "http://localhost:5000", "http://127.0.0.1:5000",
 ]
 
 CORS(app, resources={
@@ -94,7 +93,16 @@ CORS(app, resources={
     }
 })
 
-socketio = SocketIO(app, async_mode='eventlet', cors_allowed_origins="*")
+socketio = SocketIO(app, async_mode='eventlet', cors_allowed_origins=allowed_origins)
+
+
+@app.after_request
+def set_security_headers(response):
+    """Add security headers to every response."""
+    response.headers['X-Content-Type-Options'] = 'nosniff'
+    response.headers['X-Frame-Options'] = 'DENY'
+    response.headers['Referrer-Policy'] = 'strict-origin-when-cross-origin'
+    return response
 
 # Initialize state
 initialize_state()

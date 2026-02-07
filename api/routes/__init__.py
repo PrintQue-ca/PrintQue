@@ -8,7 +8,6 @@ from werkzeug.utils import secure_filename
 from .printers import register_printer_routes
 from .orders import register_order_routes
 from .system import register_misc_routes
-from .support import register_support_routes
 from .history import register_history_routes
 from .ejection_codes import register_ejection_codes_routes
 from services.state import (
@@ -28,7 +27,6 @@ __all__ = [
     'register_printer_routes',
     'register_order_routes',
     'register_misc_routes',
-    'register_support_routes',
     'register_history_routes',
     'register_ejection_codes_routes',
 ]
@@ -37,7 +35,6 @@ def register_routes(app, socketio):
     register_printer_routes(app, socketio)
     register_order_routes(app, socketio)
     register_misc_routes(app, socketio)
-    register_support_routes(app, socketio)
     register_history_routes(app, socketio)
     register_ejection_codes_routes(app, socketio)
 

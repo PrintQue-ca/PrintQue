@@ -1,28 +1,53 @@
 import os
-from dotenv import load_dotenv
+import hashlib
+import base64
+import secrets
 from cryptography.fernet import Fernet
 
 # Import version from single source of truth
 from __version__ import __version__
 
-load_dotenv()
+
+def _get_data_dir() -> str:
+    """Return the PrintQue data directory, creating it if needed."""
+    base = os.getenv('DATA_DIR', os.path.expanduser("~"))
+    data_dir = os.path.join(base, "PrintQueData")
+    os.makedirs(data_dir, exist_ok=True)
+    return data_dir
+
+
+def _load_or_create_secret_key() -> str:
+    """Load a persistent secret key from disk, or generate one on first run."""
+    key_path = os.path.join(_get_data_dir(), "secret.key")
+    if os.path.exists(key_path):
+        try:
+            with open(key_path, "r", encoding="utf-8") as f:
+                key = f.read().strip()
+            if key:
+                return key
+        except Exception:
+            pass  # Fall through to regeneration
+
+    # Generate a new cryptographically-secure key and persist it
+    key = secrets.token_urlsafe(48)
+    try:
+        with open(key_path, "w", encoding="utf-8") as f:
+            f.write(key)
+    except Exception as e:
+        print(f"WARNING: Could not persist secret key to {key_path}: {e}")
+    return key
+
 
 class Config:
     # Application version (imported from __version__.py)
     APP_VERSION = __version__
 
-    SECRET_KEY = os.getenv('SECRET_KEY', 'default-secret-for-dev-only')
+    # Persistent secret key — auto-generated on first run, stored in DATA_DIR
+    SECRET_KEY = _load_or_create_secret_key()
 
-    # CRITICAL FIX: Encryption key with fallback
-    ENCRYPTION_KEY = os.getenv('ENCRYPTION_KEY')
-    if not ENCRYPTION_KEY:
-        # Generate a consistent fallback key based on SECRET_KEY
-        import hashlib
-        import base64
-        # Create a consistent 32-byte key from SECRET_KEY
-        key_material = hashlib.sha256(SECRET_KEY.encode()).digest()
-        ENCRYPTION_KEY = base64.urlsafe_b64encode(key_material).decode()
-        print("WARNING: Using generated encryption key. Set ENCRYPTION_KEY in environment for production.")
+    # Encryption key derived from SECRET_KEY (deterministic so existing data stays valid)
+    _key_material = hashlib.sha256(SECRET_KEY.encode()).digest()
+    ENCRYPTION_KEY = base64.urlsafe_b64encode(_key_material).decode()
 
     # Validate encryption key format
     try:
@@ -56,7 +81,6 @@ class Config:
 
     DEFAULT_END_GCODE = ""  # Default end G-code to pre-fill in UI
     PORT = int(os.getenv('PORT', 5000))  # Added PORT with default 5000
-    ADMIN_KEY = os.getenv('ADMIN_KEY', 'default-admin-key-change-me')
 
     # BATCH PROCESSING: Optimized for better performance
     STATUS_BATCH_SIZE = 5  # Reduced from 10 to 5 for faster processing

@@ -1,0 +1,23 @@
+---
+description: Require CI-equivalent checks to pass before marking work as completed
+alwaysApply: true
+---
+
+# Verify Before Done
+
+Before declaring any task complete, run the relevant CI checks locally and confirm they pass.
+
+## CI checks (from `.github/workflows/ci.yml`)
+
+| Check | Command | When to run |
+|-------|---------|-------------|
+| Python lint | `ruff check api/` | After editing any `api/**/*.py` file |
+| Backend tests | `cd api && pytest` | After editing any `api/**/*.py` file |
+| TypeScript type check | `cd app && npx tsc --noEmit` | After editing any `app/**/*.{ts,tsx}` file |
+| Frontend tests | `cd app && npm run test` | After editing any `app/**/*.{ts,tsx}` file |
+
+## Rules
+
+- Run **all** checks that apply to the files you changed — not just one.
+- If a check fails, fix the issue before marking the task complete.
+- Do not skip checks to save time. A failing CI pipeline is worse than a slow response.
