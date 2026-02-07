@@ -1,5 +1,16 @@
 import { createFileRoute } from '@tanstack/react-router'
-import { Bug, Clock, Cpu, HardDrive, Loader2, Power, Server, Settings2 } from 'lucide-react'
+import {
+  Bug,
+  Clock,
+  Copy,
+  Cpu,
+  FileText,
+  HardDrive,
+  Loader2,
+  Power,
+  Server,
+  Settings2,
+} from 'lucide-react'
 import { useState } from 'react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
@@ -23,6 +34,7 @@ import {
 import { Switch } from '@/components/ui/switch'
 import {
   useLoggingConfig,
+  useLogsPath,
   useSetDebugFlag,
   useSetLogLevel,
   useShutdown,
@@ -138,6 +150,9 @@ function SystemPage() {
 
       {/* Logging Settings */}
       <LoggingSettings />
+
+      {/* Logs for debugging (when running without console) */}
+      <LogsForDebugging />
 
       {/* Shut down (when running in background with no console) */}
       <ShutDownCard />
@@ -284,6 +299,84 @@ function LoggingSettings() {
           Settings are saved automatically and persist across restarts. File logs always capture
           DEBUG level.
         </p>
+      </CardContent>
+    </Card>
+  )
+}
+
+// Logs for debugging when the app runs in the background (no console window)
+function LogsForDebugging() {
+  const { data: logsPath, isLoading } = useLogsPath()
+
+  const copyPath = (path: string) => {
+    navigator.clipboard.writeText(path)
+    toast.success('Path copied to clipboard')
+  }
+
+  const downloadUrl = import.meta.env.DEV
+    ? 'http://localhost:5000/api/v1/system/logs/download'
+    : '/api/v1/system/logs/download'
+
+  if (isLoading) {
+    return (
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <FileText className="h-5 w-5" />
+            Logs for debugging
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="flex items-center justify-center py-4">
+            <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+          </div>
+        </CardContent>
+      </Card>
+    )
+  }
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          <FileText className="h-5 w-5" />
+          Logs for debugging
+        </CardTitle>
+        <CardDescription>
+          When the app runs in the background (no console window), all logs are written to files.
+          Use these for troubleshooting.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <div className="space-y-2">
+          <Label className="text-muted-foreground">Log folder</Label>
+          <div className="flex items-center gap-2">
+            <code className="flex-1 rounded border bg-muted/50 px-3 py-2 text-sm break-all">
+              {logsPath?.log_dir ?? '—'}
+            </code>
+            <Button
+              type="button"
+              variant="outline"
+              size="icon"
+              onClick={() => logsPath && copyPath(logsPath.log_dir)}
+              title="Copy path"
+            >
+              <Copy className="h-4 w-4" />
+            </Button>
+          </div>
+        </div>
+        <p className="text-xs text-muted-foreground">
+          Main server log: <code className="rounded bg-muted px-1">app.log</code> — Detailed logs:{' '}
+          <code className="rounded bg-muted px-1">logs/</code> folder (printque.log,
+          state_changes.log, etc.)
+        </p>
+        <div className="flex flex-wrap gap-2">
+          <Button variant="default" asChild>
+            <a href={downloadUrl} download target="_blank" rel="noopener noreferrer">
+              Download recent logs (last 15 min)
+            </a>
+          </Button>
+        </div>
       </CardContent>
     </Card>
   )

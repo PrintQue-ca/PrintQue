@@ -210,15 +210,21 @@ def update_bambu_printer_states():
                     printer['file'] = bambu_state['file']
 
             # Handle state transitions
+            # Don't overwrite FINISHED with READY when Bambu reports IDLE after completion.
+            # Stay in FINISHED until user clicks "Mark Ready" or ejection completes.
             if new_state != current_state:
-                logging.info(f"Bambu {printer_name} state change: {current_state} -> {new_state}")
-                printer['state'] = new_state
-                printer['status'] = state_map.get(new_state, 'Unknown')
-                updates_made = True
+                if current_state == 'FINISHED' and new_state == 'READY':
+                    logging.debug(f"Bambu {printer_name}: keeping FINISHED (ignore IDLE->READY until user marks ready)")
+                    # Skip this transition - do not update state
+                else:
+                    logging.info(f"Bambu {printer_name} state change: {current_state} -> {new_state}")
+                    printer['state'] = new_state
+                    printer['status'] = state_map.get(new_state, 'Unknown')
+                    updates_made = True
 
-                # Set finish_time when transitioning to FINISHED
-                if new_state == 'FINISHED' and current_state != 'FINISHED':
-                    printer['finish_time'] = time.time()
+                    # Set finish_time when transitioning to FINISHED
+                    if new_state == 'FINISHED' and current_state != 'FINISHED':
+                        printer['finish_time'] = time.time()
 
     if updates_made:
         save_data(PRINTERS_FILE, PRINTERS)
