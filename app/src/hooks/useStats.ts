@@ -251,3 +251,18 @@ export function useSetDebugFlag() {
     },
   })
 }
+
+// Log paths for debugging (when app runs in background without console)
+export interface LogsPath {
+  log_dir: string
+  app_log: string
+  logs_subdir: string
+}
+
+export function useLogsPath() {
+  return useQuery({
+    queryKey: ['system', 'logs', 'path'],
+    queryFn: () => api.get<LogsPath>('/system/logs/path'),
+    staleTime: 60000,
+  })
+}

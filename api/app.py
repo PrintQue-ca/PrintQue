@@ -23,12 +23,13 @@ file_handler.setLevel(logging.DEBUG)
 file_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
 root_logger.addHandler(file_handler)
 
-# Create console handler - will be updated with saved level after logger module imports
-# Start with INFO as the safe default to prevent DEBUG spam during import
-console_handler = logging.StreamHandler()
-console_handler.setLevel(logging.INFO)
-console_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
-root_logger.addHandler(console_handler)
+# Console handler only when not packaged (frozen exe has no console window)
+console_handler = None
+if not getattr(sys, 'frozen', False):
+    console_handler = logging.StreamHandler()
+    console_handler.setLevel(logging.INFO)
+    console_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
+    root_logger.addHandler(console_handler)
 
 # NOW import other modules (logging is already configured)
 import webbrowser
@@ -48,10 +49,11 @@ from utils.console_capture import console_capture
 # Import log level configuration and update console handler with saved level
 from utils.logger import get_console_log_level, LOG_LEVELS, DEFAULT_CONSOLE_LEVEL
 
-# Update console handler with the saved log level (default INFO)
-saved_level = LOG_LEVELS.get(get_console_log_level(), LOG_LEVELS[DEFAULT_CONSOLE_LEVEL])
-console_handler.setLevel(saved_level)
-logging.info(f"Console log level set to: {get_console_log_level()}")
+# Update console handler with the saved log level (when running with console)
+if console_handler is not None:
+    saved_level = LOG_LEVELS.get(get_console_log_level(), LOG_LEVELS[DEFAULT_CONSOLE_LEVEL])
+    console_handler.setLevel(saved_level)
+    logging.info(f"Console log level set to: {get_console_log_level()}")
 
 # Initialize the app with static and templates folders
 # Handle both development and packaged (PyInstaller) environments

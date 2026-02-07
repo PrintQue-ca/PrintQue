@@ -318,7 +318,65 @@ def register_routes(app, socketio):
                 }), 400
         except Exception as e:
             return jsonify({'error': str(e)}), 500
+
+    # Log path and download for debugging (no console when running as standalone)
+    @app.route('/api/v1/system/logs/path', methods=['GET'])
+    def api_get_logs_path():
+        """API: Get log directory and file paths for debugging"""
+        try:
+            log_dir = app.config.get('LOG_DIR', '')
+            if not log_dir:
+                log_dir = os.path.join(os.path.expanduser("~"), "PrintQueData")
+            app_log = os.path.join(log_dir, 'app.log')
+            logs_subdir = os.path.join(log_dir, 'logs')
+            return jsonify({
+                'log_dir': log_dir,
+                'app_log': app_log,
+                'logs_subdir': logs_subdir,
+            })
         except Exception as e:
+            return jsonify({'error': str(e)}), 500
+
+    @app.route('/api/v1/system/logs/download', methods=['GET'])
+    def api_download_logs():
+        """API: Download recent logs as a text file (last 15 minutes)"""
+        try:
+            import io
+            from datetime import datetime
+            from utils.logger import get_recent_logs
+
+            # Include main app log (PrintQueData/app.log) + logger's recent logs (PrintQueData/logs/*)
+            log_dir = app.config.get('LOG_DIR', '')
+            if not log_dir:
+                log_dir = os.path.join(os.path.expanduser("~"), "PrintQueData")
+            app_log = os.path.join(log_dir, 'app.log')
+
+            parts = []
+            if os.path.exists(app_log):
+                try:
+                    with open(app_log, 'r', encoding='utf-8', errors='ignore') as f:
+                        lines = f.readlines()
+                    parts.append("=== MAIN APP LOG (app.log) - last 500 lines ===\n\n")
+                    parts.extend(lines[-500:] if len(lines) > 500 else lines)
+                    parts.append("\n\n")
+                except Exception as e:
+                    parts.append(f"Error reading app.log: {e}\n\n")
+
+            parts.append(get_recent_logs(minutes=15))
+
+            content = ''.join(parts)
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            filename = f'printque_logs_{timestamp}.txt'
+
+            from flask import send_file
+            return send_file(
+                io.BytesIO(content.encode('utf-8')),
+                mimetype='text/plain',
+                as_attachment=True,
+                download_name=filename,
+            )
+        except Exception as e:
+            logging.error(f"Error in api_download_logs: {str(e)}")
             return jsonify({'error': str(e)}), 500
 
     # Printer routes
