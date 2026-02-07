@@ -679,9 +679,10 @@ async def get_printer_status_async(socketio, app, batch_index=None, batch_size=N
     with WriteLock(printers_rwlock):
         _apply_printer_updates(printer_updates)
 
-        start_bg_dist = lambda: threading.Timer(
-            2.0, lambda: start_background_distribution(socketio, app)
-        ).start()
+        def start_bg_dist():
+            threading.Timer(
+                2.0, lambda: start_background_distribution(socketio, app)
+            ).start()
 
         for i, printer in enumerate(PRINTERS):
             if printer.get('state') == 'EJECTING':
