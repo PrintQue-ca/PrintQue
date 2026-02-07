@@ -2,6 +2,21 @@
 
 <!-- version list -->
 
+## v1.2.1 (2026-02-07)
+
+### Bug Fixes
+
+- **status_poller.py**: Keep accurate state of the printer when idle and ready
+  ([#13](https://github.com/PrintQue-ca/PrintQue/pull/13),
+  [`9cccdb6`](https://github.com/PrintQue-ca/PrintQue/commit/9cccdb6c252f0699426133d530d7517e5d980c5d))
+
+### Continuous Integration
+
+- **version-bump.yml**: Forcing release deployment
+  ([#13](https://github.com/PrintQue-ca/PrintQue/pull/13),
+  [`9cccdb6`](https://github.com/PrintQue-ca/PrintQue/commit/9cccdb6c252f0699426133d530d7517e5d980c5d))
+
+
 ## v1.2.0 (2026-02-07)
 
 ### Bug Fixes
