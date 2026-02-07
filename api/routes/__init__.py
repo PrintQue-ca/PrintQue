@@ -319,6 +319,27 @@ def register_routes(app, socketio):
         except Exception as e:
             return jsonify({'error': str(e)}), 500
 
+    @app.route('/api/v1/system/shutdown', methods=['POST'])
+    def api_shutdown():
+        """API: Shut down the PrintQue server (for background/standalone mode with no console)"""
+        try:
+            import threading
+            import time
+
+            def exit_after_delay():
+                time.sleep(2)
+                logging.info("Shutdown requested from web UI - exiting.")
+                os._exit(0)  # Force process exit from any thread
+
+            threading.Thread(target=exit_after_delay, daemon=True).start()
+            return jsonify({
+                'success': True,
+                'message': 'PrintQue is shutting down. Start it again from the executable or Start_PrintQue.bat when needed.',
+            })
+        except Exception as e:
+            logging.error(f"Error in api_shutdown: {str(e)}")
+            return jsonify({'error': str(e)}), 500
+
     # Log path and download for debugging (no console when running as standalone)
     @app.route('/api/v1/system/logs/path', methods=['GET'])
     def api_get_logs_path():
@@ -335,6 +356,7 @@ def register_routes(app, socketio):
                 'logs_subdir': logs_subdir,
             })
         except Exception as e:
+            logging.error(f"Error in api_get_logs_path: {str(e)}")
             return jsonify({'error': str(e)}), 500
 
     @app.route('/api/v1/system/logs/download', methods=['GET'])
@@ -516,14 +538,20 @@ def register_routes(app, socketio):
                 for printer in PRINTERS:
                     if printer['name'] == printer_name:
                         if printer['state'] in ['FINISHED', 'EJECTING', 'COOLING']:
+                            import time
                             printer['state'] = 'READY'
                             printer['status'] = 'Ready'
                             printer['manually_set'] = True
+                            printer['manual_timeout'] = time.time() + 3600  # 1 hour protection
                             printer['progress'] = 0
                             printer['time_remaining'] = 0
                             printer['file'] = None
                             printer['job_id'] = None
                             printer['order_id'] = None
+                            printer['ejection_processed'] = False
+                            printer['ejection_in_progress'] = False
+                            printer['ejection_start_time'] = None
+                            printer['finish_time'] = None
                             # Clear cooldown state if skipping cooldown
                             printer['cooldown_target_temp'] = None
                             printer['cooldown_order_id'] = None

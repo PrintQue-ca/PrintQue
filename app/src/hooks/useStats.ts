@@ -252,6 +252,12 @@ export function useSetDebugFlag() {
   })
 }
 
+export function useShutdown() {
+  return useMutation({
+    mutationFn: () => api.post<ApiResponse & { message?: string }>('/system/shutdown'),
+  })
+}
+
 // Log paths for debugging (when app runs in background without console)
 export interface LogsPath {
   log_dir: string

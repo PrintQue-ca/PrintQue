@@ -177,6 +177,17 @@ def update_bambu_printer_states():
             if current_state == 'COOLING':
                 continue
 
+            # Skip state updates for manually set printers (e.g., user clicked Mark Ready)
+            # The manually_set flag protects the READY state from being overwritten by MQTT
+            if printer.get('manually_set', False) and current_state == 'READY':
+                logging.debug(f"Bambu {printer_name}: skipping MQTT state update - printer is manually set to READY")
+                # Still update temperatures even when preserving manual state
+                if 'nozzle_temp' in bambu_state:
+                    printer['nozzle_temp'] = bambu_state['nozzle_temp']
+                if 'bed_temp' in bambu_state:
+                    printer['bed_temp'] = bambu_state['bed_temp']
+                continue
+
             # Get the new state from Bambu MQTT
             new_state = bambu_state.get('state', current_state)
 
