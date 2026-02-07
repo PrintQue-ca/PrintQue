@@ -2,6 +2,36 @@
 
 <!-- version list -->
 
+## v1.2.0 (2026-02-07)
+
+### Bug Fixes
+
+- **ci**: Resolve linting and test failures ([#12](https://github.com/PrintQue-ca/PrintQue/pull/12),
+  [`40112cc`](https://github.com/PrintQue-ca/PrintQue/commit/40112cc2970ffe0e37b657fdab2653c0a612b4f9))
+
+### Documentation
+
+- **license update**: Updating license to MIT based on original repository
+  ([#11](https://github.com/PrintQue-ca/PrintQue/pull/11),
+  [`c469774`](https://github.com/PrintQue-ca/PrintQue/commit/c46977408955df354423a347d0bc5bf1bb12e303))
+
+### Features
+
+- **logging**: Enhance logging setup and improve printer state management
+  ([#12](https://github.com/PrintQue-ca/PrintQue/pull/12),
+  [`40112cc`](https://github.com/PrintQue-ca/PrintQue/commit/40112cc2970ffe0e37b657fdab2653c0a612b4f9))
+
+- **logging**: Enhance logging setup and improve printer state manage…
+  ([#12](https://github.com/PrintQue-ca/PrintQue/pull/12),
+  [`40112cc`](https://github.com/PrintQue-ca/PrintQue/commit/40112cc2970ffe0e37b657fdab2653c0a612b4f9))
+
+### Refactoring
+
+- **printer-manager**: Refactor to split as it was 3k
+  ([#9](https://github.com/PrintQue-ca/PrintQue/pull/9),
+  [`bc6f236`](https://github.com/PrintQue-ca/PrintQue/commit/bc6f2362850833d33d2ee2d27e94b6686b486cd9))
+
+
 ## v1.1.2 (2026-01-27)
 
 ### Bug Fixes
