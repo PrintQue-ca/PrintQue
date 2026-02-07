@@ -110,7 +110,7 @@ def register_order_routes(app, socketio):
             debug_log('cooldown', f"Order {order_id} created with cooldown_temp={cooldown_temp}")
 
         flash(
-            f"✅ Order added to library (set quantity to start printing)" if quantity == 0
+            "✅ Order added to library (set quantity to start printing)" if quantity == 0
             else f"✅ Order for {quantity} print(s) of {filename} added successfully"
         )
 

@@ -612,7 +612,7 @@ def register_routes(app, socketio):
             start_background_distribution(socketio, app)
 
             message = (
-                f'Order added to library (set quantity to start printing)' if quantity == 0
+                'Order added to library (set quantity to start printing)' if quantity == 0
                 else f'Order created for {quantity} print(s) of {filename}'
             )
             return jsonify({
