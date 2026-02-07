@@ -224,16 +224,16 @@ export function EjectionCodesManager() {
                 New
               </Button>
             </DialogTrigger>
-            <DialogContent className="w-[90vw] max-w-6xl max-h-[90vh]">
-              <DialogHeader>
+            <DialogContent className="flex w-[90vw] max-w-6xl max-h-[90vh] flex-col">
+              <DialogHeader className="shrink-0">
                 <DialogTitle>Create Ejection Code</DialogTitle>
                 <DialogDescription>
                   Upload a G-code file or enter the code manually
                 </DialogDescription>
               </DialogHeader>
 
-              <div className="space-y-4">
-                <div className="space-y-2">
+              <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-hidden">
+                <div className="shrink-0 space-y-2">
                   <Label htmlFor="code-name">Name</Label>
                   <Input
                     id="code-name"
@@ -243,8 +243,8 @@ export function EjectionCodesManager() {
                   />
                 </div>
 
-                <div className="space-y-2">
-                  <div className="flex items-center justify-between">
+                <div className="flex min-h-0 flex-1 flex-col space-y-2 overflow-hidden">
+                  <div className="flex shrink-0 items-center justify-between">
                     <Label>G-code Content</Label>
                     <div className="flex gap-2">
                       <Button
@@ -265,15 +265,18 @@ export function EjectionCodesManager() {
                       />
                     </div>
                   </div>
-                  <GcodeEditor
-                    value={newGcode}
-                    onChange={setNewGcode}
-                    placeholder="; Ejection sequence&#10;G28 X Y&#10;M84"
-                  />
+                  <div className="min-h-0 flex-1 overflow-hidden">
+                    <GcodeEditor
+                      value={newGcode}
+                      onChange={setNewGcode}
+                      placeholder="; Ejection sequence&#10;G28 X Y&#10;M84"
+                      className="h-full min-h-0"
+                    />
+                  </div>
                 </div>
               </div>
 
-              <DialogFooter>
+              <DialogFooter className="shrink-0">
                 <Button variant="outline" onClick={() => setIsCreateOpen(false)}>
                   Cancel
                 </Button>
@@ -366,8 +369,8 @@ export function EjectionCodesManager() {
               />
             </div>
 
-            <div className="space-y-2 flex-1 flex flex-col min-h-0">
-              <div className="flex items-center justify-between">
+            <div className="flex min-h-0 flex-1 flex-col space-y-2 overflow-hidden">
+              <div className="flex shrink-0 items-center justify-between">
                 <Label>G-code Content</Label>
                 <div className="flex gap-2">
                   <Button
@@ -388,11 +391,14 @@ export function EjectionCodesManager() {
                   />
                 </div>
               </div>
-              <GcodeEditor
-                value={editedGcode}
-                onChange={setEditedGcode}
-                placeholder="; Ejection sequence&#10;G28 X Y&#10;M84"
-              />
+              <div className="min-h-0 flex-1 overflow-hidden">
+                <GcodeEditor
+                  value={editedGcode}
+                  onChange={setEditedGcode}
+                  placeholder="; Ejection sequence&#10;G28 X Y&#10;M84"
+                  className="h-full min-h-0"
+                />
+              </div>
             </div>
           </div>
 

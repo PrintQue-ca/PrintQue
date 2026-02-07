@@ -9,6 +9,7 @@ import {
   Square,
   Thermometer,
 } from 'lucide-react'
+import { useState } from 'react'
 import { toast } from 'sonner'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -29,6 +30,7 @@ import {
   useStopPrint,
 } from '@/hooks'
 import type { Printer } from '@/types'
+import { EditPrinterDialog } from './EditPrinterDialog'
 
 interface PrinterCardProps {
   printer: Printer
@@ -59,6 +61,7 @@ const statusLabels: Record<string, string> = {
 }
 
 export function PrinterCard({ printer }: PrinterCardProps) {
+  const [editOpen, setEditOpen] = useState(false)
   const stopPrint = useStopPrint()
   const pausePrint = usePausePrint()
   const resumePrint = useResumePrint()
@@ -90,6 +93,10 @@ export function PrinterCard({ printer }: PrinterCardProps) {
   const isCooling = printer.status === 'COOLING'
   const isEjecting = printer.status === 'EJECTING'
 
+  // Normalize current_file (ensure string for display; backend may occasionally send wrong shape)
+  const currentFileName =
+    typeof printer.current_file === 'string' ? printer.current_file : 'Unknown file'
+
   // Show temperatures for all online printers
   const showTemps = !isOffline
 
@@ -115,9 +122,7 @@ export function PrinterCard({ printer }: PrinterCardProps) {
         {isPrinting || isPaused ? (
           <div className="space-y-2">
             <div className="flex items-center justify-between text-sm">
-              <span className="truncate max-w-[200px]">
-                {printer.current_file || 'Unknown file'}
-              </span>
+              <span className="truncate max-w-[200px]">{currentFileName}</span>
               <span className="font-medium">{printer.progress || 0}%</span>
             </div>
             <Progress value={printer.progress || 0} className="h-2" />
@@ -155,9 +160,7 @@ export function PrinterCard({ printer }: PrinterCardProps) {
           </div>
         ) : isFinished ? (
           <div className="space-y-2">
-            <p className="text-sm text-muted-foreground">
-              Print completed: {printer.current_file || 'Unknown'}
-            </p>
+            <p className="text-sm text-muted-foreground">Print completed: {currentFileName}</p>
             <Button size="sm" onClick={handleMarkReady}>
               <CheckCircle className="h-4 w-4 mr-1" />
               Mark Ready
@@ -245,6 +248,23 @@ export function PrinterCard({ printer }: PrinterCardProps) {
               Clear error to mark printer as ready and resume queue processing
             </p>
           </div>
+        ) : isOffline ? (
+          <div className="flex items-center justify-between">
+            <p className="text-sm text-muted-foreground">Printer is offline — check connection</p>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="ghost" size="sm">
+                  <MoreVertical className="h-4 w-4" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuItem onClick={() => setEditOpen(true)}>Edit</DropdownMenuItem>
+                <DropdownMenuItem className="text-destructive" onClick={handleDelete}>
+                  Delete
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </div>
         ) : (
           <div className="flex items-center justify-between">
             <p className="text-sm text-muted-foreground">Ready for printing</p>
@@ -255,7 +275,7 @@ export function PrinterCard({ printer }: PrinterCardProps) {
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end">
-                <DropdownMenuItem>Edit</DropdownMenuItem>
+                <DropdownMenuItem onClick={() => setEditOpen(true)}>Edit</DropdownMenuItem>
                 <DropdownMenuItem className="text-destructive" onClick={handleDelete}>
                   Delete
                 </DropdownMenuItem>
@@ -263,6 +283,8 @@ export function PrinterCard({ printer }: PrinterCardProps) {
             </DropdownMenu>
           </div>
         )}
+
+        <EditPrinterDialog printer={printer} open={editOpen} onOpenChange={setEditOpen} />
 
         {/* Temperature display */}
         {showTemps && (

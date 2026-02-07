@@ -45,6 +45,7 @@ import {
   useDeleteOrder,
   useEjectionCodes,
   useReorderOrder,
+  useUpdateOrder,
   useUpdateOrderEjection,
   useUpdateQuantity,
 } from '@/hooks'
@@ -106,10 +107,13 @@ export function OrdersTable({ orders }: OrdersTableProps) {
   const deleteOrder = useDeleteOrder()
   const reorderOrder = useReorderOrder()
   const updateQuantity = useUpdateQuantity()
+  const updateOrder = useUpdateOrder()
   const updateOrderEjection = useUpdateOrderEjection()
   const { data: ejectionCodes } = useEjectionCodes()
   const [editingQuantity, setEditingQuantity] = useState<number | null>(null)
   const [quantityValue, setQuantityValue] = useState<number>(0)
+  const [editingNameId, setEditingNameId] = useState<number | null>(null)
+  const [nameValue, setNameValue] = useState<string>('')
 
   // Local state for immediate UI updates during drag
   const [localOrders, setLocalOrders] = useState(orders)
@@ -181,7 +185,7 @@ export function OrdersTable({ orders }: OrdersTableProps) {
   }
 
   const handleQuantitySubmit = (id: number) => {
-    if (quantityValue > 0) {
+    if (quantityValue >= 0) {
       updateQuantity.mutate({ id, quantity: quantityValue })
     }
     setEditingQuantity(null)
@@ -192,9 +196,30 @@ export function OrdersTable({ orders }: OrdersTableProps) {
   }
 
   const handleQuantityDecrement = (id: number, currentQuantity: number) => {
-    if (currentQuantity > 1) {
+    if (currentQuantity > 0) {
       updateQuantity.mutate({ id, quantity: currentQuantity - 1 })
     }
+  }
+
+  const handleNameChange = (order: Order) => {
+    setEditingNameId(order.id)
+    setNameValue(order.name ?? order.filename)
+  }
+
+  const handleNameSubmit = (id: number) => {
+    const trimmed = nameValue.trim()
+    updateOrder.mutate(
+      { id, data: { name: trimmed || '' } },
+      {
+        onSuccess: () => {
+          toast.success(trimmed ? 'Name updated' : 'Name cleared')
+        },
+        onError: () => {
+          toast.error('Failed to update name')
+        },
+      }
+    )
+    setEditingNameId(null)
   }
 
   const handleDragEnd = (event: DragEndEvent) => {
@@ -223,11 +248,37 @@ export function OrdersTable({ orders }: OrdersTableProps) {
     columnHelper.accessor('filename', {
       header: 'Name',
       cell: (info) => {
-        const name = info.row.original.name
+        const order = info.row.original
+        const name = order.name
         const filename = info.getValue()
         const displayName = name || filename
+        const id = order.id
+
+        if (editingNameId === id) {
+          return (
+            <Input
+              value={nameValue}
+              onChange={(e) => setNameValue(e.target.value)}
+              onBlur={() => handleNameSubmit(id)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') handleNameSubmit(id)
+                if (e.key === 'Escape') {
+                  setNameValue(name ?? filename)
+                  setEditingNameId(null)
+                }
+              }}
+              className="max-w-[200px] h-8"
+              autoFocus
+            />
+          )
+        }
+
         return (
-          <div className="flex flex-col">
+          <button
+            type="button"
+            onClick={() => handleNameChange(order)}
+            className="flex flex-col text-left hover:bg-muted rounded px-1 -mx-1 py-0.5 -my-0.5 min-w-0"
+          >
             <span className="truncate max-w-[200px] block" title={displayName}>
               {displayName}
             </span>
@@ -239,7 +290,7 @@ export function OrdersTable({ orders }: OrdersTableProps) {
                 {filename}
               </span>
             )}
-          </div>
+          </button>
         )
       },
     }),
@@ -253,9 +304,9 @@ export function OrdersTable({ orders }: OrdersTableProps) {
           return (
             <Input
               type="number"
-              min={1}
+              min={0}
               value={quantityValue}
-              onChange={(e) => setQuantityValue(parseInt(e.target.value, 10) || 1)}
+              onChange={(e) => setQuantityValue(Math.max(0, parseInt(e.target.value, 10) || 0))}
               onBlur={() => handleQuantitySubmit(id)}
               onKeyDown={(e) => e.key === 'Enter' && handleQuantitySubmit(id)}
               className="w-16 h-8"

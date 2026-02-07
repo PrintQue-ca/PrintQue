@@ -118,7 +118,7 @@ function LicensePage() {
             </p>
             <div className="flex flex-wrap gap-4">
               <a
-                href="https://github.com/PrintQue/PrintQue"
+                href="https://github.com/PrintQue-ca/PrintQue"
                 target="_blank"
                 rel="noopener noreferrer"
                 className="inline-flex items-center gap-2 px-4 py-2 rounded-md bg-secondary hover:bg-secondary/80 transition-colors"
@@ -127,7 +127,7 @@ function LicensePage() {
                 Star on GitHub
               </a>
               <a
-                href="https://github.com/PrintQue/PrintQue/issues"
+                href="https://github.com/PrintQue-ca/PrintQue/issues"
                 target="_blank"
                 rel="noopener noreferrer"
                 className="inline-flex items-center gap-2 px-4 py-2 rounded-md bg-secondary hover:bg-secondary/80 transition-colors"
@@ -135,7 +135,7 @@ function LicensePage() {
                 Report Issues
               </a>
               <a
-                href="https://github.com/PrintQue/PrintQue/blob/main/CONTRIBUTING.md"
+                href="https://github.com/PrintQue-ca/PrintQue/blob/main/CONTRIBUTING.md"
                 target="_blank"
                 rel="noopener noreferrer"
                 className="inline-flex items-center gap-2 px-4 py-2 rounded-md bg-secondary hover:bg-secondary/80 transition-colors"

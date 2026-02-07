@@ -115,7 +115,7 @@ def start_background_tasks(socketio, app):
 
                 if total_printers == 0:
                     logging.debug("No printers configured, waiting...")
-                    time.sleep(Config.POLL_INTERVAL)
+                    time.sleep(Config.STATUS_REFRESH_INTERVAL)
                     continue
 
                 num_batches = (total_printers + Config.STATUS_BATCH_SIZE - 1) // Config.STATUS_BATCH_SIZE
@@ -131,11 +131,11 @@ def start_background_tasks(socketio, app):
                 loop.run_until_complete(get_printer_status_async(socketio, app, batch_index, Config.STATUS_BATCH_SIZE))
 
                 batch_index = (batch_index + 1) % num_batches
-                time.sleep(Config.POLL_INTERVAL)
+                time.sleep(Config.STATUS_REFRESH_INTERVAL)
 
             except Exception as e:
                 logging.error(f"Error in status polling: {str(e)}")
-                time.sleep(Config.POLL_INTERVAL)
+                time.sleep(Config.STATUS_REFRESH_INTERVAL)
 
     status_thread = threading.Thread(target=schedule_status_polling)
     status_thread.daemon = True

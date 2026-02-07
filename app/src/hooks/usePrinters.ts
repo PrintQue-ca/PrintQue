@@ -22,7 +22,22 @@ export function usePrinter(name: string) {
 export function useAddPrinter() {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: (data: PrinterFormData) => api.post<ApiResponse>('/printers', data),
+    mutationFn: (data: PrinterFormData) => {
+      // API expects device_id + access_code for Bambu; frontend uses serial_number + api_key
+      const payload: Record<string, unknown> = {
+        name: data.name,
+        ip: data.ip,
+        type: data.type,
+      }
+      if (data.type === 'bambu') {
+        payload.device_id = data.serial_number
+        payload.access_code = data.api_key
+      } else if (data.api_key) {
+        payload.api_key = data.api_key
+      }
+      if (data.groups != null) payload.group = data.groups
+      return api.post<ApiResponse>('/printers', payload)
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['printers'] })
     },

@@ -197,8 +197,8 @@ def register_routes(app, socketio):
             import time
             import psutil
 
-            # Get app version (you can update this as needed)
-            version = app.config.get('APP_VERSION', '1.0.0')
+            # Get app version from api/__version__.py (single source of truth, updated by CI)
+            version = app.config.get('APP_VERSION', '0.0.0')
 
             # Get uptime - use process start time
             process = psutil.Process()
@@ -390,6 +390,17 @@ def register_routes(app, socketio):
                 PRINTERS.append(new_printer)
                 save_data(PRINTERS_FILE, PRINTERS)
 
+            # Try to connect Bambu printers immediately (same as form-based add)
+            if printer_type == 'bambu':
+                try:
+                    from services.bambu_handler import connect_bambu_printer
+                    if connect_bambu_printer(new_printer):
+                        logging.info(f"Bambu printer {name} connected successfully")
+                    else:
+                        logging.warning(f"Bambu printer {name} added but MQTT connection failed. Will retry automatically.")
+                except Exception as e:
+                    logging.error(f"Error connecting Bambu printer {name}: {str(e)}")
+
             return jsonify({'success': True, 'message': f'Printer {name} added successfully'})
         except Exception as e:
             logging.error(f"Error in api_add_printer: {str(e)}")
@@ -446,7 +457,7 @@ def register_routes(app, socketio):
             with WriteLock(printers_rwlock):
                 for printer in PRINTERS:
                     if printer['name'] == printer_name:
-                        if printer['state'] in ['FINISHED', 'EJECTING']:
+                        if printer['state'] in ['FINISHED', 'EJECTING', 'COOLING']:
                             printer['state'] = 'READY'
                             printer['status'] = 'Ready'
                             printer['manually_set'] = True
@@ -455,11 +466,14 @@ def register_routes(app, socketio):
                             printer['file'] = None
                             printer['job_id'] = None
                             printer['order_id'] = None
+                            # Clear cooldown state if skipping cooldown
+                            printer['cooldown_target_temp'] = None
+                            printer['cooldown_order_id'] = None
                             save_data(PRINTERS_FILE, PRINTERS)
                             start_background_distribution(socketio, app)
                             return jsonify({'success': True})
                         else:
-                            return jsonify({'error': 'Printer is not in FINISHED or EJECTING state'}), 400
+                            return jsonify({'error': 'Printer is not in FINISHED, EJECTING, or COOLING state'}), 400
             return jsonify({'error': 'Printer not found'}), 404
         except Exception as e:
             return jsonify({'error': str(e)}), 500
@@ -506,7 +520,7 @@ def register_routes(app, socketio):
             if not any(filename.lower().endswith(ext) for ext in valid_extensions):
                 return jsonify({'error': 'Invalid file type. Must be .gcode, .3mf, or .stl'}), 400
 
-            quantity = int(request.form.get('quantity', 1))
+            quantity = int(request.form.get('quantity', 0))
 
             # Handle optional order name
             order_name = request.form.get('name', '').strip()
@@ -597,9 +611,13 @@ def register_routes(app, socketio):
             # Trigger distribution
             start_background_distribution(socketio, app)
 
+            message = (
+                f'Order added to library (set quantity to start printing)' if quantity == 0
+                else f'Order created for {quantity} print(s) of {filename}'
+            )
             return jsonify({
                 'success': True,
-                'message': f'Order created for {quantity} print(s) of {filename}',
+                'message': message,
                 'order_id': order_id
             })
 
@@ -624,16 +642,20 @@ def register_routes(app, socketio):
         """API: Update an order"""
         try:
             data = request.get_json()
+            quantity_updated = False
             with SafeLock(orders_lock):
                 for order in ORDERS:
                     if order.get('id') == order_id:
                         if 'quantity' in data:
                             order['quantity'] = int(data['quantity'])
+                            quantity_updated = True
                         if 'groups' in data:
                             order['groups'] = data['groups']
                         if 'name' in data:
                             order['name'] = data['name'].strip() if data['name'] else None
                         save_data(ORDERS_FILE, ORDERS)
+                        if quantity_updated and order.get('quantity', 0) > 0:
+                            start_background_distribution(socketio, app)
                         return jsonify({'success': True})
             return jsonify({'error': 'Order not found'}), 404
         except Exception as e:

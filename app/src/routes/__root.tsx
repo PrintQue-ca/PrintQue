@@ -147,6 +147,12 @@ function Navigation() {
                 Stats
               </Link>
               <Link
+                to="/ejection-codes"
+                className="text-sm font-medium transition-colors hover:text-primary [&.active]:text-primary [&.active]:font-semibold"
+              >
+                Ejection Codes
+              </Link>
+              <Link
                 to="/license"
                 className="text-sm font-medium transition-colors hover:text-primary [&.active]:text-primary [&.active]:font-semibold"
               >
@@ -203,7 +209,12 @@ function RootComponent() {
           </main>
           <Footer />
         </div>
-        <Toaster position="bottom-right" theme={theme} />
+        <Toaster
+          position="bottom-right"
+          theme={theme}
+          duration={2000}
+          toastOptions={{ duration: 2000 }}
+        />
       </RootDocument>
       <ReactQueryDevtools buttonPosition="bottom-left" />
     </QueryClientProvider>

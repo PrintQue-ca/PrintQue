@@ -13,6 +13,14 @@ import { useEffect, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
 import { GcodeEditor } from '@/components/ui/gcode-editor'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -35,15 +43,17 @@ import {
 export function NewOrderForm() {
   const [file, setFile] = useState<File | null>(null)
   const [orderName, setOrderName] = useState('')
-  const [quantity, setQuantity] = useState(1)
+  const [quantity, setQuantity] = useState(0)
   const [selectedGroups, setSelectedGroups] = useState<number[]>([])
   const [ejectionEnabled, setEjectionEnabled] = useState(false)
   const [endGcode, setEndGcode] = useState('')
   const [showEjectionSection, setShowEjectionSection] = useState(false)
   const [selectedEjectionCodeId, setSelectedEjectionCodeId] = useState<string>('custom')
   const [cooldownTemp, setCooldownTemp] = useState<string>('')
+  const [isGcodeDialogOpen, setIsGcodeDialogOpen] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const gcodeFileInputRef = useRef<HTMLInputElement>(null)
+  const gcodeDialogFileInputRef = useRef<HTMLInputElement>(null)
 
   const createOrder = useCreateOrder()
   const { data: groups } = useGroups()
@@ -123,6 +133,31 @@ export function NewOrderForm() {
     }
   }
 
+  const handleGcodeDialogFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const selectedFile = e.target.files?.[0]
+    if (selectedFile) {
+      const validExtensions = ['.txt', '.gcode', '.gc', '.nc']
+      const hasValidExt = validExtensions.some((ext) =>
+        selectedFile.name.toLowerCase().endsWith(ext)
+      )
+      if (!hasValidExt) {
+        toast.error('Please select a valid G-code file (.txt, .gcode, .gc, .nc)')
+        return
+      }
+      const reader = new FileReader()
+      reader.onload = (event) => {
+        const content = event.target?.result as string
+        setEndGcode(content)
+        setSelectedEjectionCodeId('custom')
+        toast.success(`Loaded G-code from ${selectedFile.name}`)
+      }
+      reader.onerror = () => toast.error('Failed to read file')
+      reader.readAsText(selectedFile)
+    }
+  }
+
+  const endGcodeLineCount = endGcode.trim() ? endGcode.trim().split('\n').length : 0
+
   const handleSaveAsDefault = async () => {
     try {
       await saveDefaultSettings.mutateAsync({
@@ -186,11 +221,11 @@ export function NewOrderForm() {
 
     try {
       await createOrder.mutateAsync(formData)
-      toast.success('Order added to library')
+      toast.success('Order added to library', { duration: 2000 })
       // Reset form
       setFile(null)
       setOrderName('')
-      setQuantity(1)
+      setQuantity(0)
       setSelectedGroups([])
       setCooldownTemp('')
       if (fileInputRef.current) {
@@ -222,169 +257,186 @@ export function NewOrderForm() {
   }
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="text-lg">Add New Order</CardTitle>
-      </CardHeader>
-      <CardContent>
-        <form onSubmit={handleSubmit} className="space-y-4">
-          <div
-            className="border-2 border-dashed rounded-lg p-6 text-center cursor-pointer hover:border-primary transition-colors"
-            onClick={() => fileInputRef.current?.click()}
-            onDrop={handleDrop}
-            onDragOver={handleDragOver}
-          >
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept=".gcode,.3mf,.stl"
-              onChange={handleFileChange}
-              className="hidden"
-            />
-            <Upload className="h-8 w-8 mx-auto mb-2 text-muted-foreground" />
-            {file ? (
-              <p className="text-sm font-medium">{file.name}</p>
-            ) : (
-              <p className="text-sm text-muted-foreground">
-                Click or drag to upload .gcode, .3mf, or .stl
-              </p>
-            )}
-          </div>
-
-          <div className="space-y-2">
-            <Label htmlFor="orderName">Order Name (optional)</Label>
-            <Input
-              id="orderName"
-              type="text"
-              placeholder="e.g., Test with ejection v2"
-              value={orderName}
-              onChange={(e) => setOrderName(e.target.value)}
-            />
-            <p className="text-xs text-muted-foreground">
-              Custom name to identify this order. If empty, filename is used.
-            </p>
-          </div>
-
-          <div className="grid grid-cols-2 gap-4">
-            <div className="space-y-2">
-              <Label htmlFor="quantity">Quantity</Label>
-              <Input
-                id="quantity"
-                type="number"
-                min={1}
-                value={quantity}
-                onChange={(e) => setQuantity(parseInt(e.target.value, 10) || 1)}
+    <>
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-lg">Add New Order</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <form onSubmit={handleSubmit} className="space-y-4">
+            <div
+              className="border-2 border-dashed rounded-lg p-6 text-center cursor-pointer hover:border-primary transition-colors"
+              onClick={() => fileInputRef.current?.click()}
+              onDrop={handleDrop}
+              onDragOver={handleDragOver}
+            >
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept=".gcode,.3mf,.stl"
+                onChange={handleFileChange}
+                className="hidden"
               />
-            </div>
-
-            <div className="space-y-2">
-              <Label htmlFor="groups">Printer Group</Label>
-              <Select
-                value={selectedGroups.length > 0 ? selectedGroups[0].toString() : 'all'}
-                onValueChange={(value) => {
-                  if (value === 'all') {
-                    setSelectedGroups([])
-                  } else {
-                    setSelectedGroups([parseInt(value, 10)])
-                  }
-                }}
-              >
-                <SelectTrigger>
-                  <SelectValue placeholder="All printers" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All printers</SelectItem>
-                  {groups?.map((group) => (
-                    <SelectItem key={group.id} value={group.id.toString()}>
-                      {group.name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-          </div>
-
-          {/* Ejection Settings */}
-          <div className="space-y-3 border-t pt-4">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center space-x-2">
-                <Switch
-                  id="ejection"
-                  checked={ejectionEnabled}
-                  onCheckedChange={setEjectionEnabled}
-                />
-                <Label htmlFor="ejection" className="cursor-pointer">
-                  Enable Auto-Ejection
-                </Label>
-              </div>
-              {ejectionEnabled && (
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => setShowEjectionSection(!showEjectionSection)}
-                >
-                  {showEjectionSection ? (
-                    <ChevronUp className="h-4 w-4" />
-                  ) : (
-                    <ChevronDown className="h-4 w-4" />
-                  )}
-                </Button>
+              <Upload className="h-8 w-8 mx-auto mb-2 text-muted-foreground" />
+              {file ? (
+                <p className="text-sm font-medium">{file.name}</p>
+              ) : (
+                <p className="text-sm text-muted-foreground">
+                  Click or drag to upload .gcode, .3mf, or .stl
+                </p>
               )}
             </div>
 
-            {ejectionEnabled && showEjectionSection && (
-              <div className="space-y-3">
-                {/* Ejection Code Selector */}
-                <div className="space-y-2">
-                  <Label>Select Ejection Code</Label>
-                  <Select value={selectedEjectionCodeId} onValueChange={handleEjectionCodeSelect}>
-                    <SelectTrigger>
-                      <SelectValue placeholder="Select an ejection code" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="default">
-                        <div className="flex items-center">
-                          <FolderOpen className="h-4 w-4 mr-2 text-muted-foreground" />
-                          Default Settings
-                        </div>
-                      </SelectItem>
-                      <SelectItem value="custom">
-                        <div className="flex items-center">
-                          <FileCode className="h-4 w-4 mr-2 text-muted-foreground" />
-                          Custom (enter below)
-                        </div>
-                      </SelectItem>
-                      {ejectionCodes && ejectionCodes.length > 0 && (
-                        <>
-                          <div className="px-2 py-1.5 text-xs font-semibold text-muted-foreground border-t mt-1 pt-1">
-                            Saved Ejection Codes
-                          </div>
-                          {ejectionCodes.map((code) => (
-                            <SelectItem key={code.id} value={code.id}>
-                              {code.name}
-                            </SelectItem>
-                          ))}
-                        </>
-                      )}
-                    </SelectContent>
-                  </Select>
-                  <p className="text-xs text-muted-foreground">
-                    Choose a saved ejection code or enter custom G-code below.
-                  </p>
-                </div>
+            <div className="space-y-2">
+              <Label htmlFor="orderName">Order Name (optional)</Label>
+              <Input
+                id="orderName"
+                type="text"
+                placeholder="e.g., Test with ejection v2"
+                value={orderName}
+                onChange={(e) => setOrderName(e.target.value)}
+              />
+              <p className="text-xs text-muted-foreground">
+                Custom name to identify this order. If empty, filename is used.
+              </p>
+            </div>
 
-                <div className="space-y-2">
-                  <div className="flex items-center justify-between">
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label htmlFor="quantity">Quantity</Label>
+                <Input
+                  id="quantity"
+                  type="number"
+                  min={0}
+                  value={quantity}
+                  onChange={(e) => setQuantity(Math.max(0, parseInt(e.target.value, 10) || 0))}
+                />
+                <p className="text-xs text-muted-foreground">
+                  Set to 0 to add to library only; set a quantity to start printing.
+                </p>
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="groups">Printer Group</Label>
+                <Select
+                  value={selectedGroups.length > 0 ? selectedGroups[0].toString() : 'all'}
+                  onValueChange={(value) => {
+                    if (value === 'all') {
+                      setSelectedGroups([])
+                    } else {
+                      setSelectedGroups([parseInt(value, 10)])
+                    }
+                  }}
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="All printers" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All printers</SelectItem>
+                    {groups?.map((group) => (
+                      <SelectItem key={group.id} value={group.id.toString()}>
+                        {group.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+
+            {/* Ejection Settings */}
+            <div className="space-y-3 border-t pt-4">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center space-x-2">
+                  <Switch
+                    id="ejection"
+                    checked={ejectionEnabled}
+                    onCheckedChange={setEjectionEnabled}
+                  />
+                  <Label htmlFor="ejection" className="cursor-pointer">
+                    Enable Auto-Ejection
+                  </Label>
+                </div>
+                {ejectionEnabled && (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => setShowEjectionSection(!showEjectionSection)}
+                  >
+                    {showEjectionSection ? (
+                      <ChevronUp className="h-4 w-4" />
+                    ) : (
+                      <ChevronDown className="h-4 w-4" />
+                    )}
+                  </Button>
+                )}
+              </div>
+
+              {ejectionEnabled && showEjectionSection && (
+                <div className="space-y-3">
+                  {/* Ejection Code Selector */}
+                  <div className="space-y-2">
+                    <Label>Select Ejection Code</Label>
+                    <Select value={selectedEjectionCodeId} onValueChange={handleEjectionCodeSelect}>
+                      <SelectTrigger>
+                        <SelectValue placeholder="Select an ejection code" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="default">
+                          <div className="flex items-center">
+                            <FolderOpen className="h-4 w-4 mr-2 text-muted-foreground" />
+                            Default Settings
+                          </div>
+                        </SelectItem>
+                        <SelectItem value="custom">
+                          <div className="flex items-center">
+                            <FileCode className="h-4 w-4 mr-2 text-muted-foreground" />
+                            Custom (enter below)
+                          </div>
+                        </SelectItem>
+                        {ejectionCodes && ejectionCodes.length > 0 && (
+                          <>
+                            <div className="px-2 py-1.5 text-xs font-semibold text-muted-foreground border-t mt-1 pt-1">
+                              Saved Ejection Codes
+                            </div>
+                            {ejectionCodes.map((code) => (
+                              <SelectItem key={code.id} value={code.id}>
+                                {code.name}
+                              </SelectItem>
+                            ))}
+                          </>
+                        )}
+                      </SelectContent>
+                    </Select>
+                    <p className="text-xs text-muted-foreground">
+                      Choose a saved ejection code or enter custom G-code below.
+                    </p>
+                  </div>
+
+                  <div className="space-y-2">
                     <Label>End G-code</Label>
-                    <div className="flex gap-2">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <div className="rounded-md border bg-muted/50 px-3 py-2 text-sm text-muted-foreground">
+                        {endGcodeLineCount === 0
+                          ? 'No G-code'
+                          : `${endGcodeLineCount} line${endGcodeLineCount === 1 ? '' : 's'}`}
+                      </div>
                       <Button
                         type="button"
                         variant="outline"
                         size="sm"
-                        onClick={() => gcodeFileInputRef.current?.click()}
+                        onClick={() => setIsGcodeDialogOpen(true)}
                       >
                         <FileCode className="h-4 w-4 mr-1" />
+                        View / Edit G-code
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => gcodeFileInputRef.current?.click()}
+                      >
+                        <Upload className="h-4 w-4 mr-1" />
                         Upload File
                       </Button>
                       <input
@@ -395,71 +447,113 @@ export function NewOrderForm() {
                         className="hidden"
                       />
                     </div>
+                    <p className="text-xs text-muted-foreground">
+                      Opens the G-code editor with line-by-line explanation. Upload or edit there.
+                    </p>
                   </div>
-                  <GcodeEditor
-                    value={endGcode}
-                    onChange={(value) => {
-                      setEndGcode(value)
-                      setSelectedEjectionCodeId('custom')
-                    }}
-                    placeholder="G28 X Y&#10;M84"
-                  />
-                  <p className="text-xs text-muted-foreground">
-                    This G-code runs after print completion. Click a line to see what it does.
-                  </p>
-                </div>
 
-                <div className="flex gap-2">
-                  <Button
-                    type="button"
-                    variant="secondary"
-                    size="sm"
-                    onClick={handleSaveAsDefault}
-                    disabled={saveDefaultSettings.isPending}
-                  >
-                    <Save className="h-4 w-4 mr-1" />
-                    Save as Default
-                  </Button>
-                  <Button type="button" variant="outline" size="sm" onClick={handleClearGcode}>
-                    <Trash2 className="h-4 w-4 mr-1" />
-                    Clear
-                  </Button>
-                </div>
+                  <div className="flex gap-2">
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      size="sm"
+                      onClick={handleSaveAsDefault}
+                      disabled={saveDefaultSettings.isPending}
+                    >
+                      <Save className="h-4 w-4 mr-1" />
+                      Save as Default
+                    </Button>
+                    <Button type="button" variant="outline" size="sm" onClick={handleClearGcode}>
+                      <Trash2 className="h-4 w-4 mr-1" />
+                      Clear
+                    </Button>
+                  </div>
 
-                {/* Cooldown Temperature (Bambu printers only) */}
-                <div className="mt-4 p-3 border rounded-lg bg-muted/50">
-                  <div className="flex items-center gap-2 mb-2">
-                    <Thermometer className="h-4 w-4 text-cyan-500" />
-                    <Label className="text-sm font-medium">Cooldown Temperature (Bambu only)</Label>
+                  {/* Cooldown Temperature (Bambu printers only) */}
+                  <div className="mt-4 p-3 border rounded-lg bg-muted/50">
+                    <div className="flex items-center gap-2 mb-2">
+                      <Thermometer className="h-4 w-4 text-cyan-500" />
+                      <Label className="text-sm font-medium">
+                        Cooldown Temperature (Bambu only)
+                      </Label>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Input
+                        type="number"
+                        min={0}
+                        max={100}
+                        placeholder="Optional"
+                        value={cooldownTemp}
+                        onChange={(e) => setCooldownTemp(e.target.value)}
+                        className="w-24"
+                      />
+                      <span className="text-sm text-muted-foreground">°C</span>
+                    </div>
+                    <p className="text-xs text-muted-foreground mt-2">
+                      If set, PrintQue will wait for the bed to cool to this temperature before
+                      running the ejection G-code on Bambu printers.
+                    </p>
                   </div>
-                  <div className="flex items-center gap-2">
-                    <Input
-                      type="number"
-                      min={0}
-                      max={100}
-                      placeholder="Optional"
-                      value={cooldownTemp}
-                      onChange={(e) => setCooldownTemp(e.target.value)}
-                      className="w-24"
-                    />
-                    <span className="text-sm text-muted-foreground">°C</span>
-                  </div>
-                  <p className="text-xs text-muted-foreground mt-2">
-                    If set, PrintQue will wait for the bed to cool to this temperature before
-                    running the ejection G-code on Bambu printers.
-                  </p>
                 </div>
-              </div>
-            )}
+              )}
+            </div>
+
+            <Button type="submit" className="w-full" disabled={!file || createOrder.isPending}>
+              <Plus className="h-4 w-4 mr-2" />
+              {createOrder.isPending ? 'Adding...' : 'Add to Library'}
+            </Button>
+          </form>
+        </CardContent>
+      </Card>
+
+      {/* End G-code editor dialog (explainer + full edit) */}
+      <Dialog open={isGcodeDialogOpen} onOpenChange={setIsGcodeDialogOpen}>
+        <DialogContent className="flex max-h-[90vh] w-[90vw] max-w-6xl flex-col">
+          <DialogHeader className="shrink-0">
+            <DialogTitle>End G-code</DialogTitle>
+            <DialogDescription>
+              View or edit the ejection G-code. Click a line to see what each command does.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-hidden">
+            <div className="flex shrink-0 justify-end">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => gcodeDialogFileInputRef.current?.click()}
+              >
+                <Upload className="h-4 w-4 mr-1" />
+                Upload File
+              </Button>
+              <input
+                ref={gcodeDialogFileInputRef}
+                type="file"
+                accept=".txt,.gcode,.gc,.nc"
+                onChange={handleGcodeDialogFileChange}
+                className="hidden"
+              />
+            </div>
+            <div className="min-h-0 flex-1 overflow-hidden">
+              <GcodeEditor
+                value={endGcode}
+                onChange={(value) => {
+                  setEndGcode(value)
+                  setSelectedEjectionCodeId('custom')
+                }}
+                placeholder="G28 X Y&#10;M84"
+                className="h-full min-h-0"
+              />
+            </div>
           </div>
-
-          <Button type="submit" className="w-full" disabled={!file || createOrder.isPending}>
-            <Plus className="h-4 w-4 mr-2" />
-            {createOrder.isPending ? 'Adding...' : 'Add to Library'}
-          </Button>
-        </form>
-      </CardContent>
-    </Card>
+          <DialogFooter className="shrink-0">
+            <Button type="button" variant="outline" onClick={() => setIsGcodeDialogOpen(false)}>
+              Done
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </>
   )
 }
 

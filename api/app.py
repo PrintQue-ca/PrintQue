@@ -2,8 +2,35 @@
 import eventlet
 eventlet.monkey_patch()
 
+# CRITICAL: Configure logging BEFORE any other imports to prevent auto-basicConfig
 import os
 import sys
+import logging
+
+# Set up logging to a user-writable directory
+LOG_DIR = os.path.join(os.getenv('DATA_DIR', os.path.expanduser("~")), "PrintQueData")
+os.makedirs(LOG_DIR, exist_ok=True)
+LOG_FILE = os.path.join(LOG_DIR, "app.log")
+
+# Clear any auto-configured handlers from the root logger
+root_logger = logging.getLogger()
+root_logger.handlers.clear()
+root_logger.setLevel(logging.DEBUG)  # Allow all through, handlers decide
+
+# Set up logging with file handler at DEBUG (captures everything)
+file_handler = logging.FileHandler(LOG_FILE)
+file_handler.setLevel(logging.DEBUG)
+file_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
+root_logger.addHandler(file_handler)
+
+# Create console handler - will be updated with saved level after logger module imports
+# Start with INFO as the safe default to prevent DEBUG spam during import
+console_handler = logging.StreamHandler()
+console_handler.setLevel(logging.INFO)
+console_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
+root_logger.addHandler(console_handler)
+
+# NOW import other modules (logging is already configured)
 import webbrowser
 import threading
 from flask import Flask, send_from_directory, send_file
@@ -14,34 +41,17 @@ from services.state import initialize_state
 from services.printer_manager import start_background_tasks, close_connection_pool
 from utils.config import Config
 import asyncio
-import logging
 import time
 import atexit
 from utils.console_capture import console_capture
 
-# Set up logging to a user-writable directory
-LOG_DIR = os.path.join(os.getenv('DATA_DIR', os.path.expanduser("~")), "PrintQueData")
-os.makedirs(LOG_DIR, exist_ok=True)
-LOG_FILE = os.path.join(LOG_DIR, "app.log")
+# Import log level configuration and update console handler with saved level
+from utils.logger import get_console_log_level, LOG_LEVELS, DEFAULT_CONSOLE_LEVEL
 
-# Import log level configuration from logger module
-from utils.logger import get_console_log_level, LOG_LEVELS
-
-# Set up logging with file handler at DEBUG (captures everything) and console at configured level
-file_handler = logging.FileHandler(LOG_FILE)
-file_handler.setLevel(logging.DEBUG)
-file_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
-
-# Create app's console handler using saved log level
-app_console_handler = logging.StreamHandler()
-app_console_handler.setLevel(LOG_LEVELS.get(get_console_log_level(), logging.INFO))
-app_console_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
-
-# Configure root logger - handlers filter by their own levels
-root_logger = logging.getLogger()
-root_logger.setLevel(logging.DEBUG)  # Allow all through, handlers decide
-root_logger.addHandler(file_handler)
-root_logger.addHandler(app_console_handler)
+# Update console handler with the saved log level (default INFO)
+saved_level = LOG_LEVELS.get(get_console_log_level(), LOG_LEVELS[DEFAULT_CONSOLE_LEVEL])
+console_handler.setLevel(saved_level)
+logging.info(f"Console log level set to: {get_console_log_level()}")
 
 # Initialize the app with static and templates folders
 # Handle both development and packaged (PyInstaller) environments
@@ -59,6 +69,7 @@ os.makedirs(static_folder, exist_ok=True)
 
 app = Flask(__name__, static_folder=static_folder, static_url_path='/static', template_folder=template_folder)
 app.config['SECRET_KEY'] = Config.SECRET_KEY
+app.config['APP_VERSION'] = Config.APP_VERSION  # From api/__version__.py (updated by CI)
 app.config['UPLOAD_FOLDER'] = os.path.join(LOG_DIR, "uploads")  # Writable upload folder
 app.config['LOG_DIR'] = LOG_DIR
 

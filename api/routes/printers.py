@@ -414,7 +414,7 @@ def send_print(printer_id):
                 with SafeLock(orders_lock):
                     orders_data = ORDERS.copy()
                 with ReadLock(printers_rwlock):
-                    printers_copy = copy.deepcopy(PRINTERS)
+                    printers_copy = prepare_printer_data_for_broadcast(PRINTERS)
                 socketio.emit('status_update', {'printers': printers_copy, 'total_filament': total_filament, 'orders': orders_data})
 
             return success
@@ -528,7 +528,7 @@ def stop_print(printer_id):
                     with SafeLock(orders_lock):
                         orders_data = ORDERS.copy()
                     with ReadLock(printers_rwlock):
-                        printers_data = copy.deepcopy(PRINTERS)
+                        printers_data = prepare_printer_data_for_broadcast(PRINTERS)
 
                     socketio.emit('status_update', {
                         'printers': printers_data,
@@ -635,7 +635,7 @@ def pause_print(printer_id):
                     with SafeLock(orders_lock):
                         orders_data = ORDERS.copy()
                     with ReadLock(printers_rwlock):
-                        printers_data = copy.deepcopy(PRINTERS)
+                        printers_data = prepare_printer_data_for_broadcast(PRINTERS)
 
                     socketio.emit('status_update', {
                         'printers': printers_data,
@@ -742,7 +742,7 @@ def resume_print(printer_id):
                     with SafeLock(orders_lock):
                         orders_data = ORDERS.copy()
                     with ReadLock(printers_rwlock):
-                        printers_data = copy.deepcopy(PRINTERS)
+                        printers_data = prepare_printer_data_for_broadcast(PRINTERS)
 
                     socketio.emit('status_update', {
                         'printers': printers_data,
@@ -869,7 +869,7 @@ def stop_all_printers():
                 with SafeLock(orders_lock):
                     orders_data = ORDERS.copy()
                 with ReadLock(printers_rwlock):
-                    printers_data = copy.deepcopy(PRINTERS)
+                    printers_data = prepare_printer_data_for_broadcast(PRINTERS)
 
                 socketio.emit('status_update', {
                     'printers': printers_data,
@@ -920,8 +920,8 @@ def mark_ready(printer_id):
             flash("Printer not found")
             return redirect(url_for('index'))
 
-        if printer_copy["state"] not in ["FINISHED", "EJECTING"]:
-            flash(f"Printer {printer_name} is not in FINISHED or EJECTING state")
+        if printer_copy["state"] not in ["FINISHED", "EJECTING", "COOLING"]:
+            flash(f"Printer {printer_name} is not in FINISHED, EJECTING, or COOLING state")
             return redirect(url_for('index'))
 
         def reset_printer_task():
@@ -947,7 +947,7 @@ def mark_ready(printer_id):
             with WriteLock(printers_rwlock, timeout=30):
                 if 0 <= printer_id < len(PRINTERS):
                     printer = PRINTERS[printer_id]
-                    if printer["state"] in ["FINISHED", "EJECTING"]:
+                    if printer["state"] in ["FINISHED", "EJECTING", "COOLING"]:
                         previous_state = printer["state"]
                         printer["state"] = "READY"
                         printer["status"] = "Ready"
@@ -962,6 +962,9 @@ def mark_ready(printer_id):
                         printer.pop("ejection_processed", None)
                         printer.pop("ejection_start_time", None)
                         printer.pop("ejection_timeout", None)
+                        # Clear cooldown state if skipping cooldown
+                        printer["cooldown_target_temp"] = None
+                        printer["cooldown_order_id"] = None
 
                         save_data(PRINTERS_FILE, PRINTERS)
                         logging.debug(f"Marked {printer['name']} as READY from {previous_state} after physical reset. Reset success: {success}")
@@ -973,7 +976,7 @@ def mark_ready(printer_id):
             with SafeLock(orders_lock):
                 orders_data = ORDERS.copy()
             with ReadLock(printers_rwlock):
-                printers_copy = copy.deepcopy(PRINTERS)
+                printers_copy = prepare_printer_data_for_broadcast(PRINTERS)
             socketio.emit('status_update', {'printers': printers_copy, 'total_filament': total_filament, 'orders': orders_data})
 
         thread = threading.Thread(target=reset_printer_task)
@@ -1005,7 +1008,7 @@ def mark_ready_by_name():
     with WriteLock(printers_rwlock):
         printer_found = False
         for printer in PRINTERS:
-            if printer['name'] == printer_name and printer['state'] in ['FINISHED', 'EJECTING']:
+            if printer['name'] == printer_name and printer['state'] in ['FINISHED', 'EJECTING', 'COOLING']:
                 printer.update({
                     "state": 'READY',
                     "status": 'Ready',
@@ -1017,6 +1020,8 @@ def mark_ready_by_name():
                     "manually_set": True,
                     "ejection_processed": False,
                     "ejection_start_time": None,
+                    "cooldown_target_temp": None,
+                    "cooldown_order_id": None,
                     "finish_time": None
                 })
                 printer_found = True
@@ -1058,14 +1063,14 @@ def mark_all_ready():
         # First, quickly identify printers that need to be reset (minimal lock time)
         with ReadLock(printers_rwlock, timeout=5):
             for i, printer in enumerate(PRINTERS):
-                if printer["state"] in ["FINISHED", "EJECTING"]:
+                if printer["state"] in ["FINISHED", "EJECTING", "COOLING"]:
                     printers_to_reset.append({
                         'index': i,
                         'name': printer['name']
                     })
 
         if not printers_to_reset:
-            flash("No printers in FINISHED or EJECTING state to mark as Ready")
+            flash("No printers in FINISHED, EJECTING, or COOLING state to mark as Ready")
             return redirect(url_for('index'))
 
         # Process the updates in a background thread to avoid blocking the web request
@@ -1078,7 +1083,7 @@ def mark_all_ready():
                     idx = printer_info['index']
                     if 0 <= idx < len(PRINTERS):
                         printer = PRINTERS[idx]
-                        if printer["state"] in ["FINISHED", "EJECTING"]:
+                        if printer["state"] in ["FINISHED", "EJECTING", "COOLING"]:
                             # Force immediate state change without API reset
                             printer["state"] = "READY"
                             printer["status"] = "Ready"
@@ -1093,6 +1098,9 @@ def mark_all_ready():
                             printer.pop("ejection_processed", None)
                             printer.pop("ejection_start_time", None)
                             printer.pop("ejection_timeout", None)
+                            # Clear cooldown state if skipping cooldown
+                            printer["cooldown_target_temp"] = None
+                            printer["cooldown_order_id"] = None
 
                             logging.info(f"INSTANT_MARK_READY: {printer['name']} marked as READY instantly")
                             success_count += 1
@@ -1110,7 +1118,7 @@ def mark_all_ready():
             with SafeLock(orders_lock):
                 orders_data = ORDERS.copy()
             with ReadLock(printers_rwlock):
-                printers_copy = copy.deepcopy(PRINTERS)
+                printers_copy = prepare_printer_data_for_broadcast(PRINTERS)
 
             socketio.emit('status_update', {
                 'printers': printers_copy,
@@ -1149,14 +1157,14 @@ def mark_group_ready(group):
             # The 'path' converter ensures that 'group' contains the full, decoded URL segment
             for i, printer in enumerate(PRINTERS):
                 # Now comparing text-based groups
-                if printer["state"] in ["FINISHED", "EJECTING"] and printer["group"] == group:
+                if printer["state"] in ["FINISHED", "EJECTING", "COOLING"] and printer["group"] == group:
                     printers_to_reset.append({
                         'index': i,
                         'data': printer.copy()
                     })
 
         if not printers_to_reset:
-            flash(f"No printers in Group {group} in FINISHED or EJECTING state")
+            flash(f"No printers in Group {group} in FINISHED, EJECTING, or COOLING state")
             return redirect(url_for('index'))
 
         def reset_group_printers_task():
@@ -1184,6 +1192,9 @@ def mark_group_ready(group):
                         printer.pop("ejection_start_time", None)
                         printer.pop("ejection_timeout", None)
                         printer.pop("finish_time", None)
+                        # Clear cooldown state if skipping cooldown
+                        printer["cooldown_target_temp"] = None
+                        printer["cooldown_order_id"] = None
 
                         logging.info(f"MANUAL_MARK_READY: Group {group} - {printer['name']} marked as READY from {previous_state} instantly")
                         success_count += 1
@@ -1209,7 +1220,7 @@ def mark_group_ready(group):
             with SafeLock(orders_lock):
                 orders_data = ORDERS.copy()
             with ReadLock(printers_rwlock):
-                printers_copy = copy.deepcopy(PRINTERS)
+                printers_copy = prepare_printer_data_for_broadcast(PRINTERS)
             socketio.emit('status_update', {'printers': printers_copy, 'total_filament': total_filament, 'orders': orders_data})
 
         thread = threading.Thread(target=reset_group_printers_task)
