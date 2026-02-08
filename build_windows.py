@@ -104,7 +104,6 @@ a = Analysis(
         'aiohttp.connector',
         'requests',
         'psutil',
-        'dotenv',
         'werkzeug',
         'werkzeug.serving',
         'jinja2',
@@ -235,27 +234,6 @@ pause
         f.write(batch_content)
     print("Created Start_PrintQue.bat")
     
-    # Create configuration template
-    config_content = """# PrintQue Open Source Edition - Configuration Template
-# Copy this file to .env and modify as needed
-
-# Server Configuration
-PORT=5000
-HOST=0.0.0.0
-
-# Security Keys (CHANGE THESE for production!)
-SECRET_KEY=change-this-secret-key-to-something-random
-ENCRYPTION_KEY=change-this-encryption-key-to-something-random
-ADMIN_KEY=change-this-admin-key-to-something-random
-
-# Bambu Printer Settings
-BAMBU_CA_CERT=certs/bambu_ca.pem
-"""
-    
-    with open(os.path.join(dist_dir, 'config_template.env'), 'w') as f:
-        f.write(config_content)
-    print("Created config_template.env")
-    
     # Create README
     readme_content = """PrintQue - Open Source Print Farm Manager
 ==========================================
@@ -270,23 +248,13 @@ Open Source Edition:
 - License: GPL v3
 - GitHub: https://github.com/PrintQue/PrintQue
 
-Configuration:
-- Copy 'config_template.env' to '.env' and modify the settings
-- Default port is 5000 (change in .env if needed)
-
 Data Storage:
-- Printer data: data/printers.json
-- Orders: data/orders.json
-- Uploaded files: uploads/
-- Certificates: certs/
-
-First Run:
-- The application will create all necessary data files automatically
-- A default encryption key will be generated (WARNING shown in console)
-- For production use, set your own ENCRYPTION_KEY in .env file
+- All data is stored in ~/PrintQueData/
+- Security keys are auto-generated on first run
+- No manual configuration is needed
 
 Troubleshooting:
-- If port 5000 is in use, change PORT in .env file
+- If port 5000 is in use, the server will automatically try the next available port
 - Check console window for error messages
 - Report issues: https://github.com/PrintQue/PrintQue/issues
 - Ensure firewall allows the application

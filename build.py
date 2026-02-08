@@ -319,7 +319,7 @@ packages_to_collect = [
     'eventlet', 'eventlet.green', 'eventlet.hubs',
     'dns', 'dns.resolver', 'cryptography',
     'aiohttp', 'aiofiles', 'requests', 'urllib3', 'certifi',
-    'psutil', 'dotenv', 'simple_websocket', 'bidict', 'greenlet',
+    'psutil', 'simple_websocket', 'bidict', 'greenlet',
     'paho', 'paho.mqtt', 'paho.mqtt.client',
 ]
 

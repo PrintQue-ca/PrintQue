@@ -48,6 +48,10 @@ jobs:
         run: |
           pip install -r api/requirements.txt
           pip install -r api/requirements-dev.txt
+      - name: Audit Python dependencies
+        run: pip install pip-audit && pip-audit -r api/requirements.txt
+      - name: Audit Python dependencies
+        run: pip install pip-audit && pip-audit -r api/requirements.txt
       - name: Run tests with coverage
         run: cd api && pytest --cov=. --cov-report=xml --cov-report=term-missing
         env:
@@ -72,6 +76,8 @@ jobs:
           cache-dependency-path: app/package-lock.json
       - name: Install dependencies
         run: cd app && npm ci
+      - name: Audit npm dependencies
+        run: cd app && npm audit --omit=dev
       - name: Run tests
         run: cd app && npm run test
 

@@ -53,7 +53,6 @@ packages_to_collect = [
     'urllib3',
     'certifi',
     'psutil',
-    'dotenv',
     'simple_websocket',
     'bidict',
     'greenlet'
@@ -176,7 +175,7 @@ def build_exe():
     packages = [
         'flask', 'flask-socketio', 'eventlet', 'python-socketio', 
         'python-engineio', 'werkzeug', 'jinja2', 'cryptography',
-        'aiohttp', 'requests', 'psutil', 'python-dotenv',
+        'aiohttp', 'requests', 'psutil',
         'simple-websocket', 'dnspython', 'paho-mqtt'
     ]
     
