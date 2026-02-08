@@ -87,7 +87,7 @@ jobs:
         working-directory: app
 
       - name: Build executable
-        run: python build.py --skip-deps --version ${{ steps.get_version.outputs.version }}
+        run: python scripts/build.py --skip-deps --version ${{ steps.get_version.outputs.version }}
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4

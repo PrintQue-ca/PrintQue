@@ -3,8 +3,8 @@
 Quick test script to verify the PrintQue build works correctly.
 
 Usage:
-    python test_build.py           # Test the source directly
-    python test_build.py --dist    # Test the built executable
+    python scripts/test_build.py           # Test the source directly
+    python scripts/test_build.py --dist    # Test the built executable
 """
 
 import os
@@ -16,7 +16,8 @@ import platform
 import requests
 from pathlib import Path
 
-ROOT_DIR = Path(__file__).parent.absolute()
+# Repo root (script lives in scripts/)
+ROOT_DIR = Path(__file__).resolve().parent.parent
 DIST_DIR = ROOT_DIR / "dist"
 API_DIR = ROOT_DIR / "api"
 
@@ -138,7 +139,7 @@ def run_dist_test():
     
     if not exe_path.exists():
         print(f"[ERROR] Executable not found at {exe_path}")
-        print("Run 'python build.py' first to create the executable.")
+        print("Run 'python scripts/build.py' first to create the executable.")
         return 1
     
     print(f"Starting executable: {exe_path}")

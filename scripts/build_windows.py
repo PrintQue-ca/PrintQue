@@ -1,6 +1,10 @@
 #!/usr/bin/env python
 """
-Fixed build script for PrintQue Windows executable
+Legacy Windows-specific build script for PrintQue.
+For current builds use: python scripts/build.py
+
+This script expects to be run from the repository root. It uses ROOT_DIR
+so that build/ and dist/ are at repo root when run from scripts/.
 """
 import os
 import sys
@@ -8,52 +12,58 @@ import shutil
 import subprocess
 import zipfile
 from datetime import datetime
+from pathlib import Path
+
+# Repo root (script lives in scripts/)
+ROOT_DIR = Path(__file__).resolve().parent.parent
+
 
 def clean_build():
     """Clean previous build artifacts"""
     print("Cleaning previous builds...")
-    dirs_to_remove = ['build', 'dist', '__pycache__']
-    for dir_name in dirs_to_remove:
-        if os.path.exists(dir_name):
-            shutil.rmtree(dir_name)
-            print(f"Removed {dir_name}")
+    dirs_to_remove = [ROOT_DIR / 'build', ROOT_DIR / 'dist', ROOT_DIR / 'api' / '__pycache__']
+    for d in dirs_to_remove:
+        if d.exists():
+            shutil.rmtree(d)
+            print(f"Removed {d}")
+
 
 def check_files():
-    """Verify all required files exist"""
+    """Verify all required files exist (under api/)"""
     print("\nChecking required files...")
-    required_files = [
-        'app.py',
-        'run_app.py',
-        'routes.py',
-        'state.py',
-        'printer_manager.py',
-        'config.py',
-        'requirements.txt'
+    api = ROOT_DIR / 'api'
+    required = [
+        api / 'app.py',
+        api / 'state.py',
+        api / 'printer_manager.py',
+        api / 'config.py',
+        api / 'requirements.txt',
     ]
-    
-    missing_files = []
-    for file in required_files:
-        if os.path.exists(file):
-            print(f"[OK] {file}")
+    required_dirs = [api / 'routes']
+    missing = []
+    for f in required:
+        if f.exists():
+            print(f"[OK] {f.relative_to(ROOT_DIR)}")
         else:
-            print(f"[MISSING] {file}")
-            missing_files.append(file)
-    
-    if missing_files:
+            print(f"[MISSING] {f.relative_to(ROOT_DIR)}")
+            missing.append(f)
+    for d in required_dirs:
+        if d.is_dir():
+            print(f"[OK] {d.relative_to(ROOT_DIR)}/")
+        else:
+            print(f"[MISSING] {d.relative_to(ROOT_DIR)}/")
+            missing.append(d)
+    if missing:
         print("\nError: Missing required files!")
         return False
-    
-    # Check templates
-    print("\nChecking templates...")
-    template_dir = 'templates'
-    if os.path.exists(template_dir):
-        templates = os.listdir(template_dir)
-        print(f"Found {len(templates)} templates")
+    template_dir = api / 'templates'
+    if template_dir.exists():
+        print(f"Found {len(list(template_dir.iterdir()))} templates")
     else:
-        print("[MISSING] templates directory!")
+        print("[MISSING] api/templates directory!")
         return False
-    
     return True
+
 
 def build_exe():
     """Build the executable using PyInstaller"""
@@ -152,15 +162,13 @@ exe = EXE(
 )
 '''
     
-    # Write spec file
-    with open('PrintQue.spec', 'w') as f:
-        f.write(spec_content)
+    spec_file = ROOT_DIR / 'PrintQue.spec'
+    spec_file.write_text(spec_content)
     
-    # Build using the spec file
-    cmd = ['pyinstaller', 'PrintQue.spec', '--clean', '-y']
-    
+    # Build using the spec file (run from root so dist/build at root)
+    cmd = [sys.executable, '-m', 'PyInstaller', str(spec_file), '--clean', '-y']
     try:
-        result = subprocess.run(cmd, check=True, capture_output=True, text=True)
+        result = subprocess.run(cmd, cwd=str(ROOT_DIR), check=True, capture_output=True, text=True)
         print("Build completed successfully!")
         print(result.stdout)
         return True
@@ -174,44 +182,28 @@ exe = EXE(
         print("Please install it with: pip install pyinstaller")
         return False
 
+
 def create_distribution():
     """Create a distribution package"""
     print("\nCreating distribution package...")
     
     dist_name = f"PrintQue_Windows_{datetime.now().strftime('%Y%m%d')}"
-    dist_dir = os.path.join('dist', dist_name)
+    dist_dir = ROOT_DIR / 'dist' / dist_name
     
-    # Create distribution directory
-    os.makedirs(dist_dir, exist_ok=True)
+    dist_dir.mkdir(parents=True, exist_ok=True)
     
-    # Copy executable
-    if os.path.exists('dist/PrintQue.exe'):
-        shutil.copy('dist/PrintQue.exe', dist_dir)
+    src_exe = ROOT_DIR / 'dist' / 'PrintQue.exe'
+    if src_exe.exists():
+        shutil.copy(src_exe, dist_dir)
         print(f"Copied PrintQue.exe to {dist_dir}")
     else:
         print("Error: PrintQue.exe not found!")
         return False
     
-    # Create data directories
-    data_dirs = ['data', 'uploads', 'certs']
-    for dir_name in data_dirs:
-        target_dir = os.path.join(dist_dir, dir_name)
-        os.makedirs(target_dir, exist_ok=True)
+    for dir_name in ['data', 'uploads', 'certs']:
+        (dist_dir / dir_name).mkdir(exist_ok=True)
         print(f"Created directory: {dir_name}")
     
-    # Copy additional files
-    files_to_copy = [
-        'README.txt',
-        'requirements.txt',
-    ]
-    
-    for file in files_to_copy:
-        if os.path.exists(file):
-            shutil.copy(file, dist_dir)
-            print(f"Copied {file}")
-    
-    
-    # Create batch file launcher
     batch_content = """@echo off
 title PrintQue Server
 echo ================================================
@@ -229,12 +221,9 @@ echo.
 PrintQue.exe
 pause
 """
-    
-    with open(os.path.join(dist_dir, 'Start_PrintQue.bat'), 'w') as f:
-        f.write(batch_content)
+    (dist_dir / 'Start_PrintQue.bat').write_text(batch_content)
     print("Created Start_PrintQue.bat")
     
-    # Create README
     readme_content = """PrintQue - Open Source Print Farm Manager
 ==========================================
 
@@ -266,39 +255,30 @@ Support:
 
 Version: 1.0
 """
-    
-    with open(os.path.join(dist_dir, 'README.txt'), 'w') as f:
-        f.write(readme_content)
+    (dist_dir / 'README.txt').write_text(readme_content)
     print("Created README.txt")
     
-    # Create a zip file
-    print(f"\nCreating zip archive: {dist_name}.zip")
-    zip_path = f'dist/{dist_name}.zip'
-    
+    zip_path = ROOT_DIR / 'dist' / f'{dist_name}.zip'
     with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
         for root, dirs, files in os.walk(dist_dir):
             for file in files:
                 file_path = os.path.join(root, file)
-                arcname = os.path.relpath(file_path, os.path.dirname(dist_dir))
+                arcname = os.path.relpath(file_path, dist_dir.parent)
                 zipf.write(file_path, arcname)
-    
     print(f"Distribution package created: {zip_path}")
     return True
 
+
 def main():
     print("=" * 60)
-    print("   PrintQue Windows Executable Builder")
+    print("   PrintQue Windows Executable Builder (legacy)")
+    print("   Prefer: python scripts/build.py")
     print("=" * 60)
     
-    # Check Python version
     if sys.version_info < (3, 8):
         print("Error: Python 3.8 or higher is required")
-        print(f"Current version: {sys.version}")
         return 1
     
-    print(f"Python version: {sys.version.split()[0]}")
-    
-    # Check if PyInstaller is installed
     try:
         import PyInstaller
         print(f"PyInstaller version: {PyInstaller.__version__}")
@@ -307,26 +287,13 @@ def main():
         print("Install it with: pip install pyinstaller")
         return 1
     
-    # Clean previous builds
     clean_build()
-    
-    # Check required files
     if not check_files():
         print("\nBuild cannot continue - missing required files!")
         return 1
-    
-    # Build executable
-    print("\n" + "=" * 60)
-    print("Building executable...")
-    print("=" * 60)
     if not build_exe():
         print("\nBuild failed! Check the error messages above.")
         return 1
-    
-    # Create distribution
-    print("\n" + "=" * 60)
-    print("Creating distribution package...")
-    print("=" * 60)
     if not create_distribution():
         print("\nDistribution creation failed!")
         return 1
@@ -334,18 +301,9 @@ def main():
     print("\n" + "=" * 60)
     print("   Build Completed Successfully!")
     print("=" * 60)
-    print("\nOutput files:")
-    print(f"  - Executable: dist/PrintQue.exe")
-    print(f"  - Distribution folder: dist/PrintQue_Windows_{datetime.now().strftime('%Y%m%d')}/")
-    print(f"  - Zip package: dist/PrintQue_Windows_{datetime.now().strftime('%Y%m%d')}.zip")
-    print("\nTo test the executable:")
-    print("  1. Navigate to: dist/PrintQue_Windows_{datetime.now().strftime('%Y%m%d')}/")
-    print("  2. Double-click: Start_PrintQue.bat")
-    print("  3. Open browser to: http://localhost:5000")
-    print("\nNote: First run may be slow as Windows Defender scans the file.")
-    print("=" * 60)
-    
+    print(f"\nOutput: {ROOT_DIR / 'dist'}")
     return 0
+
 
 if __name__ == "__main__":
     sys.exit(main())
