@@ -18,7 +18,7 @@ root_logger.handlers.clear()
 root_logger.setLevel(logging.DEBUG)  # Allow all through, handlers decide
 
 # Set up logging with file handler at DEBUG (captures everything)
-file_handler = logging.FileHandler(LOG_FILE)
+file_handler = logging.FileHandler(LOG_FILE, encoding='utf-8')
 file_handler.setLevel(logging.DEBUG)
 file_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
 root_logger.addHandler(file_handler)
@@ -75,25 +75,20 @@ app.config['APP_VERSION'] = Config.APP_VERSION  # From api/__version__.py (updat
 app.config['UPLOAD_FOLDER'] = os.path.join(LOG_DIR, "uploads")  # Writable upload folder
 app.config['LOG_DIR'] = LOG_DIR
 
-# Enable CORS for React frontend development and packaged builds
-allowed_origins = [
-    "http://localhost:3000", "http://127.0.0.1:3000",
-    "http://localhost:5173", "http://127.0.0.1:5173",
-    "http://localhost:5000", "http://127.0.0.1:5000",
-]
-
+# Enable CORS — the server only listens on localhost so allow all origins.
+# In packaged builds the frontend is served from the same origin so CORS is a no-op.
 CORS(app, resources={
     r"/api/*": {
-        "origins": allowed_origins,
+        "origins": "*",
         "methods": ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
         "allow_headers": ["Content-Type", "Authorization", "X-Requested-With"]
     },
     r"/socket.io/*": {
-        "origins": allowed_origins
+        "origins": "*"
     }
 })
 
-socketio = SocketIO(app, async_mode='eventlet', cors_allowed_origins=allowed_origins)
+socketio = SocketIO(app, async_mode='eventlet', cors_allowed_origins="*")
 
 
 @app.after_request

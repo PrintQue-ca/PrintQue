@@ -500,14 +500,42 @@ def register_routes(app, socketio):
         """API: Update a printer"""
         try:
             data = request.get_json()
+            needs_reconnect = False
             with WriteLock(printers_rwlock):
                 for printer in PRINTERS:
                     if printer['name'] == printer_name:
                         if 'group' in data:
                             printer['group'] = sanitize_group_name(data['group'])
+                        if 'ip' in data and data['ip']:
+                            if data['ip'] != printer.get('ip'):
+                                needs_reconnect = True
+                            printer['ip'] = data['ip']
+                        # Bambu-specific fields
+                        if printer.get('type') == 'bambu':
+                            if 'access_code' in data and data['access_code']:
+                                printer['access_code'] = encrypt_api_key(data['access_code'])
+                                needs_reconnect = True
+                            if 'device_id' in data and data['device_id']:
+                                if data['device_id'] != printer.get('serial_number'):
+                                    needs_reconnect = True
+                                printer['device_id'] = data['device_id']
+                                printer['serial_number'] = data['device_id']
+                        # Prusa-specific fields
+                        elif printer.get('type') == 'prusa':
+                            if 'api_key' in data and data['api_key']:
+                                printer['api_key'] = encrypt_api_key(data['api_key'])
                         if 'name' in data and data['name'] != printer_name:
                             printer['name'] = data['name']
                         save_data(PRINTERS_FILE, PRINTERS)
+                        # Reconnect Bambu printer if connection details changed
+                        if needs_reconnect and printer.get('type') == 'bambu':
+                            import threading
+                            from services.bambu_handler import disconnect_bambu_printer, connect_bambu_printer
+                            printer_copy = printer.copy()
+                            def _reconnect():
+                                disconnect_bambu_printer(printer_name)
+                                connect_bambu_printer(printer_copy)
+                            threading.Thread(target=_reconnect, daemon=True).start()
                         return jsonify({'success': True})
             return jsonify({'error': 'Printer not found'}), 404
         except Exception as e:

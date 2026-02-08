@@ -506,7 +506,11 @@ def decrypt_api_key(encrypted_api_key):
             return None
         return cipher.decrypt(encrypted_api_key.encode()).decode()
     except Exception as e:
-        logger.error(f"Decryption failed for API key: {e}")
+        logger.error(
+            "Decryption failed for API key: %s. "
+            "If you reset data or use a different machine, re-enter the printer access code in the Printers settings.",
+            e,
+        )
         return None
 
 def save_data(filename, data):
@@ -1052,18 +1056,12 @@ def initialize_state():
 
     logger.debug(f"State initialized: {len(PRINTERS)} printers, {len(ORDERS)} orders, {len(EJECTION_CODES)} ejection codes, {TOTAL_FILAMENT_CONSUMPTION}g filament, ejection_paused={EJECTION_PAUSED}")
 
-    # Initialize Bambu connections
-    from services.bambu_handler import connect_bambu_printer
-    for printer in PRINTERS:
-        if printer.get('type') == 'bambu':
-            try:
-                connect_bambu_printer(printer)
-            except Exception as e:
-                logger.error(f"Failed to connect Bambu printer {printer['name']} during initialization: {str(e)}")
+    # NOTE: Bambu connections are deferred to start_background_tasks()
+    # so they don't block the server from starting up.
 
     # Mark state as initialized to prevent duplicates
     _STATE_INITIALIZED = True
-    logging.info("✅ State initialization complete - locked to prevent re-initialization")
+    logging.info("State initialization complete - locked to prevent re-initialization")
 
 def register_task(task_id, task_type, total):
     with SafeLock(tasks_lock):

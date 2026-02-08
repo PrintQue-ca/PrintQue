@@ -106,6 +106,21 @@ def start_background_tasks(socketio, app):
     # Ensure all FINISHED printers have finish_time
     ensure_finish_times()
 
+    # Connect Bambu printers in a background thread so the server isn't blocked
+    from services.bambu_handler import connect_bambu_printer
+
+    def _connect_bambu_printers():
+        with ReadLock(printers_rwlock):
+            bambu_printers = [p for p in PRINTERS if p.get('type') == 'bambu']
+        for printer in bambu_printers:
+            try:
+                connect_bambu_printer(printer)
+            except Exception as e:
+                logging.error(f"Failed to connect Bambu printer {printer['name']}: {e}")
+
+    bambu_thread = threading.Thread(target=_connect_bambu_printers, daemon=True)
+    bambu_thread.start()
+
     def schedule_status_polling():
         batch_index = 0
         while True:
