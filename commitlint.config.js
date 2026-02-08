@@ -21,8 +21,25 @@
  *
  * @see https://www.conventionalcommits.org/
  */
+/** Known bot email patterns whose commits skip linting. */
+const BOT_EMAILS = [
+  'github-advanced-security[bot]@users.noreply.github.com',
+  'dependabot[bot]@users.noreply.github.com',
+  'github-actions[bot]@users.noreply.github.com',
+];
+
+/**
+ * Returns true when the raw commit message looks like it was authored or
+ * co-authored by a known bot, so commitlint will skip it entirely.
+ */
+function isBotCommit(message) {
+  return BOT_EMAILS.some((email) => message.includes(email));
+}
+
 export default {
   extends: ['@commitlint/config-conventional'],
+  // Skip validation for commits authored by bots (Copilot Autofix, Dependabot, etc.)
+  ignores: [isBotCommit],
   rules: {
     // Enforce lowercase type
     'type-case': [2, 'always', 'lower-case'],
@@ -50,5 +67,7 @@ export default {
     'type-empty': [2, 'never'],
     // Max header length
     'header-max-length': [2, 'always', 100],
+    // Relax body line length — automated trailers (Co-authored-by, etc.) often exceed 100 chars
+    'body-max-line-length': [1, 'always', 200],
   },
 };
