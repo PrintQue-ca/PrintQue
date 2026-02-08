@@ -57,7 +57,7 @@ export function useDeletePrinter() {
 export function useUpdatePrinter() {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: ({ name, data }: { name: string; data: Partial<PrinterFormData> }) =>
+    mutationFn: ({ name, data }: { name: string; data: Record<string, unknown> }) =>
       api.patch<ApiResponse>(`/printers/${name}`, data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['printers'] })

@@ -522,6 +522,12 @@ def connect_bambu_printer(printer: Dict[str, Any]) -> bool:
 
         # Set credentials
         access_code = decrypt_api_key(printer['access_code'])
+        if not access_code:
+            logging.error(
+                f"Cannot connect Bambu printer {printer_name}: access code decryption failed. "
+                "Re-enter the access code in Printer settings."
+            )
+            return False
         client.username_pw_set("bblp", access_code)
 
         # Connect

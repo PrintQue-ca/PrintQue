@@ -434,7 +434,7 @@ async def check_and_start_print(session, printer, order, headers, batch_id, app)
             # Increment count when print starts
             success_increment, updated_order = increment_order_sent_count(order['id'])
             if success_increment:
-                logging.info(f"✓ Incremented sent count for Bambu order {order['id']} to {updated_order['sent']}")
+                logging.info(f"Incremented sent count for Bambu order {order['id']} to {updated_order['sent']}")
                 # Increment filament immediately when print starts
                 with SafeLock(filament_lock):
                     old_total = TOTAL_FILAMENT_CONSUMPTION
@@ -559,7 +559,7 @@ async def check_and_start_print(session, printer, order, headers, batch_id, app)
             # Increment count when print starts
             success_increment, updated_order = increment_order_sent_count(order['id'])
             if success_increment:
-                logging.info(f"✓ Incremented sent count for Prusa order {order['id']} to {updated_order['sent']}")
+                logging.info(f"Incremented sent count for Prusa order {order['id']} to {updated_order['sent']}")
                 # Increment filament immediately
                 with SafeLock(filament_lock):
                     old_total = TOTAL_FILAMENT_CONSUMPTION

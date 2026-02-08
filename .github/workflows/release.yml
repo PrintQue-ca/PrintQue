@@ -191,3 +191,53 @@ jobs:
           prerelease: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  notify-discord:
+    name: Notify Discord
+    needs: release
+    if: success()
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Get version
+        id: get_version
+        run: |
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+            VERSION="${{ github.event.inputs.version }}"
+          else
+            VERSION=${GITHUB_REF#refs/tags/v}
+          fi
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Generate changelog
+        id: changelog
+        run: |
+          PREV_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
+          if [ -z "$PREV_TAG" ]; then
+            COMMITS=$(git log --pretty=format:"- %s" HEAD)
+          else
+            COMMITS=$(git log --pretty=format:"- %s" $PREV_TAG..HEAD)
+          fi
+          {
+            echo 'changelog<<EOF'
+            echo "$COMMITS"
+            echo 'EOF'
+          } >> $GITHUB_OUTPUT
+
+      - name: Notify Discord
+        uses: sarisia/actions-status-discord@v1
+        with:
+          webhook: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          nodetail: true
+          title: "PrintQue v${{ steps.get_version.outputs.version }} Released"
+          description: |
+            **What's Changed**
+            ${{ steps.changelog.outputs.changelog }}
+
+            **Download:** [GitHub Release](https://github.com/${{ github.repository }}/releases/tag/v${{ steps.get_version.outputs.version }})
+          color: 0x00C853
