@@ -1,11 +1,20 @@
 #!/usr/bin/env python
 """
-Complete build script with all dependencies for PrintQue
+Legacy complete build script with all dependencies for PrintQue.
+For current builds use: python scripts/build.py
+
+Run from repository root. Uses ROOT_DIR for build/dist; runs PyInstaller from api/.
 """
 import os
 import sys
 import shutil
 import subprocess
+from pathlib import Path
+
+# Repo root (script lives in scripts/)
+ROOT_DIR = Path(__file__).resolve().parent.parent
+API_DIR = ROOT_DIR / "api"
+
 
 def create_spec_file():
     """Create a comprehensive spec file with all dependencies"""
@@ -94,11 +103,11 @@ hiddenimports += [
     'paho.mqtt.client',
 ]
 
-# Add your project files and folders
+# Add your project files and folders (paths relative to api_dir / cwd)
 datas += [
     ('templates', 'templates'),
     ('static', 'static') if os.path.exists('static') else ('templates', '.'),
-    ('README.txt', '.') if os.path.exists('README.txt') else ('requirements.txt', '.'),
+    ('requirements.txt', '.'),
 ]
 
 # Add all your Python modules
@@ -162,48 +171,44 @@ exe = EXE(
 )
 '''
     
-    with open('PrintQue_Complete.spec', 'w') as f:
-        f.write(spec_content)
+    spec_file = API_DIR / 'PrintQue_Complete.spec'
+    spec_file.write_text(spec_content)
     print("Created PrintQue_Complete.spec")
+
 
 def build_exe():
     """Build the executable"""
     print("\nBuilding PrintQue.exe with all dependencies...")
     
-    # First, make sure all packages are installed
-    print("Verifying package installation...")
     packages = [
-        'flask', 'flask-socketio', 'eventlet', 'python-socketio', 
+        'flask', 'flask-socketio', 'eventlet', 'python-socketio',
         'python-engineio', 'werkzeug', 'jinja2', 'cryptography',
         'aiohttp', 'requests', 'psutil',
         'simple-websocket', 'dnspython', 'paho-mqtt'
     ]
-    
     for package in packages:
-        result = subprocess.run([sys.executable, '-m', 'pip', 'show', package], 
-                              capture_output=True, text=True)
+        result = subprocess.run([sys.executable, '-m', 'pip', 'show', package],
+                                capture_output=True, text=True, cwd=str(ROOT_DIR))
         if result.returncode != 0:
             print(f"Installing missing package: {package}")
-            subprocess.run([sys.executable, '-m', 'pip', 'install', package])
+            subprocess.run([sys.executable, '-m', 'pip', 'install', package], cwd=str(ROOT_DIR))
     
-    # Create the spec file
     create_spec_file()
     
-    # Build using PyInstaller
-    cmd = ['pyinstaller', 'PrintQue_Complete.spec', '--clean', '-y']
-    
+    cmd = [
+        sys.executable, '-m', 'PyInstaller',
+        str(API_DIR / 'PrintQue_Complete.spec'),
+        '--clean', '-y',
+        '--distpath', str(ROOT_DIR / 'dist'),
+        '--workpath', str(ROOT_DIR / 'build'),
+    ]
     try:
         print("\nRunning PyInstaller...")
-        result = subprocess.run(cmd, check=False)
-        
+        result = subprocess.run(cmd, cwd=str(API_DIR), check=False)
         if result.returncode == 0:
             print("\nBuild completed successfully!")
-            
-            # Create the distribution folder
-            if os.path.exists('dist/PrintQue.exe'):
-                print("\nCreating distribution package...")
-                
-                # Create Start_PrintQue.bat
+            exe_path = ROOT_DIR / 'dist' / 'PrintQue.exe'
+            if exe_path.exists():
                 batch_content = """@echo off
 title PrintQue Server
 echo Starting PrintQue Server...
@@ -217,53 +222,39 @@ cd /d "%~dp0"
 PrintQue.exe
 pause
 """
-                
-                with open('dist/Start_PrintQue.bat', 'w') as f:
-                    f.write(batch_content)
-                
-                # Copy templates if they exist
-                if os.path.exists('templates'):
-                    dest_templates = 'dist/templates'
-                    if os.path.exists(dest_templates):
-                        shutil.rmtree(dest_templates)
-                    shutil.copytree('templates', dest_templates)
+                (ROOT_DIR / 'dist' / 'Start_PrintQue.bat').write_text(batch_content)
+                if (API_DIR / 'templates').exists():
+                    dest = ROOT_DIR / 'dist' / 'templates'
+                    if dest.exists():
+                        shutil.rmtree(dest)
+                    shutil.copytree(API_DIR / 'templates', dest)
                     print("Copied templates folder")
-                
                 print("\n" + "="*60)
                 print("BUILD SUCCESSFUL!")
                 print("="*60)
-                print("\nYour executable is ready in the 'dist' folder:")
-                print("  - PrintQue.exe (main executable)")
-                print("  - Start_PrintQue.bat (easy launcher)")
-                print("  - templates/ (HTML templates)")
-                print("\nPrintQue Open Source Edition - All features enabled!")
-                print("\nTo run PrintQue:")
-                print("  1. Go to the dist folder")
-                print("  2. Double-click Start_PrintQue.bat")
-                
+                print(f"\nOutput: {ROOT_DIR / 'dist'}")
             else:
                 print("\nError: PrintQue.exe was not created!")
-                
         else:
             print(f"\nBuild failed with return code: {result.returncode}")
-            
     except Exception as e:
         print(f"\nBuild error: {str(e)}")
 
+
 def main():
     print("="*60)
-    print("PrintQue Complete Build Script")
+    print("PrintQue Complete Build Script (legacy)")
+    print("Prefer: python scripts/build.py")
     print("="*60)
     
-    # Clean old builds
     print("\nCleaning old builds...")
-    for folder in ['build', 'dist']:
-        if os.path.exists(folder):
+    for folder in [ROOT_DIR / 'build', ROOT_DIR / 'dist']:
+        if folder.exists():
             shutil.rmtree(folder)
             print(f"Removed {folder}")
     
-    # Build the executable
     build_exe()
+
 
 if __name__ == "__main__":
     main()

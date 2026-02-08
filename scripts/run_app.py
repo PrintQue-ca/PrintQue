@@ -1,6 +1,9 @@
 """
 Enhanced error handling wrapper for PrintQue application.
 Modified to remove tkinter dependency and work with PyInstaller.
+
+When run from scripts/ (e.g. python scripts/run_app.py), adds api/ to path
+and uses api/ for templates/static. Run from repo root.
 """
 import os
 import sys
@@ -10,8 +13,17 @@ import logging
 import shutil
 import atexit
 import re
+from pathlib import Path
 
 def main():
+    # When run from scripts/, ensure api is on path and we use api dir for templates/static
+    script_dir = Path(__file__).resolve().parent
+    root_dir = script_dir.parent
+    api_dir = root_dir / "api"
+    if script_dir.name == "scripts":
+        sys.path.insert(0, str(api_dir))
+        os.chdir(api_dir)
+
     try:
         # Set up error logging
         error_log_path = os.path.join(os.path.expanduser("~"), "PrintQueData", "flask_error.log")
@@ -82,7 +94,8 @@ def main():
         if getattr(sys, 'frozen', False):
             base_dir = sys._MEIPASS
         else:
-            base_dir = os.path.dirname(os.path.abspath(__file__))
+            # When run from scripts/, use api dir for templates/static
+            base_dir = str(api_dir) if script_dir.name == "scripts" else os.path.dirname(os.path.abspath(__file__))
             
         template_folder = os.path.join(base_dir, "templates")
         static_folder = os.path.join(base_dir, "static")

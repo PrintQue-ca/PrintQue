@@ -4,10 +4,10 @@ Cross-platform build script for PrintQue
 Creates portable executables for Windows, macOS, and Linux
 
 Usage:
-    python build.py              # Build for current platform
-    python build.py --clean      # Clean build artifacts first
-    python build.py --skip-frontend  # Skip frontend build (use existing)
-    python build.py --version 1.2.3  # Override version (for CI)
+    python scripts/build.py              # Build for current platform
+    python scripts/build.py --clean      # Clean build artifacts first
+    python scripts/build.py --skip-frontend  # Skip frontend build (use existing)
+    python scripts/build.py --version 1.2.3  # Override version (for CI)
 """
 
 import os
@@ -23,10 +23,13 @@ from datetime import datetime
 # Build configuration
 APP_NAME = "PrintQue"
 
+# Repo root (script lives in scripts/)
+ROOT_DIR = Path(__file__).resolve().parent.parent
+
 
 def get_version_from_file() -> str:
     """Read version from api/__version__.py"""
-    version_file = Path(__file__).parent / "api" / "__version__.py"
+    version_file = ROOT_DIR / "api" / "__version__.py"
     if version_file.exists():
         content = version_file.read_text()
         match = re.search(r'__version__\s*=\s*["\']([^"\']+)["\']', content)
@@ -39,7 +42,6 @@ def get_version_from_file() -> str:
 VERSION = get_version_from_file()
 
 # Directories
-ROOT_DIR = Path(__file__).parent.absolute()
 API_DIR = ROOT_DIR / "api"
 APP_DIR = ROOT_DIR / "app"
 BUILD_DIR = ROOT_DIR / "build"

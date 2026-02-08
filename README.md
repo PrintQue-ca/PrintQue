@@ -175,6 +175,10 @@ The built files will be in the `app/dist` directory.
 
 ```
 Printque/
+├── scripts/                # Build and run scripts
+│   ├── build.py            # Main PyInstaller build (use this)
+│   ├── run_app.py          # Dev launcher
+│   └── ...
 ├── api/                    # Python backend
 │   ├── app.py              # Main Flask application
 │   ├── requirements.txt    # Python dependencies
@@ -421,7 +425,7 @@ The easiest way to build is using the cross-platform build script:
 
 ```bash
 # Build for your current platform
-python build.py
+python scripts/build.py
 ```
 
 This will:
@@ -445,13 +449,13 @@ Examples:
 
 ```bash
 # Clean build from scratch
-python build.py --clean
+python scripts/build.py --clean
 
 # Rebuild only the backend (frontend already built)
-python build.py --skip-frontend
+python scripts/build.py --skip-frontend
 
 # Quick rebuild (dependencies already installed)
-python build.py --skip-deps --skip-frontend
+python scripts/build.py --skip-deps --skip-frontend
 ```
 
 ### Build Output
@@ -476,7 +480,7 @@ dist/
 #### Windows
 
 ```bash
-python build.py
+python scripts/build.py
 # Output: dist/PrintQue.exe
 # Launcher: dist/PrintQue_Windows_YYYYMMDD/Start_PrintQue.bat
 ```
@@ -484,7 +488,7 @@ python build.py
 #### macOS
 
 ```bash
-python build.py
+python scripts/build.py
 # Output: dist/PrintQue.app
 # Launcher: dist/PrintQue_macOS_YYYYMMDD/start_printque.sh
 ```
@@ -492,7 +496,7 @@ python build.py
 #### Linux
 
 ```bash
-python build.py
+python scripts/build.py
 # Output: dist/printque
 # Launcher: dist/PrintQue_Linux_YYYYMMDD/start_printque.sh
 ```

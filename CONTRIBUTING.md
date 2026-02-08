@@ -427,10 +427,13 @@ PrintQue/
 │   ├── pre-commit         # Lint staged files
 │   └── commit-msg         # Validate commit format
 │
+├── scripts/               # Build and run scripts
+│   ├── build.py           # Cross-platform build script (use this)
+│   ├── run_app.py         # Dev launcher
+│   └── ...
 ├── package.json           # Root package (commit tooling)
 ├── commitlint.config.js   # Commit message rules
 ├── pyproject.toml         # Python project config
-├── build.py               # Cross-platform build script
 └── CONTRIBUTING.md        # This file
 ```
 
