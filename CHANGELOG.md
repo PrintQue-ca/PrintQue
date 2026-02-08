@@ -2,6 +2,47 @@
 
 <!-- version list -->
 
+## v1.2.4 (2026-02-08)
+
+### Bug Fixes
+
+- Localhost origin source looser and adding discord release workflow
+  ([#19](https://github.com/PrintQue-ca/PrintQue/pull/19),
+  [`37fafc8`](https://github.com/PrintQue-ca/PrintQue/commit/37fafc8127943247b5a2e8fc9917612c70d87c4b))
+
+### Chores
+
+- Remove CodeQL workflow configuration ([#17](https://github.com/PrintQue-ca/PrintQue/pull/17),
+  [`4434dea`](https://github.com/PrintQue-ca/PrintQue/commit/4434deae9fd003425c77dd64c13e3763347df303))
+
+- Update package dependencies and add missing devDependencies
+  ([#17](https://github.com/PrintQue-ca/PrintQue/pull/17),
+  [`4434dea`](https://github.com/PrintQue-ca/PrintQue/commit/4434deae9fd003425c77dd64c13e3763347df303))
+
+### Continuous Integration
+
+- **release workflow**: Add release workflow for cross-platform builds and Discord notification
+  ([#19](https://github.com/PrintQue-ca/PrintQue/pull/19),
+  [`37fafc8`](https://github.com/PrintQue-ca/PrintQue/commit/37fafc8127943247b5a2e8fc9917612c70d87c4b))
+
+### Refactoring
+
+- Updating for release, minor clean up ([#17](https://github.com/PrintQue-ca/PrintQue/pull/17),
+  [`4434dea`](https://github.com/PrintQue-ca/PrintQue/commit/4434deae9fd003425c77dd64c13e3763347df303))
+
+- **root level files**: Cleaning up the root level of the project
+  ([#18](https://github.com/PrintQue-ca/PrintQue/pull/18),
+  [`4a65a77`](https://github.com/PrintQue-ca/PrintQue/commit/4a65a77c4689acfbc7637344ffa6f55e4d438b65))
+
+- **status_poller.py**: Improve readability of background distribution function
+  ([#16](https://github.com/PrintQue-ca/PrintQue/pull/16),
+  [`b5cc6c0`](https://github.com/PrintQue-ca/PrintQue/commit/b5cc6c08a7db20df0fdf5345b2195d9095477c8f))
+
+- **status_poller.py**: Refactoring file and helpers for readability
+  ([#16](https://github.com/PrintQue-ca/PrintQue/pull/16),
+  [`b5cc6c0`](https://github.com/PrintQue-ca/PrintQue/commit/b5cc6c08a7db20df0fdf5345b2195d9095477c8f))
+
+
 ## v1.2.3 (2026-02-07)
 
 ### Bug Fixes
