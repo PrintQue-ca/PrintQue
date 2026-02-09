@@ -114,6 +114,10 @@ export function EditPrinterDialog({ printer, open, onOpenChange }: EditPrinterDi
             </div>
             {printer.type === 'bambu' && (
               <>
+                <p className="text-sm text-muted-foreground">
+                  You can find the IP address and access code on the printer under Settings → LAN
+                  mode.
+                </p>
                 <div className="grid gap-2">
                   <Label htmlFor="edit-device-id">Serial Number / Device ID</Label>
                   <Input
