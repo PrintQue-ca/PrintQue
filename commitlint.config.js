@@ -67,7 +67,7 @@ export default {
     'type-empty': [2, 'never'],
     // Max header length
     'header-max-length': [2, 'always', 100],
-    // Relax body line length — automated trailers (Co-authored-by, etc.) often exceed 100 chars
-    'body-max-line-length': [1, 'always', 200],
+    // Disable body line length — URLs and automated trailers regularly exceed any fixed limit
+    'body-max-line-length': [0],
   },
 };

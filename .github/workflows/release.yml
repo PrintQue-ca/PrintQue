@@ -232,14 +232,28 @@ jobs:
           } >> $GITHUB_OUTPUT
 
       - name: Notify Discord
-        uses: sarisia/actions-status-discord@v1
-        with:
-          webhook: ${{ secrets.DISCORD_WEBHOOK_URL }}
-          nodetail: true
-          title: "PrintQue v${{ steps.get_version.outputs.version }} Released"
-          description: |
-            **What's Changed**
-            ${{ steps.changelog.outputs.changelog }}
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          VERSION: ${{ steps.get_version.outputs.version }}
+          CHANGELOG: ${{ steps.changelog.outputs.changelog }}
+          REPO: ${{ github.repository }}
+        run: |
+          RELEASE_URL="https://github.com/${REPO}/releases/tag/v${VERSION}"
 
-            **Download:** [GitHub Release](https://github.com/${{ github.repository }}/releases/tag/v${{ steps.get_version.outputs.version }})
-          color: 0x00C853
+          # Build the embed JSON
+          EMBED=$(jq -n \
+            --arg title "PrintQue v${VERSION} Released" \
+            --arg desc "**What's Changed**\n${CHANGELOG}\n\n**Download:** [GitHub Release](${RELEASE_URL})" \
+            --argjson color 51283 \
+            '{title: $title, description: $desc, color: $color}')
+
+          # Post to Discord forum channel — thread_name creates a new forum post/thread.
+          # The releases channel must be a Forum channel for this to work.
+          jq -n \
+            --arg thread_name "PrintQue v${VERSION}" \
+            --argjson embed "$EMBED" \
+            '{thread_name: $thread_name, embeds: [$embed]}' \
+          | curl -sS -f -X POST \
+              -H "Content-Type: application/json" \
+              -d @- \
+              "${DISCORD_WEBHOOK_URL}?wait=true"

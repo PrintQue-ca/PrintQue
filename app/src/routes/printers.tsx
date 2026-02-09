@@ -169,6 +169,10 @@ function PrintersPage() {
                 </div>
                 {formData.type === 'bambu' && (
                   <>
+                    <p className="text-sm text-muted-foreground">
+                      You can find the IP address and access code on the printer under Settings →
+                      LAN mode.
+                    </p>
                     <div className="grid gap-2">
                       <Label htmlFor="serial">Serial Number</Label>
                       <Input
