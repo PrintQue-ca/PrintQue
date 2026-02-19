@@ -6,7 +6,7 @@ If you discover a security vulnerability in PrintQue, **please do not open a pub
 
 Instead, report it privately through our Discord server so we can address it before it becomes public:
 
-**Discord:** https://discord.gg/sm3FyFht
+**Discord:** https://discord.gg/da4kuc3Axk
 
 When reporting, please include:
 

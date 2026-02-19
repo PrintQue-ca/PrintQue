@@ -1,5 +1,5 @@
 import { createFileRoute } from '@tanstack/react-router'
-import { CheckCircle, Github, Heart, Loader2, Printer, Shield } from 'lucide-react'
+import { CheckCircle, Github, Heart, Loader2, MessageCircle, Printer, Shield } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { useLicense } from '@/hooks'
@@ -141,6 +141,15 @@ function LicensePage() {
                 className="inline-flex items-center gap-2 px-4 py-2 rounded-md bg-secondary hover:bg-secondary/80 transition-colors"
               >
                 Contribute
+              </a>
+              <a
+                href="https://discord.gg/da4kuc3Axk"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-2 px-4 py-2 rounded-md bg-secondary hover:bg-secondary/80 transition-colors"
+              >
+                <MessageCircle className="h-4 w-4" />
+                Join Discord
               </a>
             </div>
           </div>
