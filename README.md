@@ -1,6 +1,6 @@
 # PrintQue - 3D Printer Management System
 
-[![Discord](https://img.shields.io/badge/Discord-PrintQue-5865F2?logo=discord&logoColor=white)](https://discord.gg/UhFBCKdq)
+[![Discord](https://img.shields.io/badge/Discord-PrintQue-5865F2?logo=discord&logoColor=white)](https://discord.gg/da4kuc3Axk)
 
 PrintQue is a powerful and easy-to-use management system designed for 3D print farms. It provides centralized control, monitoring, and queue management for multiple 3D printers, helping you maximize efficiency and productivity.
 
@@ -264,7 +264,7 @@ Logs are stored in your user directory:
 ### Support
 
 For assistance with PrintQue:
-- **Discord**: [Join our community](https://discord.gg/UhFBCKdq)
+- **Discord**: [Join our community](https://discord.gg/da4kuc3Axk)
 
 ## Development
 
