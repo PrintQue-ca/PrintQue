@@ -2,6 +2,21 @@
 
 <!-- version list -->
 
+## v1.2.5 (2026-02-19)
+
+### Bug Fixes
+
+- **license.tsx**: Updating the discord invite link to not expire
+  ([#21](https://github.com/PrintQue-ca/PrintQue/pull/21),
+  [`864a35b`](https://github.com/PrintQue-ca/PrintQue/commit/864a35b07f52be530f4592f5d198ad3bb5c1ae46))
+
+### Continuous Integration
+
+- **release.yml**: Release submit to a forum channel
+  ([#20](https://github.com/PrintQue-ca/PrintQue/pull/20),
+  [`4a5f891`](https://github.com/PrintQue-ca/PrintQue/commit/4a5f891251a7e3feadb04dc5da70e412947774d5))
+
+
 ## v1.2.4 (2026-02-08)
 
 ### Bug Fixes
