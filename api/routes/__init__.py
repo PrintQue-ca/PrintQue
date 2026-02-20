@@ -423,14 +423,6 @@ def register_routes(app, socketio):
             if not name or not ip:
                 return jsonify({'error': 'Name and IP address are required'}), 400
 
-            # Check license limits
-            with ReadLock(printers_rwlock):
-                current_count = len(PRINTERS)
-
-            max_printers = app.config.get('MAX_PRINTERS', 3)
-            if current_count >= max_printers:
-                return jsonify({'error': f'Printer limit reached ({max_printers})'}), 403
-
             new_printer = {
                 "name": name,
                 "ip": ip,
