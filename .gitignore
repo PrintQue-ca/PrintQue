@@ -15,6 +15,7 @@ dist/
 *.spec
 *.exe
 *.zip
+*.pem
 
 # Built frontend (generated from app/ during build)
 api/frontend_dist/
