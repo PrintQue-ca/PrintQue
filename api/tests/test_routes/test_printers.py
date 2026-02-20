@@ -145,6 +145,30 @@ class TestAddPrinter:
 
             assert response.status_code == 400
 
+    def test_add_printer_allowed_with_many_printers(self, client, mock_printers):
+        """Adding a printer is allowed regardless of how many printers exist (no limit)."""
+        # Start with 4 printers so we would hit a limit if one were enforced (e.g. 3)
+        four_printers = (mock_printers * 2)
+        assert len(four_printers) == 4
+        with patch('routes.PRINTERS', four_printers), \
+             patch('routes.encrypt_api_key', return_value='encrypted'), \
+             patch('routes.save_data'):
+            response = client.post('/api/v1/printers',
+                                  json={
+                                      'name': 'Fifth Printer',
+                                      'ip': '192.168.1.55',
+                                      'type': 'prusa',
+                                      'api_key': 'test_key',
+                                      'group': 'Default'
+                                  })
+        assert response.status_code == 200, (
+            'Adding a printer must not be blocked by a printer limit (e.g. 403). '
+            'Response: {}'.format(response.get_data(as_text=True))
+        )
+        data = response.get_json()
+        assert data.get('success') is True
+        assert 'Printer limit reached' not in data.get('error', '')
+
 
 class TestUpdatePrinter:
     """Tests for PATCH /api/v1/printers/<name> endpoint."""
