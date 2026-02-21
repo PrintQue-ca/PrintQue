@@ -1,9 +1,13 @@
 # API Routes Package
+import csv
+import io
 import os
+import shutil
 import logging
 import platform
 import json
-from flask import redirect, url_for, flash, jsonify, request, current_app
+from datetime import datetime
+from flask import redirect, url_for, flash, jsonify, request, current_app, make_response
 from werkzeug.utils import secure_filename
 from .printers import register_printer_routes
 from .orders import register_order_routes
@@ -617,6 +621,209 @@ def register_routes(app, socketio):
             logging.error(f"Error in api_get_orders: {str(e)}")
             return jsonify({'error': str(e)}), 500
 
+    @app.route('/api/v1/orders/export', methods=['GET'])
+    def api_export_orders():
+        """API: Export all active orders as JSON for re-import"""
+        try:
+            export_fields = [
+                'id', 'filename', 'filepath', 'name', 'quantity', 'groups',
+                'ejection_enabled', 'ejection_code_id', 'ejection_code_name',
+                'end_gcode', 'cooldown_temp', 'extra_data', 'filament_g'
+            ]
+            with SafeLock(orders_lock):
+                orders_data = []
+                for o in ORDERS:
+                    if o.get('deleted', False):
+                        continue
+                    export_order = {k: o.get(k) for k in export_fields if k in o}
+                    # Ensure required fields exist
+                    export_order.setdefault('filename', '')
+                    export_order.setdefault('filepath', '')
+                    export_order.setdefault('quantity', 1)
+                    export_order.setdefault('groups', ['Default'])
+                    orders_data.append(export_order)
+            body = json.dumps(orders_data, indent=2)
+            response = make_response(body)
+            response.headers['Content-Type'] = 'application/json'
+            response.headers['Content-Disposition'] = (
+                f"attachment; filename=orders_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+            )
+            return response
+        except Exception as e:
+            logging.error(f"Error in api_export_orders: {str(e)}")
+            return jsonify({'error': str(e)}), 500
+
+    @app.route('/api/v1/orders/import', methods=['POST'])
+    def api_import_orders():
+        """API: Import orders from JSON (re-import from export) or CSV (bulk from file paths)"""
+        try:
+            file = request.files.get('file')
+            if not file or not file.filename:
+                return jsonify({'error': 'No file provided'}), 400
+
+            filename_lower = file.filename.lower()
+            success_count = 0
+            failures = []
+
+            if filename_lower.endswith('.json'):
+                # Re-import from export JSON
+                try:
+                    data = json.load(file)
+                except json.JSONDecodeError as e:
+                    return jsonify({'error': f'Invalid JSON: {e}'}), 400
+                if not isinstance(data, list):
+                    return jsonify({'error': 'JSON must be an array of orders'}), 400
+
+                default_settings = load_default_settings()
+                for idx, order_data in enumerate(data):
+                    try:
+                        filepath = order_data.get('filepath') or ''
+                        filename = order_data.get('filename') or ''
+                        if not filepath and filename:
+                            filepath = os.path.join(
+                                current_app.config.get('UPLOAD_FOLDER', 'uploads'),
+                                filename
+                            )
+                        if not filepath or not os.path.exists(filepath):
+                            failures.append({'row': idx + 1, 'error': f'File not found: {filepath}'})
+                            continue
+                        quantity = int(order_data.get('quantity', 1))
+                        groups = order_data.get('groups') or ['Default']
+                        groups = [sanitize_group_name(str(g)) for g in groups if g]
+                        if not groups:
+                            groups = ['Default']
+
+                        with SafeLock(orders_lock):
+                            existing_int_ids = []
+                            for o in ORDERS:
+                                try:
+                                    existing_int_ids.append(int(o['id']))
+                                except (ValueError, TypeError):
+                                    pass
+                            order_id = max(existing_int_ids, default=0) + 1
+
+                            new_order = {
+                                'id': order_id,
+                                'filename': filename or os.path.basename(filepath),
+                                'filepath': filepath,
+                                'name': order_data.get('name'),
+                                'quantity': quantity,
+                                'sent': 0,
+                                'status': 'pending',
+                                'filament_g': order_data.get('filament_g', 0),
+                                'groups': groups,
+                                'ejection_enabled': bool(order_data.get('ejection_enabled', False)),
+                                'ejection_code_id': order_data.get('ejection_code_id'),
+                                'ejection_code_name': order_data.get('ejection_code_name'),
+                                'end_gcode': order_data.get('end_gcode') or '',
+                                'cooldown_temp': order_data.get('cooldown_temp'),
+                                'extra_data': order_data.get('extra_data') or {},
+                                'created_at': datetime.now().isoformat(),
+                                'from_new_orders': True,
+                            }
+                            ORDERS.append(new_order)
+                            success_count += 1
+                    except Exception as e:
+                        failures.append({'row': idx + 1, 'error': str(e)})
+
+                with SafeLock(orders_lock):
+                    save_data(ORDERS_FILE, ORDERS)
+                if success_count > 0:
+                    start_background_distribution(socketio, app)
+
+            elif filename_lower.endswith('.csv'):
+                # CSV bulk import: folder_path, filename, quantity, printer_groups
+                stream = io.StringIO(file.read().decode('utf-8', errors='replace'))
+                reader = csv.DictReader(stream)
+                if not reader.fieldnames:
+                    return jsonify({'error': 'CSV has no headers'}), 400
+                fieldnames_normalized = {f.strip().lower().replace(' ', '_') for f in reader.fieldnames}
+                required = {'folder_path', 'filename', 'quantity', 'printer_groups'}
+                if required - fieldnames_normalized:
+                    return jsonify({
+                        'error': 'CSV must have columns: folder_path, filename, quantity, printer_groups'
+                    }), 400
+
+                default_settings = load_default_settings()
+                upload_folder = current_app.config.get('UPLOAD_FOLDER', 'uploads')
+                os.makedirs(upload_folder, exist_ok=True)
+
+                for row_index, row in enumerate(reader, start=2):
+                    try:
+                        row_clean = {k.strip().lower().replace(' ', '_'): (v or '').strip() for k, v in row.items()}
+                        folder_path = row_clean.get('folder_path', '')
+                        filename = row_clean.get('filename', '')
+                        quantity_str = row_clean.get('quantity', '1')
+                        quantity = int(quantity_str) if quantity_str.isdigit() else 1
+                        groups_str = row_clean.get('printer_groups', 'Default')
+                        printer_groups = [sanitize_group_name(g.strip()) for g in groups_str.split(',') if g.strip()]
+                        if not printer_groups:
+                            printer_groups = ['Default']
+
+                        if not folder_path or not filename:
+                            failures.append({'row': row_index, 'error': 'Missing folder_path or filename'})
+                            continue
+
+                        full_path = os.path.normpath(os.path.join(folder_path, filename))
+                        if not os.path.exists(full_path):
+                            failures.append({'row': row_index, 'error': f'File not found: {full_path}'})
+                            continue
+
+                        valid_ext = ['.gcode', '.bgcode', '.3mf', '.stl']
+                        if not any(filename.lower().endswith(ext) for ext in valid_ext):
+                            failures.append({'row': row_index, 'error': f'Invalid file type: {filename}'})
+                            continue
+
+                        upload_filename = secure_filename(filename)
+                        upload_path = os.path.join(upload_folder, upload_filename)
+                        shutil.copy2(full_path, upload_path)
+                        filament_g = extract_filament_from_file(upload_path)
+
+                        with SafeLock(orders_lock):
+                            existing_int_ids = []
+                            for o in ORDERS:
+                                try:
+                                    existing_int_ids.append(int(o['id']))
+                                except (ValueError, TypeError):
+                                    pass
+                            order_id = max(existing_int_ids, default=0) + 1
+                            new_order = {
+                                'id': order_id,
+                                'filename': upload_filename,
+                                'filepath': upload_path,
+                                'quantity': quantity,
+                                'sent': 0,
+                                'status': 'pending',
+                                'filament_g': filament_g,
+                                'groups': printer_groups,
+                                'ejection_enabled': False,
+                                'end_gcode': default_settings.get('default_end_gcode', ''),
+                                'created_at': datetime.now().isoformat(),
+                                'from_new_orders': True,
+                            }
+                            ORDERS.append(new_order)
+                            success_count += 1
+                    except Exception as e:
+                        failures.append({'row': row_index, 'error': str(e)})
+
+                with SafeLock(orders_lock):
+                    save_data(ORDERS_FILE, ORDERS)
+                if success_count > 0:
+                    start_background_distribution(socketio, app)
+
+            else:
+                return jsonify({'error': 'File must be .json or .csv'}), 400
+
+            return jsonify({
+                'success': True,
+                'success_count': success_count,
+                'failed_count': len(failures),
+                'failures': failures,
+            })
+        except Exception as e:
+            logging.error(f"Error in api_import_orders: {str(e)}")
+            return jsonify({'error': str(e)}), 500
+
     @app.route('/api/v1/orders', methods=['POST'])
     def api_create_order():
         """API: Create a new order"""
@@ -784,6 +991,28 @@ def register_routes(app, socketio):
                         return jsonify({'success': True, 'message': 'Order deleted'})
             return jsonify({'error': 'Order not found'}), 404
         except Exception as e:
+            return jsonify({'error': str(e)}), 500
+
+    @app.route('/api/v1/orders/bulk-delete', methods=['POST'])
+    def api_bulk_delete_orders():
+        """API: Soft-delete multiple orders by ID"""
+        try:
+            data = request.get_json()
+            ids = data.get('ids')
+            if not ids or not isinstance(ids, list):
+                return jsonify({'error': 'ids array is required'}), 400
+            id_set = set(int(x) for x in ids if isinstance(x, (int, float)) and not isinstance(x, bool))
+            deleted_count = 0
+            with SafeLock(orders_lock):
+                for order in ORDERS:
+                    if order.get('id') in id_set:
+                        order['deleted'] = True
+                        deleted_count += 1
+                if deleted_count > 0:
+                    save_data(ORDERS_FILE, ORDERS)
+            return jsonify({'success': True, 'deleted_count': deleted_count})
+        except Exception as e:
+            logging.error(f"Error in api_bulk_delete_orders: {str(e)}")
             return jsonify({'error': str(e)}), 500
 
     @app.route('/api/v1/orders/<int:order_id>/ejection', methods=['PATCH'])

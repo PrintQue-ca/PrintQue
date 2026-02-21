@@ -42,4 +42,18 @@ export const api = {
     if (!res.ok) throw new Error(await res.text())
     return res.json()
   },
+
+  // For file download (e.g. export)
+  download: async (endpoint: string): Promise<{ blob: Blob; filename: string }> => {
+    const res = await fetch(`${API_BASE}${endpoint}`)
+    if (!res.ok) throw new Error(await res.text())
+    const blob = await res.blob()
+    const disposition = res.headers.get('Content-Disposition')
+    let filename = 'download'
+    if (disposition) {
+      const match = /filename="?([^";]+)"?/.exec(disposition)
+      if (match) filename = match[1].trim()
+    }
+    return { blob, filename }
+  },
 }

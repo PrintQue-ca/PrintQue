@@ -135,3 +135,35 @@ export function useUpdateOrderEjection() {
     },
   })
 }
+
+export function useBulkDeleteOrders() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (ids: number[]) =>
+      api.post<{ success: boolean; deleted_count: number }>('/orders/bulk-delete', { ids }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['orders'] })
+    },
+  })
+}
+
+export interface ImportOrdersResult {
+  success: boolean
+  success_count: number
+  failed_count: number
+  failures: Array<{ row: number; error: string }>
+}
+
+export function useImportOrders() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: async (file: File): Promise<ImportOrdersResult> => {
+      const formData = new FormData()
+      formData.append('file', file)
+      return api.upload<ImportOrdersResult>('/orders/import', formData)
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['orders'] })
+    },
+  })
+}
