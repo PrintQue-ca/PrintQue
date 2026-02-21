@@ -2,6 +2,18 @@
 
 <!-- version list -->
 
+## v1.2.6 (2026-02-20)
+
+### Bug Fixes
+
+- **init**: Removing the max printer limit ([#22](https://github.com/PrintQue-ca/PrintQue/pull/22),
+  [`bd56346`](https://github.com/PrintQue-ca/PrintQue/commit/bd56346c5d48458f6d9850c214dc8ef730984f79))
+
+- **version-bump.yml**: Updating to use PrintQue GitHub app
+  ([#23](https://github.com/PrintQue-ca/PrintQue/pull/23),
+  [`8b8992f`](https://github.com/PrintQue-ca/PrintQue/commit/8b8992fdb248114c9d18db75328067d5e77075e9))
+
+
 ## v1.2.5 (2026-02-19)
 
 ### Bug Fixes
