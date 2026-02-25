@@ -479,6 +479,126 @@ def register_routes(app, socketio):
             logging.error(f"Error in api_add_printer: {str(e)}")
             return jsonify({'error': str(e)}), 500
 
+    @app.route('/api/v1/printers/export', methods=['GET'])
+    def api_export_printers():
+        """API: Export printers as JSON for re-import (includes encrypted credentials)."""
+        try:
+            export_fields = ['name', 'ip', 'type', 'group']
+            type_specific = {'prusa': ['api_key'], 'bambu': ['device_id', 'serial_number', 'access_code'], 'octoprint': ['api_key']}
+            with ReadLock(printers_rwlock):
+                out = []
+                for p in PRINTERS:
+                    rec = {k: p.get(k) for k in export_fields if p.get(k) is not None}
+                    rec['type'] = p.get('type', 'prusa')
+                    for key in type_specific.get(rec['type'], []):
+                        if p.get(key) is not None:
+                            rec[key] = p[key]
+                    out.append(rec)
+            body = json.dumps(out, indent=2)
+            response = make_response(body)
+            response.headers['Content-Type'] = 'application/json'
+            response.headers['Content-Disposition'] = (
+                f"attachment; filename=printers_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+            )
+            return response
+        except Exception as e:
+            logging.error(f"Error in api_export_printers: {str(e)}")
+            return jsonify({'error': str(e)}), 500
+
+    @app.route('/api/v1/printers/import', methods=['POST'])
+    def api_import_printers():
+        """API: Import printers from JSON (export format with encrypted credentials)."""
+        try:
+            file = request.files.get('file')
+            if not file or not file.filename or not file.filename.lower().endswith('.json'):
+                return jsonify({'error': 'A .json file is required'}), 400
+            try:
+                data = json.load(file)
+            except json.JSONDecodeError as e:
+                return jsonify({'error': f'Invalid JSON: {e}'}), 400
+            if not isinstance(data, list):
+                return jsonify({'error': 'JSON must be an array of printer configs'}), 400
+
+            success_count = 0
+            failures = []
+            default_printer = {
+                'state': 'OFFLINE',
+                'status': 'Offline',
+                'temps': {'nozzle': 0, 'bed': 0},
+                'progress': 0,
+                'time_remaining': 0,
+                'z_height': 0,
+                'file': None,
+                'filament_used_g': 0,
+                'service_mode': False,
+                'last_file': None,
+                'manually_set': False,
+            }
+
+            for idx, p in enumerate(data):
+                try:
+                    name = (p.get('name') or '').strip()
+                    ip = (p.get('ip') or '').strip()
+                    ptype = p.get('type', 'prusa')
+                    group = sanitize_group_name(p.get('group', 'Default'))
+                    if not name or not ip:
+                        failures.append({'row': idx + 1, 'error': 'Missing name or ip'})
+                        continue
+                    new_printer = {
+                        'name': name,
+                        'ip': ip,
+                        'type': ptype,
+                        'group': group,
+                        **default_printer,
+                    }
+                    if ptype == 'prusa' or ptype == 'octoprint':
+                        api_key = p.get('api_key')
+                        if not api_key:
+                            failures.append({'row': idx + 1, 'error': f'Printer {name}: API key required'})
+                            continue
+                        new_printer['api_key'] = api_key
+                    elif ptype == 'bambu':
+                        device_id = (p.get('device_id') or p.get('serial_number') or '').strip()
+                        access_code = p.get('access_code')
+                        if not device_id or not access_code:
+                            failures.append({'row': idx + 1, 'error': f'Printer {name}: device_id and access_code required'})
+                            continue
+                        new_printer['device_id'] = device_id
+                        new_printer['serial_number'] = device_id
+                        new_printer['access_code'] = access_code
+                    else:
+                        failures.append({'row': idx + 1, 'error': f'Unknown type: {ptype}'})
+                        continue
+
+                    with WriteLock(printers_rwlock):
+                        if any(pr['name'] == name for pr in PRINTERS):
+                            failures.append({'row': idx + 1, 'error': f'Printer name already exists: {name}'})
+                            continue
+                        PRINTERS.append(new_printer)
+                        success_count += 1
+                except Exception as e:
+                    failures.append({'row': idx + 1, 'error': str(e)})
+
+            if success_count > 0:
+                save_data(PRINTERS_FILE, PRINTERS)
+                for printer in PRINTERS:
+                    if printer.get('type') == 'bambu':
+                        try:
+                            from services.bambu_handler import connect_bambu_printer
+                            connect_bambu_printer(printer)
+                        except Exception as e:
+                            logging.warning(f"Bambu connect for {printer.get('name')}: {e}")
+
+            return jsonify({
+                'success': True,
+                'success_count': success_count,
+                'failed_count': len(failures),
+                'failures': failures,
+            })
+        except Exception as e:
+            logging.error(f"Error in api_import_printers: {str(e)}")
+            return jsonify({'error': str(e)}), 500
+
     @app.route('/api/v1/printers/<printer_name>', methods=['GET'])
     def api_get_printer(printer_name):
         """API: Get a specific printer by name"""

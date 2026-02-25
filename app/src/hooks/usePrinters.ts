@@ -128,3 +128,24 @@ export function useClearError() {
     },
   })
 }
+
+export interface ImportPrintersResult {
+  success: boolean
+  success_count: number
+  failed_count: number
+  failures: Array<{ row: number; error: string }>
+}
+
+export function useImportPrinters() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: async (file: File): Promise<ImportPrintersResult> => {
+      const formData = new FormData()
+      formData.append('file', file)
+      return api.upload<ImportPrintersResult>('/printers/import', formData)
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['printers'] })
+    },
+  })
+}
