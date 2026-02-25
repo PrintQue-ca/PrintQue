@@ -25,6 +25,7 @@ import { useEffect, useState } from 'react'
 import { toast } from 'sonner'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { Checkbox } from '@/components/ui/checkbox'
 import { Input } from '@/components/ui/input'
 import {
   Select,
@@ -42,6 +43,7 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import {
+  useBulkDeleteOrders,
   useDeleteOrder,
   useEjectionCodes,
   useReorderOrder,
@@ -105,6 +107,7 @@ function SortableRow({
 
 export function OrdersTable({ orders }: OrdersTableProps) {
   const deleteOrder = useDeleteOrder()
+  const bulkDeleteOrders = useBulkDeleteOrders()
   const reorderOrder = useReorderOrder()
   const updateQuantity = useUpdateQuantity()
   const updateOrder = useUpdateOrder()
@@ -114,6 +117,7 @@ export function OrdersTable({ orders }: OrdersTableProps) {
   const [quantityValue, setQuantityValue] = useState<number>(0)
   const [editingNameId, setEditingNameId] = useState<number | null>(null)
   const [nameValue, setNameValue] = useState<string>('')
+  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set())
 
   // Local state for immediate UI updates during drag
   const [localOrders, setLocalOrders] = useState(orders)
@@ -238,7 +242,55 @@ export function OrdersTable({ orders }: OrdersTableProps) {
     }
   }
 
+  const toggleSelect = (id: number) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
+
+  const toggleSelectAll = () => {
+    if (selectedIds.size === localOrders.length) {
+      setSelectedIds(new Set())
+    } else {
+      setSelectedIds(new Set(localOrders.map((o) => o.id)))
+    }
+  }
+
+  const handleBulkDelete = () => {
+    if (selectedIds.size === 0) return
+    if (!confirm(`Delete ${selectedIds.size} selected order(s)?`)) return
+    bulkDeleteOrders.mutate(Array.from(selectedIds), {
+      onSuccess: (data) => {
+        setSelectedIds(new Set())
+        toast.success(`${data?.deleted_count ?? selectedIds.size} order(s) deleted`)
+      },
+      onError: () => {
+        toast.error('Failed to delete orders')
+      },
+    })
+  }
+
   const columns = [
+    columnHelper.display({
+      id: 'select',
+      header: () => (
+        <Checkbox
+          checked={localOrders.length > 0 && selectedIds.size === localOrders.length}
+          onCheckedChange={toggleSelectAll}
+          aria-label="Select all"
+        />
+      ),
+      cell: (info) => (
+        <Checkbox
+          checked={selectedIds.has(info.row.original.id)}
+          onCheckedChange={() => toggleSelect(info.row.original.id)}
+          aria-label={`Select order ${info.row.original.id}`}
+        />
+      ),
+    }),
     columnHelper.accessor('priority', {
       header: '#',
       cell: (info) => (
@@ -486,49 +538,68 @@ export function OrdersTable({ orders }: OrdersTableProps) {
   })
 
   return (
-    <div className="rounded-md border">
-      <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
-        <Table>
-          <TableHeader>
-            {table.getHeaderGroups().map((headerGroup) => (
-              <TableRow key={headerGroup.id}>
-                <TableHead className="w-10"></TableHead>
-                {headerGroup.headers.map((header) => (
-                  <TableHead key={header.id}>
-                    {header.isPlaceholder
-                      ? null
-                      : flexRender(header.column.columnDef.header, header.getContext())}
-                  </TableHead>
-                ))}
-              </TableRow>
-            ))}
-          </TableHeader>
-          <TableBody>
-            {table.getRowModel().rows?.length ? (
-              <SortableContext
-                items={localOrders.map((o) => o.id)}
-                strategy={verticalListSortingStrategy}
-              >
-                {table.getRowModel().rows.map((row) => (
-                  <SortableRow key={row.id} row={row}>
-                    {row.getVisibleCells().map((cell) => (
-                      <TableCell key={cell.id}>
-                        {flexRender(cell.column.columnDef.cell, cell.getContext())}
-                      </TableCell>
-                    ))}
-                  </SortableRow>
-                ))}
-              </SortableContext>
-            ) : (
-              <TableRow>
-                <TableCell colSpan={columns.length + 1} className="h-24 text-center">
-                  No items in library.
-                </TableCell>
-              </TableRow>
-            )}
-          </TableBody>
-        </Table>
-      </DndContext>
+    <div className="space-y-2">
+      {selectedIds.size > 0 && (
+        <div className="flex items-center gap-3 rounded-md border bg-muted/50 px-3 py-2">
+          <span className="text-sm font-medium">{selectedIds.size} selected</span>
+          <Button
+            variant="destructive"
+            size="sm"
+            onClick={handleBulkDelete}
+            disabled={bulkDeleteOrders.isPending}
+          >
+            <Trash2 className="h-4 w-4 mr-1" />
+            Delete selected
+          </Button>
+          <Button variant="ghost" size="sm" onClick={() => setSelectedIds(new Set())}>
+            Clear selection
+          </Button>
+        </div>
+      )}
+      <div className="rounded-md border">
+        <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
+          <Table>
+            <TableHeader>
+              {table.getHeaderGroups().map((headerGroup) => (
+                <TableRow key={headerGroup.id}>
+                  <TableHead className="w-10"></TableHead>
+                  {headerGroup.headers.map((header) => (
+                    <TableHead key={header.id}>
+                      {header.isPlaceholder
+                        ? null
+                        : flexRender(header.column.columnDef.header, header.getContext())}
+                    </TableHead>
+                  ))}
+                </TableRow>
+              ))}
+            </TableHeader>
+            <TableBody>
+              {table.getRowModel().rows?.length ? (
+                <SortableContext
+                  items={localOrders.map((o) => o.id)}
+                  strategy={verticalListSortingStrategy}
+                >
+                  {table.getRowModel().rows.map((row) => (
+                    <SortableRow key={row.id} row={row}>
+                      {row.getVisibleCells().map((cell) => (
+                        <TableCell key={cell.id}>
+                          {flexRender(cell.column.columnDef.cell, cell.getContext())}
+                        </TableCell>
+                      ))}
+                    </SortableRow>
+                  ))}
+                </SortableContext>
+              ) : (
+                <TableRow>
+                  <TableCell colSpan={columns.length + 1} className="h-24 text-center">
+                    No items in library.
+                  </TableCell>
+                </TableRow>
+              )}
+            </TableBody>
+          </Table>
+        </DndContext>
+      </div>
     </div>
   )
 }
