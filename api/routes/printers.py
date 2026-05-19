@@ -21,6 +21,7 @@ import copy
 from services.bambu_handler import (
     connect_bambu_printer
 )
+from utils.socketio_emit import safe_emit, emit_status_update
 
 printer_bp = Blueprint('printer_routes', __name__)
 
@@ -157,7 +158,7 @@ def process_multiple_prints_background(printer_ids, filepath, filename, task_id,
                 completed += 1
 
                 if completed < total:
-                    socketio.emit('task_progress', {
+                    safe_emit(socketio, get_app(), 'task_progress', {
                         'task_id': task_id,
                         'current': completed,
                         'total': total,
@@ -175,7 +176,7 @@ def process_multiple_prints_background(printer_ids, filepath, filename, task_id,
                      f"Print sent to {successful} of {total} printers",
                      {'results': results})
 
-        socketio.emit('task_complete', {
+        safe_emit(socketio, get_app(), 'task_complete', {
             'task_id': task_id,
             'message': f"Print sent to {successful} of {total} printers"
         })
@@ -353,7 +354,7 @@ def delete_all_printers():
     global PRINTERS
     with WriteLock(printers_rwlock):
         PRINTERS.clear()
-        save_data(PRINTERS_FILE, PRINTERS)
+        save_data(PRINTERS_FILE, PRINTERS, allow_empty_printers=True)
     flash("All printers deleted successfully")
     return redirect(url_for('index'))
 
@@ -415,7 +416,7 @@ def send_print(printer_id):
                     orders_data = ORDERS.copy()
                 with ReadLock(printers_rwlock):
                     printers_copy = prepare_printer_data_for_broadcast(PRINTERS)
-                socketio.emit('status_update', {'printers': printers_copy, 'total_filament': total_filament, 'orders': orders_data})
+                emit_status_update(socketio, get_app(), {'printers': printers_copy, 'total_filament': total_filament, 'orders': orders_data})
 
             return success
 
@@ -489,7 +490,7 @@ def stop_print(printer_id):
 
         logging.info(f"Processing stop request for printer: {printer_name}")
 
-        socketio.emit('print_stop_started', {
+        safe_emit(socketio, get_app(), 'print_stop_started', {
             'printer_id': printer_id,
             'printer_name': printer_name
         })
@@ -530,41 +531,41 @@ def stop_print(printer_id):
                     with ReadLock(printers_rwlock):
                         printers_data = prepare_printer_data_for_broadcast(PRINTERS)
 
-                    socketio.emit('status_update', {
+                    emit_status_update(socketio, get_app(), {
                         'printers': printers_data,
                         'total_filament': total_filament,
                         'orders': orders_data
                     })
 
-                    socketio.emit('print_stop_complete', {
+                    safe_emit(socketio, get_app(), 'print_stop_complete', {
                         'printer_id': printer_id,
                         'printer_name': printer_name,
                         'success': True
                     })
-                    socketio.emit('flash_message', {
+                    safe_emit(socketio, get_app(), 'flash_message', {
                         'message': f"Print stopped successfully on {printer_name}",
                         'category': 'success'
                     })
                 else:
-                    socketio.emit('print_stop_complete', {
+                    safe_emit(socketio, get_app(), 'print_stop_complete', {
                         'printer_id': printer_id,
                         'printer_name': printer_name,
                         'success': False
                     })
-                    socketio.emit('flash_message', {
+                    safe_emit(socketio, get_app(), 'flash_message', {
                         'message': f"Failed to stop print on {printer_name}",
                         'category': 'warning'
                     })
 
             except Exception as e:
                 logging.error(f"Error in background stop task for {printer_name}: {str(e)}")
-                socketio.emit('print_stop_complete', {
+                safe_emit(socketio, get_app(), 'print_stop_complete', {
                     'printer_id': printer_id,
                     'printer_name': printer_name,
                     'success': False,
                     'error': str(e)
                 })
-                socketio.emit('flash_message', {
+                safe_emit(socketio, get_app(), 'flash_message', {
                     'message': f"Error stopping print on {printer_name}: {str(e)}",
                     'category': 'danger'
                 })
@@ -602,7 +603,7 @@ def pause_print(printer_id):
 
         logging.info(f"Processing pause request for printer: {printer_name}")
 
-        socketio.emit('print_pause_started', {
+        safe_emit(socketio, get_app(), 'print_pause_started', {
             'printer_id': printer_id,
             'printer_name': printer_name
         })
@@ -637,41 +638,41 @@ def pause_print(printer_id):
                     with ReadLock(printers_rwlock):
                         printers_data = prepare_printer_data_for_broadcast(PRINTERS)
 
-                    socketio.emit('status_update', {
+                    emit_status_update(socketio, get_app(), {
                         'printers': printers_data,
                         'total_filament': total_filament,
                         'orders': orders_data
                     })
 
-                    socketio.emit('print_pause_complete', {
+                    safe_emit(socketio, get_app(), 'print_pause_complete', {
                         'printer_id': printer_id,
                         'printer_name': printer_name,
                         'success': True
                     })
-                    socketio.emit('flash_message', {
+                    safe_emit(socketio, get_app(), 'flash_message', {
                         'message': f"Print paused successfully on {printer_name}",
                         'category': 'success'
                     })
                 else:
-                    socketio.emit('print_pause_complete', {
+                    safe_emit(socketio, get_app(), 'print_pause_complete', {
                         'printer_id': printer_id,
                         'printer_name': printer_name,
                         'success': False
                     })
-                    socketio.emit('flash_message', {
+                    safe_emit(socketio, get_app(), 'flash_message', {
                         'message': f"Failed to pause print on {printer_name}",
                         'category': 'warning'
                     })
 
             except Exception as e:
                 logging.error(f"Error in background pause task for {printer_name}: {str(e)}")
-                socketio.emit('print_pause_complete', {
+                safe_emit(socketio, get_app(), 'print_pause_complete', {
                     'printer_id': printer_id,
                     'printer_name': printer_name,
                     'success': False,
                     'error': str(e)
                 })
-                socketio.emit('flash_message', {
+                safe_emit(socketio, get_app(), 'flash_message', {
                     'message': f"Error pausing print on {printer_name}: {str(e)}",
                     'category': 'danger'
                 })
@@ -709,7 +710,7 @@ def resume_print(printer_id):
 
         logging.info(f"Processing resume request for printer: {printer_name}")
 
-        socketio.emit('print_resume_started', {
+        safe_emit(socketio, get_app(), 'print_resume_started', {
             'printer_id': printer_id,
             'printer_name': printer_name
         })
@@ -744,41 +745,41 @@ def resume_print(printer_id):
                     with ReadLock(printers_rwlock):
                         printers_data = prepare_printer_data_for_broadcast(PRINTERS)
 
-                    socketio.emit('status_update', {
+                    emit_status_update(socketio, get_app(), {
                         'printers': printers_data,
                         'total_filament': total_filament,
                         'orders': orders_data
                     })
 
-                    socketio.emit('print_resume_complete', {
+                    safe_emit(socketio, get_app(), 'print_resume_complete', {
                         'printer_id': printer_id,
                         'printer_name': printer_name,
                         'success': True
                     })
-                    socketio.emit('flash_message', {
+                    safe_emit(socketio, get_app(), 'flash_message', {
                         'message': f"Print resumed successfully on {printer_name}",
                         'category': 'success'
                     })
                 else:
-                    socketio.emit('print_resume_complete', {
+                    safe_emit(socketio, get_app(), 'print_resume_complete', {
                         'printer_id': printer_id,
                         'printer_name': printer_name,
                         'success': False
                     })
-                    socketio.emit('flash_message', {
+                    safe_emit(socketio, get_app(), 'flash_message', {
                         'message': f"Failed to resume print on {printer_name}",
                         'category': 'warning'
                     })
 
             except Exception as e:
                 logging.error(f"Error in background resume task for {printer_name}: {str(e)}")
-                socketio.emit('print_resume_complete', {
+                safe_emit(socketio, get_app(), 'print_resume_complete', {
                     'printer_id': printer_id,
                     'printer_name': printer_name,
                     'success': False,
                     'error': str(e)
                 })
-                socketio.emit('flash_message', {
+                safe_emit(socketio, get_app(), 'flash_message', {
                     'message': f"Error resuming print on {printer_name}: {str(e)}",
                     'category': 'danger'
                 })
@@ -871,20 +872,20 @@ def stop_all_printers():
                 with ReadLock(printers_rwlock):
                     printers_data = prepare_printer_data_for_broadcast(PRINTERS)
 
-                socketio.emit('status_update', {
+                emit_status_update(socketio, get_app(), {
                     'printers': printers_data,
                     'total_filament': total_filament,
                     'orders': orders_data
                 })
 
-                socketio.emit('flash_message', {
+                safe_emit(socketio, get_app(), 'flash_message', {
                     'message': f"Stopped {success_count} printers successfully. {failure_count} failed.",
                     'category': 'success' if failure_count == 0 else 'warning'
                 })
 
             except Exception as e:
                 logging.error(f"Error in stop all task: {str(e)}")
-                socketio.emit('flash_message', {
+                safe_emit(socketio, get_app(), 'flash_message', {
                     'message': f"Error stopping printers: {str(e)}",
                     'category': 'danger'
                 })
@@ -977,7 +978,7 @@ def mark_ready(printer_id):
                 orders_data = ORDERS.copy()
             with ReadLock(printers_rwlock):
                 printers_copy = prepare_printer_data_for_broadcast(PRINTERS)
-            socketio.emit('status_update', {'printers': printers_copy, 'total_filament': total_filament, 'orders': orders_data})
+            emit_status_update(socketio, get_app(), {'printers': printers_copy, 'total_filament': total_filament, 'orders': orders_data})
 
         thread = threading.Thread(target=reset_printer_task)
         thread.daemon = True
@@ -1045,7 +1046,7 @@ def mark_ready_by_name():
         with ReadLock(printers_rwlock):
             printers_copy = prepare_printer_data_for_broadcast(PRINTERS)
 
-        socketio.emit('status_update', {
+        emit_status_update(socketio, get_app(), {
             'printers': printers_copy,
             'total_filament': total_filament,
             'orders': orders_data
@@ -1120,7 +1121,7 @@ def mark_all_ready():
             with ReadLock(printers_rwlock):
                 printers_copy = prepare_printer_data_for_broadcast(PRINTERS)
 
-            socketio.emit('status_update', {
+            emit_status_update(socketio, get_app(), {
                 'printers': printers_copy,
                 'total_filament': total_filament,
                 'orders': orders_data
@@ -1221,7 +1222,7 @@ def mark_group_ready(group):
                 orders_data = ORDERS.copy()
             with ReadLock(printers_rwlock):
                 printers_copy = prepare_printer_data_for_broadcast(PRINTERS)
-            socketio.emit('status_update', {'printers': printers_copy, 'total_filament': total_filament, 'orders': orders_data})
+            emit_status_update(socketio, get_app(), {'printers': printers_copy, 'total_filament': total_filament, 'orders': orders_data})
 
         thread = threading.Thread(target=reset_group_printers_task)
         thread.daemon = True
@@ -1421,7 +1422,7 @@ def clear_error(printer_id):
         with ReadLock(printers_rwlock):
             printers_copy = prepare_printer_data_for_broadcast(PRINTERS)
 
-        socketio.emit('status_update', {
+        emit_status_update(socketio, get_app(), {
             'printers': printers_copy,
             'total_filament': total_filament,
             'orders': orders_data

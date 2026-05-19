@@ -102,7 +102,7 @@ export function useDeleteGroup() {
 // Default ejection settings
 export interface DefaultEjectionSettings {
   ejection_enabled: boolean
-  end_gcode: string
+  ejection_code_id?: string | null
 }
 
 export function useDefaultEjectionSettings() {

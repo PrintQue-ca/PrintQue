@@ -1,16 +1,13 @@
-# Monkey-patch for eventlet - MUST be at the very top before other imports
-import eventlet
-eventlet.monkey_patch()
-
 # CRITICAL: Configure logging BEFORE any other imports to prevent auto-basicConfig
 import os
 import sys
 import logging
 
 # Set up logging to a user-writable directory
-LOG_DIR = os.path.join(os.getenv('DATA_DIR', os.path.expanduser("~")), "PrintQueData")
-os.makedirs(LOG_DIR, exist_ok=True)
-LOG_FILE = os.path.join(LOG_DIR, "app.log")
+from utils.paths import get_data_dir, get_log_file, get_uploads_dir
+
+LOG_DIR = get_data_dir()
+LOG_FILE = get_log_file()
 
 # Clear any auto-configured handlers from the root logger
 root_logger = logging.getLogger()
@@ -72,7 +69,7 @@ os.makedirs(static_folder, exist_ok=True)
 app = Flask(__name__, static_folder=static_folder, static_url_path='/static', template_folder=template_folder)
 app.config['SECRET_KEY'] = Config.SECRET_KEY
 app.config['APP_VERSION'] = Config.APP_VERSION  # From api/__version__.py (updated by CI)
-app.config['UPLOAD_FOLDER'] = os.path.join(LOG_DIR, "uploads")  # Writable upload folder
+app.config['UPLOAD_FOLDER'] = get_uploads_dir()
 app.config['LOG_DIR'] = LOG_DIR
 
 # Enable CORS — the server only listens on localhost so allow all origins.
@@ -88,7 +85,7 @@ CORS(app, resources={
     }
 })
 
-socketio = SocketIO(app, async_mode='eventlet', cors_allowed_origins="*")
+socketio = SocketIO(app, async_mode='threading', cors_allowed_origins='*')
 
 
 @app.after_request
@@ -329,4 +326,10 @@ if __name__ == '__main__':
 
     # Run the Flask app
     # Added app.config['DEBUG'] for the debug flag
-    socketio.run(app, host='0.0.0.0', port=actual_port, debug=app.config.get('DEBUG', False))
+    socketio.run(
+        app,
+        host='0.0.0.0',
+        port=actual_port,
+        debug=app.config.get('DEBUG', False),
+        allow_unsafe_werkzeug=True,
+    )

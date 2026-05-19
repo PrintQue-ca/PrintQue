@@ -15,8 +15,8 @@ from services.bambu_handler import BAMBU_PRINTER_STATES, bambu_states_lock
 state_map = {
     'IDLE': 'Ready', 'PRINTING': 'Printing', 'PAUSED': 'Paused', 'ERROR': 'Error',
     'FINISHED': 'Finished', 'READY': 'Ready', 'STOPPED': 'Stopped', 'ATTENTION': 'Attention',
-    'EJECTING': 'Ejecting', 'PREPARE': 'Preparing', 'OFFLINE': 'Offline',
-    'COOLING': 'Cooling'
+    'EJECTING': 'Ejecting', 'PREPARE': 'Preparing', 'PREPARING': 'Preparing',
+    'OFFLINE': 'Offline', 'COOLING': 'Cooling',
 }
 
 
@@ -128,6 +128,8 @@ def prepare_printer_data_for_broadcast(printers):
         printer['print_started_at'] = printer.get('print_started_at')
         printer['finish_time'] = printer.get('finish_time')
         printer['ejection_start_time'] = printer.get('ejection_start_time')
+
+        printer['queue_job_id'] = printer.get('order_id') or printer.get('cooldown_order_id')
 
     return printers_copy
 

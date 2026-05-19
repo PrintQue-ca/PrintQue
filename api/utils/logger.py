@@ -1,13 +1,13 @@
 import logging
 import json
 import traceback
-import threading
 import os
 from datetime import datetime, timedelta
 
-# Create logs directory if it doesn't exist
-LOG_DIR = os.path.join(os.path.expanduser("~"), "PrintQueData", "logs")
-os.makedirs(LOG_DIR, exist_ok=True)
+from utils.paths import get_logs_dir, get_logging_settings_file
+from utils.threading_compat import native_threading
+
+LOG_DIR = get_logs_dir()
 
 # Configure logging
 logger = logging.getLogger('PrintQue')
@@ -43,7 +43,7 @@ logger.addHandler(console_handler)
 # =============================================================================
 
 # Settings file for persistence
-LOGGING_SETTINGS_FILE = os.path.join(os.path.expanduser("~"), "PrintQueData", "logging_settings.json")
+LOGGING_SETTINGS_FILE = get_logging_settings_file()
 
 # Log level mapping
 LOG_LEVELS = {
@@ -69,7 +69,7 @@ DEBUG_FLAGS = {
 }
 
 # Lock for thread-safe access to debug flags
-_debug_flags_lock = threading.Lock()
+_debug_flags_lock = native_threading().Lock()
 
 def _load_logging_settings():
     """Load logging settings from file"""
@@ -229,8 +229,8 @@ def log_state_transition(printer_name, old_state, new_state, trigger, details=No
         "old_state": old_state,
         "new_state": new_state,
         "trigger": trigger,
-        "thread": threading.current_thread().name,
-        "thread_id": threading.get_ident(),
+        "thread": native_threading().current_thread().name,
+        "thread_id": native_threading().get_ident(),
         "stack_trace": [str(frame) for frame in traceback.extract_stack()[-10:-1]],  # Last 10 frames excluding this one
         "details": details or {}
     }
@@ -251,7 +251,7 @@ def log_distribution_event(event_type, details):
     event = {
         "timestamp": datetime.now().isoformat(),
         "event_type": event_type,
-        "thread": threading.current_thread().name,
+        "thread": native_threading().current_thread().name,
         "details": details
     }
 

@@ -1,13 +1,17 @@
 import type { QueryClient } from '@tanstack/react-query'
 import { io, type Socket } from 'socket.io-client'
 
+/** Match api.ts: in dev, talk to Flask directly (avoids Vite WS proxy + Werkzeug issues). */
+const SOCKET_URL = import.meta.env.DEV ? 'http://localhost:5000' : undefined
+
 let socket: Socket | null = null
 
 export function initSocket(queryClient: QueryClient) {
   if (socket) return socket
 
-  socket = io({
-    transports: ['websocket'],
+  socket = io(SOCKET_URL, {
+    // Polling first: reliable with Flask threading + Werkzeug; upgrades when possible.
+    transports: ['polling', 'websocket'],
     autoConnect: true,
   })
 
@@ -25,10 +29,10 @@ export function initSocket(queryClient: QueryClient) {
       queryClient.setQueryData(['printers'], data.printers)
     }
     if (data.orders) {
-      // Only update if no mutation is in progress to avoid flickering during drag-drop
-      const isMutating = queryClient.isMutating({ mutationKey: ['reorderOrder'] })
+      const isMutating = queryClient.isMutating({ mutationKey: ['reorderQueueJob'] })
       if (!isMutating) {
-        queryClient.invalidateQueries({ queryKey: ['orders'] })
+        queryClient.invalidateQueries({ queryKey: ['queue'] })
+        queryClient.invalidateQueries({ queryKey: ['library'] })
       }
     }
     if (data.total_filament !== undefined) {
@@ -50,9 +54,10 @@ export function initSocket(queryClient: QueryClient) {
   // Order updates
   socket.on('order_update', () => {
     // Only update if no mutation is in progress to avoid flickering during drag-drop
-    const isMutating = queryClient.isMutating({ mutationKey: ['reorderOrder'] })
+    const isMutating = queryClient.isMutating({ mutationKey: ['reorderQueueJob'] })
     if (!isMutating) {
-      queryClient.invalidateQueries({ queryKey: ['orders'] })
+      queryClient.invalidateQueries({ queryKey: ['queue'] })
+      queryClient.invalidateQueries({ queryKey: ['library'] })
     }
   })
 

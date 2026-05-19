@@ -34,9 +34,13 @@ export const api = {
   },
 
   // For file uploads
-  upload: async <T>(endpoint: string, formData: FormData): Promise<T> => {
+  upload: async <T>(
+    endpoint: string,
+    formData: FormData,
+    options?: { method?: 'POST' | 'PUT' }
+  ): Promise<T> => {
     const res = await fetch(`${API_BASE}${endpoint}`, {
-      method: 'POST',
+      method: options?.method ?? 'POST',
       body: formData,
     })
     if (!res.ok) throw new Error(await res.text())

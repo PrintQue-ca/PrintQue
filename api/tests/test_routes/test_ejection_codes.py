@@ -120,3 +120,15 @@ class TestDeleteEjectionCode:
             response = client.delete('/api/v1/ejection-codes/nonexistent')
 
             assert response.status_code == 404
+
+    def test_delete_code_blocked_when_in_use(self, client, mock_ejection_codes, mock_orders):
+        """Cannot delete a preset referenced by active orders."""
+        with patch('routes.ejection_codes.EJECTION_CODES', mock_ejection_codes), \
+             patch('services.state.QUEUE_JOBS', mock_orders), \
+             patch('services.state.LIBRARY_ITEMS', []):
+            response = client.delete('/api/v1/ejection-codes/ejection-1')
+
+            assert response.status_code == 409
+            data = response.get_json()
+            assert data['success'] is False
+            assert 'active order' in data['error'].lower()

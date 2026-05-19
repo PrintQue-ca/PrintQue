@@ -20,14 +20,10 @@ def register_history_routes(app, socketio):
         """API endpoint to get print history data including active orders"""
         try:
             # Get LOG_DIR from app config - this was the main issue!
-            log_dir = app.config.get('LOG_DIR')
-            if not log_dir:
-                # Fallback to default location
-                log_dir = os.path.join(os.path.expanduser("~"), "PrintQueData")
-                logging.warning(f"LOG_DIR not found in app config, using fallback: {log_dir}")
+            from utils.paths import get_data_dir, get_print_history_file
 
-            # Use direct path to history file (not nested in 'logs' subfolder)
-            history_file = os.path.join(log_dir, 'print_history.json')
+            log_dir = app.config.get('LOG_DIR') or get_data_dir()
+            history_file = get_print_history_file()
             history_data = []
 
             # Debug logging to help troubleshoot

@@ -43,7 +43,7 @@ const mockOrders: Order[] = [
     sent: 2,
     priority: 1,
     groups: [0],
-    status: 'active',
+    status: 'partial',
   },
   {
     id: 2,
@@ -52,7 +52,7 @@ const mockOrders: Order[] = [
     sent: 0,
     priority: 2,
     groups: [0],
-    status: 'active',
+    status: 'pending',
   },
 ]
 
@@ -74,7 +74,7 @@ describe('useOrders', () => {
       })
 
       expect(result.current.data).toEqual(mockOrders)
-      expect(api.get).toHaveBeenCalledWith('/orders')
+      expect(api.get).toHaveBeenCalledWith('/queue')
     })
 
     it('should handle fetch error', async () => {
@@ -108,7 +108,7 @@ describe('useOrders', () => {
         expect(result.current.isSuccess).toBe(true)
       })
 
-      expect(api.upload).toHaveBeenCalledWith('/orders', formData)
+      expect(api.upload).toHaveBeenCalledWith('/library', formData)
     })
 
     it('should handle create error', async () => {
@@ -141,7 +141,7 @@ describe('useOrders', () => {
         expect(result.current.isSuccess).toBe(true)
       })
 
-      expect(api.delete).toHaveBeenCalledWith('/orders/1')
+      expect(api.delete).toHaveBeenCalledWith('/queue/1')
     })
   })
 
@@ -159,7 +159,7 @@ describe('useOrders', () => {
         expect(result.current.isSuccess).toBe(true)
       })
 
-      expect(api.patch).toHaveBeenCalledWith('/orders/1', { quantity: 10 })
+      expect(api.patch).toHaveBeenCalledWith('/queue/1', { quantity: 10 })
     })
   })
 })

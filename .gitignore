@@ -20,9 +20,13 @@ dist/
 # Built frontend (generated from app/ during build)
 api/frontend_dist/
 
-# IDE
+# IDE — commit shared editor settings only
 .idea/
-.vscode/
+.vscode/*
+!.vscode/settings.json
+!.vscode/extensions.json
+app/.vscode/*
+!app/.vscode/settings.json
 *.swp
 *.swo
 
@@ -33,17 +37,18 @@ logs/
 # Local config (may contain sensitive data)
 config.ini
 license.key
-orders.json
-total_filament.json
-*.json
 
-# Keep default_settings.json
-!default_settings.json
-
-# Keep package.json and package-lock.json
-!package.json
-!package-lock.json
-!tsconfig.json
+# Runtime state JSON if copied to repo root during local dev
+/orders.json
+/total_filament.json
+/library.json
+/queue.json
+/printers.json
+/ejection_codes.json
+/ejection_paused.json
+/logging_settings.json
+/print_history.json
+/default_settings.json
 
 # OS
 .DS_Store

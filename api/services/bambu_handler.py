@@ -6,11 +6,39 @@ import paho.mqtt.client as mqtt
 import ssl
 import json
 import os
+import socket
 import time
-import threading
 from typing import Dict, Any, Optional, Tuple
-from services.state import MQTT_CLIENTS, logging, decrypt_api_key
-from services.bambu_ftp import upload_to_bambu, prepare_gcode_for_bambu
+from services.state import MQTT_CLIENTS, PRINTERS, logging, decrypt_api_key, printers_rwlock, ReadLock
+from services.bambu_errors import build_print_start_failure_detail
+from services.bambu_ftp import (
+    upload_to_bambu,
+    prepare_gcode_for_bambu,
+    normalize_bambu_remote_filename,
+)
+from utils.threading_compat import native_threading
+
+_threading = native_threading()
+
+# #region agent log
+def _agent_debug_ndjson(hypothesis_id: str, location: str, message: str, data: dict, run_id: str = "pre-fix") -> None:
+    try:
+        _root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        _path = os.path.join(_root, "debug-9934ff.log")
+        _payload = {
+            "sessionId": "9934ff",
+            "runId": run_id,
+            "hypothesisId": hypothesis_id,
+            "location": location,
+            "message": message,
+            "data": data,
+            "timestamp": int(time.time() * 1000),
+        }
+        with open(_path, "a", encoding="utf-8") as _f:
+            _f.write(json.dumps(_payload) + "\n")
+    except Exception:
+        pass
+# #endregion
 
 # Bambu Lab CA Certificate
 BAMBU_CA_CERT = """-----BEGIN CERTIFICATE-----
@@ -37,7 +65,7 @@ Blbjg3obpHo9
 
 # Global certificate file path
 BAMBU_CERT_FILE = None
-BAMBU_CERT_LOCK = threading.Lock()
+BAMBU_CERT_LOCK = _threading.Lock()
 
 def get_bambu_cert_file():
     """Get or create the Bambu certificate file"""
@@ -46,7 +74,8 @@ def get_bambu_cert_file():
     with BAMBU_CERT_LOCK:
         if BAMBU_CERT_FILE is None or not os.path.exists(BAMBU_CERT_FILE):
             # Create in a persistent location
-            cert_dir = os.path.join(os.path.expanduser("~"), "PrintQueData", "certs")
+            from utils.paths import get_certs_dir
+            cert_dir = get_certs_dir()
             os.makedirs(cert_dir, exist_ok=True)
             BAMBU_CERT_FILE = os.path.join(cert_dir, "bambu_ca.pem")
 
@@ -85,6 +114,28 @@ BAMBU_STATE_MAP = {
     'FINISH': 'FINISHED',
     'UNKNOWN': 'OFFLINE'
 }
+
+
+def count_m400_in_gcode_lines(gcode_lines: list) -> int:
+    """Count M400 commands in ejection G-code (completion waits for the last one)."""
+    return sum(1 for line in gcode_lines if 'M400' in line.upper())
+
+
+def _complete_bambu_ejection(printer_name: str, reason: str) -> None:
+    """Mark Bambu ejection finished in the MQTT state cache."""
+    with bambu_states_lock:
+        if printer_name not in BAMBU_PRINTER_STATES:
+            return
+        state = BAMBU_PRINTER_STATES[printer_name]
+        if state.get('state') != 'EJECTING':
+            return
+        logging.info(f"Bambu printer {printer_name} ejection finished ({reason})")
+        state['state'] = 'READY'
+        state['ejection_complete'] = True
+        state['gcode_state'] = 'IDLE'
+        state['waiting_for_m400'] = False
+        state['ejection_m400_pending'] = 0
+        state['last_ejection_time'] = time.time()
 
 # Error code mappings - Extended list
 BAMBU_ERROR_CODES = {
@@ -131,15 +182,18 @@ BAMBU_ERROR_CODES = {
 
 # Store printer states (since MQTT is async)
 BAMBU_PRINTER_STATES = {}
-bambu_states_lock = threading.Lock()
+bambu_states_lock = _threading.Lock()
 
 # Store sequence IDs for commands
 SEQUENCE_IDS = {}
-sequence_lock = threading.Lock()
+sequence_lock = _threading.Lock()
 
 # Connection retry tracking
 CONNECTION_RETRIES = {}
-retry_lock = threading.Lock()
+retry_lock = _threading.Lock()
+_connect_locks: Dict[str, Any] = {}
+_connect_locks_guard = _threading.Lock()
+_LAST_MQTT_STATUS_LOG: Dict[str, float] = {}
 
 class BambuMQTTClient(mqtt.Client):
     """Custom MQTT client that handles Bambu's server name requirements"""
@@ -245,7 +299,8 @@ def on_disconnect(client, userdata, rc):
                 CONNECTION_RETRIES[printer_name] = retries + 1
                 delay = min(5 * (retries + 1), 30)  # Exponential backoff, max 30 seconds
                 logging.info(f"Will attempt to reconnect {printer_name} in {delay} seconds (retry {retries + 1}/5)")
-                threading.Timer(delay, lambda: reconnect_bambu_printer(printer_name)).start()
+                from utils.threading_compat import os_timer
+                os_timer(delay, lambda: reconnect_bambu_printer(printer_name))
             else:
                 logging.error(f"Max reconnection attempts reached for {printer_name}")
 
@@ -294,27 +349,78 @@ def on_message(client, userdata, msg):
                     else:
                         logging.debug(f"Bambu {printer_name} response: {cmd} = {result}")
 
-                    if reason and cmd != 'gcode_line':
+                    if cmd in ('project_file', 'gcode_file'):
+                        if result == 'success':
+                            logging.info(
+                                f"Bambu {printer_name} accepted print start for "
+                                f"{print_data.get('param', '')}"
+                            )
+                            BAMBU_PRINTER_STATES[printer_name]['state'] = 'PREPARING'
+                        else:
+                            with bambu_states_lock:
+                                state_snapshot = dict(
+                                    BAMBU_PRINTER_STATES.get(printer_name, {})
+                                )
+                            sent_command = state_snapshot.get('last_sent_print_command')
+                            err_detail = build_print_start_failure_detail(
+                                cmd=cmd,
+                                response=print_data,
+                                sent_command=sent_command,
+                                printer_state=state_snapshot,
+                            )
+                            logging.error(
+                                f"Bambu {printer_name} rejected print start — {err_detail}"
+                            )
+                            logging.error(
+                                f"Bambu {printer_name} rejection MQTT payload: {print_data}"
+                            )
+                            with bambu_states_lock:
+                                BAMBU_PRINTER_STATES[printer_name]['state'] = 'ERROR'
+                                BAMBU_PRINTER_STATES[printer_name]['error'] = err_detail
+                                BAMBU_PRINTER_STATES[printer_name][
+                                    'last_print_rejection'
+                                ] = {
+                                    'cmd': cmd,
+                                    'response': print_data,
+                                    'detail': err_detail,
+                                }
+                            with ReadLock(printers_rwlock):
+                                printer_row = next(
+                                    (p for p in PRINTERS if p.get('name') == printer_name),
+                                    None,
+                                )
+                            if printer_row:
+                                request_bambu_status(printer_row)
+
+                    if reason and cmd not in ('gcode_line', 'project_file', 'gcode_file'):
                         logging.warning(f"Bambu {printer_name} reason: {reason}")
 
-                    # Check for M400 completion if we're waiting for it
+                    # Ejection completes only after the final M400 ACK (not mid-script M400).
                     if (BAMBU_PRINTER_STATES[printer_name].get('waiting_for_m400', False) and
                         print_data.get('command') == 'gcode_line' and
-                        print_data.get('param', '').strip().upper() == 'M400' and
-                        print_data.get('result') == 'success'):
+                        'M400' in print_data.get('param', '').strip().upper() and
+                        print_data.get('result') == 'success' and
+                        BAMBU_PRINTER_STATES[printer_name].get('state') == 'EJECTING'):
 
-                        current_state = BAMBU_PRINTER_STATES[printer_name].get('state')
-                        if current_state == 'EJECTING':
-                            logging.info(f"Bambu printer {printer_name} M400 complete - ejection finished, transitioning to READY")
-                            BAMBU_PRINTER_STATES[printer_name]['state'] = 'READY'
-                            BAMBU_PRINTER_STATES[printer_name]['ejection_complete'] = True
-                            BAMBU_PRINTER_STATES[printer_name]['gcode_state'] = 'IDLE'
-                            BAMBU_PRINTER_STATES[printer_name]['waiting_for_m400'] = False
-                            BAMBU_PRINTER_STATES[printer_name]['last_ejection_time'] = time.time()
+                        pending = BAMBU_PRINTER_STATES[printer_name].get('ejection_m400_pending', 0)
+                        if pending > 0:
+                            pending -= 1
+                            BAMBU_PRINTER_STATES[printer_name]['ejection_m400_pending'] = pending
+                        if pending <= 0:
+                            _complete_bambu_ejection(
+                                printer_name, 'final M400 ACK'
+                            )
+                        else:
+                            logging.debug(
+                                f"Bambu {printer_name} M400 ACK "
+                                f"({pending} M400 remaining before ejection complete)"
+                            )
 
                 # Get current state and error code
                 gcode_state = print_data.get('gcode_state', 'UNKNOWN')
                 print_error = print_data.get('print_error', 0)
+                if print_error:
+                    BAMBU_PRINTER_STATES[printer_name]['last_print_error'] = print_error
 
                 # State updates
                 if "gcode_state" in print_data:
@@ -324,20 +430,10 @@ def on_message(client, userdata, msg):
 
                     BAMBU_PRINTER_STATES[printer_name]['gcode_state'] = gcode_state
 
-                    # CRITICAL: Check if we're in EJECTING state
                     current_state = BAMBU_PRINTER_STATES[printer_name].get('state')
                     if current_state == 'EJECTING':
-                        # Check if ejection has been running for more than 15 seconds
-                        ejection_start = BAMBU_PRINTER_STATES[printer_name].get('ejection_start_time', 0)
-                        if ejection_start and (time.time() - ejection_start > 15):
-                            logging.info(f"Bambu printer {printer_name} ejection complete (15s elapsed) - transitioning to READY")
-                            BAMBU_PRINTER_STATES[printer_name]['state'] = 'READY'
-                            BAMBU_PRINTER_STATES[printer_name]['ejection_complete'] = True
-                            BAMBU_PRINTER_STATES[printer_name]['gcode_state'] = 'IDLE'
-                            # Don't process normal state mapping for this update
-                        else:
-                            # Still ejecting, keep the state
-                            pass
+                        # Stay EJECTING until final M400; do not use gcode_state timeouts here.
+                        pass
                     elif gcode_state == 'FAILED':
                         # Check if it's a real error or just "no job active"
                         if print_error == 50331648:
@@ -362,25 +458,64 @@ def on_message(client, userdata, msg):
                             BAMBU_PRINTER_STATES[printer_name]['error'] = error_msg
                             logging.error(f"Bambu {printer_name} error: {error_msg}")
                     elif gcode_state == 'IDLE':
+                        pending_file = BAMBU_PRINTER_STATES[printer_name].get(
+                            'pending_print_file'
+                        )
+                        prev_state = BAMBU_PRINTER_STATES[printer_name].get('state')
+                        if pending_file and prev_state in ('PREPARING', 'PRINTING'):
+                            err_code = print_data.get('print_error', 0)
+                            err_msg = BAMBU_ERROR_CODES.get(
+                                err_code, f"code {err_code}" if err_code else 'none'
+                            )
+                            logging.error(
+                                f"Bambu {printer_name} returned IDLE without starting print "
+                                f"(file={pending_file}, print_error={err_msg})"
+                            )
+                            BAMBU_PRINTER_STATES[printer_name].pop(
+                                'pending_print_file', None
+                            )
                         # IDLE means ready in Bambu terms
                         BAMBU_PRINTER_STATES[printer_name]['state'] = 'READY'
                         BAMBU_PRINTER_STATES[printer_name]['error'] = None
+                    elif gcode_state == 'FINISH':
+                        pq_state = BAMBU_PRINTER_STATES[printer_name].get('state')
+                        if (
+                            pq_state in ('PREPARING',)
+                            and not BAMBU_PRINTER_STATES[printer_name].get('job_reached_running')
+                        ):
+                            logging.warning(
+                                f"Bambu {printer_name} FINISH before print started "
+                                f"(ignoring spurious FINISHED)"
+                            )
+                            if BAMBU_PRINTER_STATES[printer_name].get('error'):
+                                BAMBU_PRINTER_STATES[printer_name]['state'] = 'ERROR'
+                            else:
+                                BAMBU_PRINTER_STATES[printer_name]['state'] = 'READY'
+                                BAMBU_PRINTER_STATES[printer_name]['error'] = None
+                            BAMBU_PRINTER_STATES[printer_name].pop('pending_print_file', None)
+                        else:
+                            BAMBU_PRINTER_STATES[printer_name]['state'] = 'FINISHED'
+                            if BAMBU_PRINTER_STATES[printer_name].get('error'):
+                                BAMBU_PRINTER_STATES[printer_name]['error'] = None
                     else:
-                        # Use normal state mapping
+                        if gcode_state in ('RUNNING', 'PREPARE') and current_state != 'EJECTING':
+                            BAMBU_PRINTER_STATES[printer_name]['job_reached_running'] = True
                         mapped_state = BAMBU_STATE_MAP.get(gcode_state, 'OFFLINE')
                         BAMBU_PRINTER_STATES[printer_name]['state'] = mapped_state
-                        # Clear error unless we're in ERROR state
+                        if gcode_state in ('RUNNING', 'PREPARE'):
+                            BAMBU_PRINTER_STATES[printer_name].pop(
+                                'pending_print_file', None
+                            )
                         if mapped_state != 'ERROR':
                             BAMBU_PRINTER_STATES[printer_name]['error'] = None
 
-                    # In the state updates section where you check for EJECTING state
                     if current_state == 'EJECTING':
-                        # If we're ejecting and the printer reports IDLE/FINISH state
-                        if gcode_state in ['IDLE', 'FINISH']:
-                            logging.info(f"Bambu printer {printer_name} completed ejection sequence")
-                            BAMBU_PRINTER_STATES[printer_name]['state'] = 'READY'
-                            BAMBU_PRINTER_STATES[printer_name]['ejection_complete'] = True
-                            BAMBU_PRINTER_STATES[printer_name]['gcode_state'] = 'IDLE'
+                        pending_m400 = BAMBU_PRINTER_STATES[printer_name].get('ejection_m400_pending', 0)
+                        waiting_m400 = BAMBU_PRINTER_STATES[printer_name].get('waiting_for_m400', False)
+                        if gcode_state in ('IDLE', 'FINISH') and pending_m400 == 0 and not waiting_m400:
+                            _complete_bambu_ejection(
+                                printer_name, f'printer reported {gcode_state} after ejection'
+                            )
                         else:
                             # Just log progress periodically (no timeout)
                             if 'ejection_start_time' in BAMBU_PRINTER_STATES[printer_name]:
@@ -430,6 +565,7 @@ def on_message(client, userdata, msg):
 
                 # HMS alerts
                 if "hms" in print_data and print_data["hms"]:
+                    BAMBU_PRINTER_STATES[printer_name]['hms_alerts_raw'] = print_data['hms']
                     hms_errors = []
                     for alert in print_data["hms"]:
                         if isinstance(alert, dict) and "code" in alert:
@@ -446,7 +582,20 @@ def on_message(client, userdata, msg):
                 else:
                     BAMBU_PRINTER_STATES[printer_name]['hms_alerts'] = []
 
-            # Log current state for debugging
+            # Periodic INFO heartbeat so logs show live MQTT data (throttled)
+            if "print" in data and "gcode_state" in data.get("print", {}):
+                now = time.time()
+                last_log = _LAST_MQTT_STATUS_LOG.get(printer_name, 0)
+                if now - last_log >= 45:
+                    _LAST_MQTT_STATUS_LOG[printer_name] = now
+                    pd = data["print"]
+                    logging.info(
+                        f"Bambu {printer_name} MQTT: gcode_state={pd.get('gcode_state')}, "
+                        f"app_state={BAMBU_PRINTER_STATES[printer_name].get('state')}, "
+                        f"nozzle={pd.get('nozzle_temper')}°C, bed={pd.get('bed_temper')}°C, "
+                        f"file={pd.get('gcode_file', '') or '—'}"
+                    )
+
             current_state = BAMBU_PRINTER_STATES[printer_name].get('state', 'UNKNOWN')
             current_error = BAMBU_PRINTER_STATES[printer_name].get('error', 'None')
             logging.debug(f"Bambu {printer_name} current state: {current_state}, error: {current_error}")
@@ -457,15 +606,32 @@ def on_message(client, userdata, msg):
 def connect_bambu_printer(printer: Dict[str, Any]) -> bool:
     """Connect to a Bambu printer via MQTT"""
     printer_name = printer['name']
+    # #region agent log
+    _sn = printer.get("serial_number") or ""
+    _agent_debug_ndjson(
+        "H1",
+        "bambu_handler.py:connect_bambu_printer:entry",
+        "connect_bambu_printer entry",
+        {
+            "printer_name": printer_name,
+            "ip": printer.get("ip"),
+            "mqtt_port": 8883,
+            "serial_number_len": len(_sn),
+        },
+    )
+    # #endregion
 
-    # Check if already connected
-    if printer_name in MQTT_CLIENTS:
-        client = MQTT_CLIENTS[printer_name]
-        if client.is_connected():
-            logging.debug(f"Bambu printer {printer_name} already connected")
-            return True
-        else:
-            # Clean up disconnected client
+    with _connect_locks_guard:
+        if printer_name not in _connect_locks:
+            _connect_locks[printer_name] = _threading.Lock()
+        printer_connect_lock = _connect_locks[printer_name]
+
+    with printer_connect_lock:
+        if printer_name in MQTT_CLIENTS:
+            client = MQTT_CLIENTS[printer_name]
+            if client.is_connected():
+                logging.debug(f"Bambu printer {printer_name} already connected")
+                return True
             try:
                 client.loop_stop()
                 client.disconnect()
@@ -473,6 +639,12 @@ def connect_bambu_printer(printer: Dict[str, Any]) -> bool:
                 pass
             del MQTT_CLIENTS[printer_name]
 
+        return _connect_bambu_printer_locked(printer)
+
+
+def _connect_bambu_printer_locked(printer: Dict[str, Any]) -> bool:
+    """MQTT connect implementation (caller must hold per-printer connect lock)."""
+    printer_name = printer['name']
     try:
         # Create client
         client_id = f"printque_{printer_name}_{int(time.time())}"
@@ -504,8 +676,39 @@ def connect_bambu_printer(printer: Dict[str, Any]) -> bool:
 
         # Get persistent certificate file
         ca_file_path = get_bambu_cert_file()
+        # #region agent log
+        _ca_meta: Dict[str, Any] = {"ca_file_path": ca_file_path, "exists": os.path.isfile(ca_file_path)}
+        try:
+            if _ca_meta["exists"]:
+                _ca_meta["size_bytes"] = os.path.getsize(ca_file_path)
+                with open(ca_file_path, "r", encoding="utf-8", errors="replace") as _cf:
+                    _head = _cf.read(120)
+                _ca_meta["starts_with_begin"] = _head.lstrip().startswith("-----BEGIN")
+                _ca_meta["has_end_marker"] = "-----END CERTIFICATE-----" in _head
+        except Exception as _ce:
+            _ca_meta["read_error"] = type(_ce).__name__
+        _agent_debug_ndjson("H3", "bambu_handler.py:connect_bambu_printer:ca_file", "CA file probe", _ca_meta)
+        # #endregion
+
+        # #region agent log
+        _tcp_ok = False
+        _tcp_err: Optional[str] = None
+        try:
+            _probe = socket.create_connection((printer["ip"], 8883), timeout=4)
+            _probe.close()
+            _tcp_ok = True
+        except OSError as _te:
+            _tcp_err = f"{type(_te).__name__}:{_te}"
+        _agent_debug_ndjson(
+            "H2",
+            "bambu_handler.py:connect_bambu_printer:tcp8883",
+            "raw TCP to printer 8883",
+            {"ok": _tcp_ok, "error": _tcp_err},
+        )
+        # #endregion
 
         # Set up TLS with better error handling
+        _tls_branch = "ca_required"
         try:
             # Try with the certificate file
             context = ssl.create_default_context(cafile=ca_file_path)
@@ -513,12 +716,16 @@ def connect_bambu_printer(printer: Dict[str, Any]) -> bool:
             context.verify_mode = ssl.CERT_REQUIRED
             client.tls_set_context(context)
         except ssl.SSLError as e:
+            _tls_branch = "fallback_cert_none"
             logging.warning(f"SSL error with certificate file, trying without verification: {str(e)}")
             # Fallback to unverified connection
             context = ssl.create_default_context()
             context.check_hostname = False
             context.verify_mode = ssl.CERT_NONE
             client.tls_set_context(context)
+        # #region agent log
+        _agent_debug_ndjson("H4", "bambu_handler.py:connect_bambu_printer:tls_branch", "TLS context branch", {"branch": _tls_branch})
+        # #endregion
 
         # Set credentials
         access_code = decrypt_api_key(printer['access_code'])
@@ -532,7 +739,18 @@ def connect_bambu_printer(printer: Dict[str, Any]) -> bool:
 
         # Connect
         logging.info(f"Connecting to Bambu printer {printer_name} at {printer['ip']}:8883")
+        # #region agent log
+        _t0 = time.perf_counter()
+        # #endregion
         client.connect(printer['ip'], 8883, keepalive=60)
+        # #region agent log
+        _agent_debug_ndjson(
+            "H5",
+            "bambu_handler.py:connect_bambu_printer:post_connect",
+            "paho client.connect returned",
+            {"elapsed_s": round(time.perf_counter() - _t0, 3)},
+        )
+        # #endregion
         client.loop_start()
 
         # Store client
@@ -558,6 +776,14 @@ def connect_bambu_printer(printer: Dict[str, Any]) -> bool:
 
     except Exception as e:
         logging.error(f"Failed to connect Bambu printer {printer_name}: {str(e)}")
+        # #region agent log
+        _agent_debug_ndjson(
+            "H1",
+            "bambu_handler.py:connect_bambu_printer:except",
+            "connect_bambu_printer failed",
+            {"exc_type": type(e).__name__, "exc_str": str(e)[:500]},
+        )
+        # #endregion
         # Clean up on failure
         if printer_name in MQTT_CLIENTS:
             try:
@@ -566,6 +792,7 @@ def connect_bambu_printer(printer: Dict[str, Any]) -> bool:
                 pass
             del MQTT_CLIENTS[printer_name]
         return False
+
 
 def disconnect_bambu_printer(printer_name: str) -> None:
     """Disconnect a Bambu printer and clear any queued messages"""
@@ -582,7 +809,7 @@ def disconnect_bambu_printer(printer_name: str) -> None:
         try:
             # Reinitialize the message queue to clear it
             client._out_messages = []
-            client._out_message_mutex = threading.Lock() if not hasattr(client, '_out_message_mutex') else client._out_message_mutex
+            client._out_message_mutex = _threading.Lock() if not hasattr(client, '_out_message_mutex') else client._out_message_mutex
             logging.debug(f"Cleared message queue for {printer_name}")
         except Exception as e:
             logging.debug(f"Could not clear message queue for {printer_name}: {e}")
@@ -776,7 +1003,7 @@ def clear_bambu_error(printer: Dict[str, Any]) -> bool:
 
     return False
 
-def send_bambu_print_command(printer: Dict[str, Any], filename: str, filepath: str = None, gcode_content: str = None) -> bool:
+def send_bambu_print_command(printer: Dict[str, Any], filename: str, filepath: str = None, gcode_content: str = None) -> tuple[bool, str | None]:
     """
     Send print command to Bambu printer
     Now includes FTP upload if filepath is provided
@@ -788,7 +1015,7 @@ def send_bambu_print_command(printer: Dict[str, Any], filename: str, filepath: s
         gcode_content: Optional G-code content for direct commands
 
     Returns:
-        bool: Success status
+        Tuple of (success, error_message). error_message is set on failure.
     """
     printer_name = printer['name']
 
@@ -797,41 +1024,53 @@ def send_bambu_print_command(printer: Dict[str, Any], filename: str, filepath: s
         if printer_name in BAMBU_PRINTER_STATES:
             state = BAMBU_PRINTER_STATES[printer_name].get('state')
             if state == 'ERROR':
-                logging.error(f"Cannot send print command - Bambu printer {printer_name} is in ERROR state")
-                return False
+                msg = f"Bambu printer {printer_name} is in ERROR state"
+                logging.error(f"Cannot send print command - {msg}")
+                return False, msg
 
-    # If we have a filepath, upload the file first
+    if filepath and not os.path.exists(filepath):
+        msg = f"Print file not found: {filepath}"
+        logging.error(f"Cannot send print to {printer_name}: {msg}")
+        return False, msg
+
+    upload_paths = None
+
+    # Step 1: FTP upload (required when a local filepath is provided)
     if filepath and os.path.exists(filepath):
         logging.info(f"Uploading file to Bambu printer {printer_name} before starting print")
 
-        # Prepare the file for Bambu
         success, prepared_path, remote_filename = prepare_gcode_for_bambu(
             filepath,
-            os.path.dirname(filepath)
+            os.path.dirname(filepath),
         )
 
         if not success:
-            logging.error(f"Failed to prepare file for Bambu printer {printer_name}")
-            return False
+            msg = f"Failed to prepare file for Bambu printer {printer_name}"
+            logging.error(msg)
+            return False, msg
 
-        # Upload the file via FTP
-        upload_success, upload_msg = upload_to_bambu(printer, prepared_path, remote_filename)
+        upload_success, upload_msg, upload_paths = upload_to_bambu(
+            printer, prepared_path, remote_filename
+        )
 
-        if not upload_success:
+        if not upload_success or not upload_paths:
+            msg = f"FTP upload failed: {upload_msg}"
             logging.error(f"Failed to upload file to Bambu printer {printer_name}: {upload_msg}")
-            return False
+            return False, msg
 
-        logging.info(f"Successfully uploaded {remote_filename} to Bambu printer {printer_name}")
-
-        # Use the remote filename for the print command
         filename = remote_filename
 
-    # Ensure filename has correct extension for print command
-    if not filename.endswith('.3mf'):
-        if filename.endswith('.gcode'):
-            filename = filename.replace('.gcode', '.gcode.3mf')
-        else:
-            filename = filename + '.gcode.3mf'
+    if not filename:
+        msg = f"No filename for Bambu print on {printer_name}"
+        logging.error(msg)
+        return False, msg
+
+    filename = normalize_bambu_remote_filename(filename)
+
+    if filepath and os.path.exists(filepath) and not upload_paths:
+        msg = f"Bambu print on {printer_name} requires FTP upload before start"
+        logging.error(msg)
+        return False, msg
 
     # Ensure connected
     if printer_name not in MQTT_CLIENTS or not MQTT_CLIENTS[printer_name].is_connected():
@@ -843,41 +1082,84 @@ def send_bambu_print_command(printer: Dict[str, Any], filename: str, filepath: s
                     BAMBU_PRINTER_STATES[printer_name]['state'] = 'OFFLINE'
                     BAMBU_PRINTER_STATES[printer_name]['connected'] = False
                     BAMBU_PRINTER_STATES[printer_name]['disconnect_reason'] = 'Failed to connect for print command'
-            return False
+            msg = f"Bambu printer {printer_name} not connected"
+            return False, msg
 
     client = MQTT_CLIENTS[printer_name]
 
     try:
-        # Build command
+        use_ams = bool(printer.get('use_ams', False))
+        seq_id = get_next_sequence_id(printer_name)
+
+        # Step 2: MQTT print start (FTP root → file:///sdcard/…, legacy PrintQue)
+        if not upload_paths:
+            msg = (
+                f"Cannot start print on {printer_name}: no uploaded file on printer "
+                f"(pass filepath to upload first)"
+            )
+            logging.error(msg)
+            return False, msg
+
+        print_ref = upload_paths['project_url']
         command = {
             "print": {
                 "command": "project_file",
-                "sequence_id": get_next_sequence_id(printer_name),
+                "sequence_id": seq_id,
                 "param": "Metadata/plate_1.gcode",
                 "file": "",
-                "url": f"file:///sdcard/{filename}",
+                "url": print_ref,
+                "bed_type": "auto",
+                "timelapse": False,
                 "bed_leveling": True,
-                "use_ams": True
+                "flow_cali": False,
+                "vibration_cali": False,
+                "layer_inspect": False,
+                "use_ams": use_ams,
+                "ams_mapping": [0],
+                "subtask_name": "",
+                "profile_id": "0",
+                "project_id": "0",
+                "subtask_id": "0",
+                "task_id": "0",
             }
         }
 
         topic = f"device/{printer['serial_number']}/request"
-        result = client.publish(topic, json.dumps(command), qos=0)
+        command_json = json.dumps(command)
+        result = client.publish(topic, command_json, qos=0)
 
         if result.rc == mqtt.MQTT_ERR_SUCCESS:
-            logging.info(f"Sent print command for {filename} to Bambu printer {printer_name}")
-            return True
+            logging.info(
+                f"Sent print command for {filename} to Bambu printer {printer_name} "
+                f"(uploaded_as={upload_paths['stor_path']}, url={print_ref}, "
+                f"use_ams={use_ams})"
+            )
+            logging.info(
+                f"Bambu {printer_name} MQTT print payload: {command_json}"
+            )
+            with bambu_states_lock:
+                if printer_name not in BAMBU_PRINTER_STATES:
+                    BAMBU_PRINTER_STATES[printer_name] = {}
+                BAMBU_PRINTER_STATES[printer_name]['state'] = 'PREPARING'
+                BAMBU_PRINTER_STATES[printer_name]['pending_print_file'] = filename
+                BAMBU_PRINTER_STATES[printer_name]['job_reached_running'] = False
+                BAMBU_PRINTER_STATES[printer_name]['ejection_complete'] = False
+                BAMBU_PRINTER_STATES[printer_name]['last_sent_print_command'] = command
+            request_bambu_status(printer)
+            return True, None
         else:
+            msg = f"MQTT publish failed (rc={result.rc})"
             logging.error(f"Failed to send print command to Bambu printer {printer_name}: {result.rc}")
             # Update state on publish failure
             with bambu_states_lock:
                 if printer_name in BAMBU_PRINTER_STATES:
                     BAMBU_PRINTER_STATES[printer_name]['disconnect_reason'] = f'Publish failed (rc={result.rc})'
-            return False
+            return False, msg
 
     except Exception as e:
-        logging.error(f"Error sending print command to Bambu printer {printer_name}: {str(e)}")
-        return False
+        msg = str(e)
+        logging.error(f"Error sending print command to Bambu printer {printer_name}: {msg}")
+        return False, msg
 
 def send_bambu_gcode_command(printer: Dict[str, Any], gcode: str, force_reconnect: bool = False) -> bool:
     """Send raw G-code command to Bambu printer
@@ -1069,20 +1351,25 @@ def send_bambu_ejection_gcode(printer: Dict[str, Any], end_gcode: str, force: bo
         has_m400 = any('M400' in line.upper() for line in gcode_lines)
 
         if not has_m400:
-            # Automatically append M400 to ensure completion detection
             gcode_lines.append('M400')
             logging.info(f"Automatically added M400 to ejection G-code for Bambu printer {printer_name}")
 
-        logging.info(f"Sending {len(gcode_lines)} ejection G-code lines to Bambu printer {printer_name}")
+        m400_count = count_m400_in_gcode_lines(gcode_lines)
+        if m400_count == 0:
+            m400_count = 1
 
-        # Update printer state to EJECTING
+        logging.info(
+            f"Sending {len(gcode_lines)} ejection G-code lines to Bambu printer {printer_name} "
+            f"({m400_count} M400 completion gate(s))"
+        )
+
         with bambu_states_lock:
             if printer_name in BAMBU_PRINTER_STATES:
                 BAMBU_PRINTER_STATES[printer_name]['state'] = 'EJECTING'
                 BAMBU_PRINTER_STATES[printer_name]['ejection_complete'] = False
                 BAMBU_PRINTER_STATES[printer_name]['ejection_start_time'] = time.time()
-                # Mark that we're waiting for M400 completion
                 BAMBU_PRINTER_STATES[printer_name]['waiting_for_m400'] = True
+                BAMBU_PRINTER_STATES[printer_name]['ejection_m400_pending'] = m400_count
 
         # Send each command
         for line in gcode_lines:
@@ -1102,6 +1389,7 @@ def send_bambu_ejection_gcode(printer: Dict[str, Any], end_gcode: str, force: bo
                 with bambu_states_lock:
                     BAMBU_PRINTER_STATES[printer_name]['ejection_in_progress'] = False
                     BAMBU_PRINTER_STATES[printer_name]['waiting_for_m400'] = False
+                    BAMBU_PRINTER_STATES[printer_name]['ejection_m400_pending'] = 0
                 return False
 
             # Small delay between commands to avoid overwhelming the printer
@@ -1121,7 +1409,23 @@ def send_bambu_ejection_gcode(printer: Dict[str, Any], end_gcode: str, force: bo
         with bambu_states_lock:
             BAMBU_PRINTER_STATES[printer_name]['ejection_in_progress'] = False
             BAMBU_PRINTER_STATES[printer_name]['waiting_for_m400'] = False
+            BAMBU_PRINTER_STATES[printer_name]['ejection_m400_pending'] = 0
         return False
+
+def clear_bambu_print_assignment(printer_name: str) -> None:
+    """Clear pending start / ejection flags after user cancel."""
+    with bambu_states_lock:
+        if printer_name not in BAMBU_PRINTER_STATES:
+            return
+        state = BAMBU_PRINTER_STATES[printer_name]
+        state.pop('pending_print_file', None)
+        state['job_reached_running'] = False
+        state.pop('last_sent_print_command', None)
+        # Stop poller from re-applying stale PREPARING from MQTT after user cancel
+        state['state'] = 'IDLE'
+        state.pop('current_file', None)
+        state.pop('file', None)
+
 
 def stop_bambu_print(printer: Dict[str, Any]) -> bool:
     """Stop current print on Bambu printer"""
@@ -1251,8 +1555,10 @@ def maintain_bambu_connections():
         except Exception as e:
             logging.error(f"Error in maintain_bambu_connections: {str(e)}")
 
-# Start the connection maintenance thread
-threading.Thread(target=maintain_bambu_connections, daemon=True).start()
+def start_bambu_connection_maintenance():
+    """Start Bambu MQTT maintenance on a real OS thread (safe under eventlet)."""
+    from utils.threading_compat import spawn_os_daemon
+    spawn_os_daemon(maintain_bambu_connections, name='BambuMaintain')
 
 def disconnect_all_bambu_printers():
     """Disconnect all Bambu printers - call during shutdown"""

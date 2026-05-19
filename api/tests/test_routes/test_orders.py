@@ -162,18 +162,79 @@ class TestDeleteOrder:
 class TestOrderEjection:
     """Tests for PATCH /api/v1/orders/<id>/ejection endpoint."""
 
-    def test_update_ejection_settings(self, client, mock_orders):
-        """Test updating order ejection settings."""
-        with patch('routes.ORDERS', mock_orders):
+    def test_update_ejection_settings(self, client, mock_orders, mock_ejection_codes):
+        """Test updating order ejection settings by preset ID."""
+        orders = [o.copy() for o in mock_orders]
+        with patch('routes.ORDERS', orders), patch('services.state.EJECTION_CODES', mock_ejection_codes):
             response = client.patch('/api/v1/orders/1/ejection',
                                    json={
                                        'ejection_enabled': True,
-                                       'end_gcode': 'G28 X Y\nM84'
+                                       'ejection_code_id': 'ejection-1',
                                    })
 
             assert response.status_code == 200
             data = response.get_json()
             assert data['success'] is True
+            assert orders[0]['ejection_code_id'] == 'ejection-1'
+            assert 'end_gcode' not in orders[0]
+
+    def test_update_ejection_custom_gcode_auto_saves(self, client, mock_orders):
+        """Custom G-code is auto-saved as a preset and referenced by ID."""
+        orders = [o.copy() for o in mock_orders]
+        codes = []
+        with patch('routes.ORDERS', orders), patch('services.state.EJECTION_CODES', codes):
+            response = client.patch('/api/v1/orders/1/ejection',
+                                   json={
+                                       'ejection_enabled': True,
+                                       'end_gcode': 'G28 X Y\nM84',
+                                   })
+
+            assert response.status_code == 200
+            assert orders[0]['ejection_code_id']
+            assert len(codes) == 1
+
+    def test_set_cooldown_temp(self, client, mock_orders):
+        """Setting cooldown_temp persists the value on the order."""
+        with patch('routes.ORDERS', mock_orders):
+            response = client.patch('/api/v1/orders/1/ejection',
+                                   json={'cooldown_temp': 40})
+
+            assert response.status_code == 200
+            data = response.get_json()
+            assert data['success'] is True
+            assert data['order']['cooldown_temp'] == 40
+            assert mock_orders[0]['cooldown_temp'] == 40
+
+    def test_clear_cooldown_temp(self, client, mock_orders):
+        """Passing cooldown_temp=null clears the value."""
+        mock_orders[0]['cooldown_temp'] = 45
+        with patch('routes.ORDERS', mock_orders):
+            response = client.patch('/api/v1/orders/1/ejection',
+                                   json={'cooldown_temp': None})
+
+            assert response.status_code == 200
+            data = response.get_json()
+            assert data['success'] is True
+            assert data['order']['cooldown_temp'] is None
+            assert mock_orders[0]['cooldown_temp'] is None
+
+    def test_cooldown_temp_out_of_range_rejected(self, client, mock_orders):
+        """Values outside 0-100 return a 400 and leave the order unchanged."""
+        mock_orders[0]['cooldown_temp'] = 50
+        with patch('routes.ORDERS', mock_orders):
+            response = client.patch('/api/v1/orders/1/ejection',
+                                   json={'cooldown_temp': 150})
+
+            assert response.status_code == 400
+            assert mock_orders[0]['cooldown_temp'] == 50
+
+    def test_cooldown_temp_non_numeric_rejected(self, client, mock_orders):
+        """Non-numeric cooldown_temp values return a 400."""
+        with patch('routes.ORDERS', mock_orders):
+            response = client.patch('/api/v1/orders/1/ejection',
+                                   json={'cooldown_temp': 'hot'})
+
+            assert response.status_code == 400
 
 
 class TestOrderMove:
@@ -203,19 +264,21 @@ class TestDefaultEjection:
         """Test getting default ejection settings."""
         with patch('routes.load_default_settings', return_value={
             'default_ejection_enabled': False,
-            'default_end_gcode': ''
+            'default_ejection_code_id': None,
         }):
             response = client.get('/api/v1/settings/default-ejection')
 
             assert response.status_code == 200
             data = response.get_json()
             assert 'ejection_enabled' in data
-            assert 'end_gcode' in data
+            assert 'ejection_code_id' in data
 
     def test_save_default_ejection(self, client):
         """Test saving default ejection settings."""
+        codes = []
         with patch('routes.load_default_settings', return_value={}), \
-             patch('routes.save_default_settings', return_value=True):
+             patch('routes.save_default_settings', return_value=True), \
+             patch('services.state.EJECTION_CODES', codes):
 
             response = client.post('/api/v1/settings/default-ejection',
                                   json={
@@ -226,3 +289,4 @@ class TestDefaultEjection:
             assert response.status_code == 200
             data = response.get_json()
             assert data['success'] is True
+            assert len(codes) == 1

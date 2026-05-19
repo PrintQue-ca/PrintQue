@@ -241,11 +241,33 @@ class TestPrinterActions:
 
     def test_stop_printer(self, client, mock_printers):
         """Test stopping a printer."""
-        response = client.post('/api/v1/printers/Test%20Printer%202/stop')
+        with patch('routes.PRINTERS', mock_printers), \
+             patch('services.print_jobs.schedule_stop_print_by_name', return_value=True):
+            response = client.post('/api/v1/printers/Test%20Printer%202/stop')
 
         assert response.status_code == 200
         data = response.get_json()
         assert data['success'] is True
+
+    def test_stop_printer_preparing(self, client, mock_printers):
+        """Test cancelling a printer stuck in PREPARING."""
+        printers = [p.copy() for p in mock_printers]
+        printers[1]['state'] = 'PREPARING'
+        printers[1]['status'] = 'Preparing'
+
+        with patch('services.state.PRINTERS', printers), \
+             patch('services.print_jobs.threading.Thread'):
+            response = client.post('/api/v1/printers/Test%20Printer%202/stop')
+
+        assert response.status_code == 200
+        assert response.get_json()['success'] is True
+
+    def test_stop_printer_when_idle_returns_400(self, client, mock_printers):
+        """Test stop is rejected when printer is not active."""
+        with patch('services.state.PRINTERS', mock_printers):
+            response = client.post('/api/v1/printers/Test%20Printer%201/stop')
+
+        assert response.status_code == 400
 
     def test_pause_printer(self, client, mock_printers):
         """Test pausing a printer."""

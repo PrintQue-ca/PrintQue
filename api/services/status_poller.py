@@ -5,19 +5,22 @@ Handles fetching printer status from APIs and broadcasting to clients.
 import time
 import asyncio
 import aiohttp
-import threading
 import copy
 
 from services.state import (
-    PRINTERS_FILE, TOTAL_FILAMENT_FILE,
+    PRINTERS_FILE, TOTAL_FILAMENT_FILE, TOTAL_FILAMENT_CONSUMPTION,
     PRINTERS, ORDERS, save_data, load_data, decrypt_api_key,
     logging, orders_lock, filament_lock, printers_rwlock,
     SafeLock, ReadLock, WriteLock,
-    get_printer_ejection_state, clear_printer_ejection_state
+    get_printer_ejection_state, clear_printer_ejection_state,
+    resolve_ejection_gcode, DEFAULT_EJECTION_GCODE,
+    increment_queue_sent_count,
 )
+from services.library_queue import clear_queue_job_error, record_queue_job_error
 from services.bambu_handler import (
     get_bambu_status, send_bambu_ejection_gcode,
-    BAMBU_PRINTER_STATES, bambu_states_lock
+    BAMBU_PRINTER_STATES, bambu_states_lock,
+    clear_bambu_print_assignment,
 )
 from services.ejection_manager import (
     clear_stuck_ejection_locks, release_ejection_lock,
@@ -26,6 +29,8 @@ from services.ejection_manager import (
 from utils.config import Config
 from utils.retry_utils import retry_async
 from utils.logger import log_state_transition, log_api_poll_event
+from utils.threading_compat import os_timer
+from utils.socketio_emit import emit_status_update
 
 # Re-export pure/near-pure helpers so existing imports keep working
 from utils.status_poller_helpers import (           # noqa: F401
@@ -72,17 +77,30 @@ def update_bambu_printer_states():
             new_state = bambu_state.get('state', current_state)
 
             # Protect manually-set READY state from being overwritten by stale MQTT states
-            # (e.g., FINISHED), but still allow real activity (PRINTING, EJECTING, PREPARE)
-            # to come through so the printer can transition when a job actually starts.
-            if (printer.get('manually_set', False) and current_state == 'READY'
-                    and new_state not in ['PRINTING', 'EJECTING', 'PREPARE', 'PAUSED']):
-                logging.debug(f"Bambu {printer_name}: preserving manually-set READY state (ignoring MQTT state {new_state})")
-                # Still update temperatures even when preserving manual state
-                if 'nozzle_temp' in bambu_state:
-                    printer['nozzle_temp'] = bambu_state['nozzle_temp']
-                if 'bed_temp' in bambu_state:
-                    printer['bed_temp'] = bambu_state['bed_temp']
-                continue
+            # (e.g., FINISHED, PREPARING after user cancel), but still allow real activity
+            # (PRINTING, EJECTING) when a new job actually starts.
+            if printer.get('manually_set', False) and current_state == 'READY':
+                pending_file = bambu_state.get('pending_print_file')
+                if new_state in ('PREPARING', 'PREPARE') and not pending_file:
+                    logging.debug(
+                        f"Bambu {printer_name}: preserving manually-set READY "
+                        f"(ignoring stale MQTT {new_state} after cancel)"
+                    )
+                    if 'nozzle_temp' in bambu_state:
+                        printer['nozzle_temp'] = bambu_state['nozzle_temp']
+                    if 'bed_temp' in bambu_state:
+                        printer['bed_temp'] = bambu_state['bed_temp']
+                    continue
+                if new_state not in ['PRINTING', 'PREPARING', 'EJECTING', 'PREPARE', 'PAUSED']:
+                    logging.debug(
+                        f"Bambu {printer_name}: preserving manually-set READY state "
+                        f"(ignoring MQTT state {new_state})"
+                    )
+                    if 'nozzle_temp' in bambu_state:
+                        printer['nozzle_temp'] = bambu_state['nozzle_temp']
+                    if 'bed_temp' in bambu_state:
+                        printer['bed_temp'] = bambu_state['bed_temp']
+                    continue
 
             # Update temperatures
             if 'nozzle_temp' in bambu_state:
@@ -91,7 +109,7 @@ def update_bambu_printer_states():
                 printer['bed_temp'] = bambu_state['bed_temp']
 
             # Update progress and time remaining for printing states
-            if new_state == 'PRINTING':
+            if new_state in ('PRINTING', 'PREPARING'):
                 if 'progress' in bambu_state:
                     printer['progress'] = bambu_state['progress']
                 if 'time_remaining' in bambu_state:
@@ -101,6 +119,72 @@ def update_bambu_printer_states():
                     printer['file'] = bambu_state['current_file']
                 elif 'file' in bambu_state:
                     printer['file'] = bambu_state['file']
+
+            # Count queue job as sent when the printer actually starts (RUNNING/PREPARE)
+            if (
+                new_state == 'PRINTING'
+                and printer.get('from_queue')
+                and printer.get('order_id')
+                and not printer.get('count_incremented_for_current_job')
+            ):
+                success_inc, _ = increment_queue_sent_count(printer['order_id'])
+                if success_inc:
+                    clear_queue_job_error(printer['order_id'])
+                    printer['count_incremented_for_current_job'] = True
+                    logging.info(
+                        f"Bambu {printer_name}: incremented sent for queue job "
+                        f"{printer['order_id']} on PRINTING"
+                    )
+                    filament_g = printer.get('filament_used_g', 0)
+                    if filament_g and printer.get('from_queue'):
+                        with SafeLock(filament_lock):
+                            old_total = TOTAL_FILAMENT_CONSUMPTION
+                            TOTAL_FILAMENT_CONSUMPTION += filament_g
+                            save_data(
+                                TOTAL_FILAMENT_FILE,
+                                {"total_filament_used_g": TOTAL_FILAMENT_CONSUMPTION},
+                            )
+                            logging.info(
+                                f"[FILAMENT TRACKING] Bambu {printer_name} RUNNING - "
+                                f"added {filament_g}g ({old_total}g -> {TOTAL_FILAMENT_CONSUMPTION}g)"
+                            )
+
+            # Ignore spurious FINISHED when the assigned job never started printing.
+            if (
+                new_state == 'FINISHED'
+                and not printer.get('count_incremented_for_current_job', False)
+            ):
+                if current_state == 'READY' and not printer.get('order_id'):
+                    if 'nozzle_temp' in bambu_state:
+                        printer['nozzle_temp'] = bambu_state['nozzle_temp']
+                    if 'bed_temp' in bambu_state:
+                        printer['bed_temp'] = bambu_state['bed_temp']
+                    continue
+
+                logging.warning(
+                    f"Bambu {printer_name}: ignoring FINISHED (job never reached RUNNING)"
+                )
+                clear_bambu_print_assignment(printer_name)
+                if bambu_state.get('error'):
+                    new_state = 'ERROR'
+                else:
+                    new_state = 'READY'
+                if printer.get('order_id'):
+                    rejection = bambu_state.get('last_print_rejection') or {}
+                    err_msg = rejection.get('detail') or bambu_state.get('error')
+                    if not err_msg:
+                        err_msg = 'Bambu job finished without reaching RUNNING'
+                    record_queue_job_error(
+                        printer['order_id'],
+                        err_msg,
+                        printer_name=printer_name,
+                        phase='bambu_never_running',
+                    )
+                    printer['order_id'] = None
+                    printer['file'] = None
+                    updates_made = True
+                printer['manually_set'] = True
+                printer['manual_timeout'] = time.time() + 3600
 
             # Handle state transitions
             # Don't overwrite FINISHED with READY when Bambu reports IDLE after completion.
@@ -116,7 +200,7 @@ def update_bambu_printer_states():
                     updates_made = True
 
                     # Clear manually_set when printer starts real activity
-                    if new_state in ['PRINTING', 'EJECTING', 'PREPARE'] and printer.get('manually_set', False):
+                    if new_state in ['PRINTING', 'PREPARING', 'EJECTING', 'PREPARE'] and printer.get('manually_set', False):
                         logging.info(f"Bambu {printer_name}: clearing manually_set flag on transition to {new_state}")
                         printer['manually_set'] = False
 
@@ -246,6 +330,20 @@ def _monitor_ejection_completion(printer, printer_index, printer_updates, start_
     if ejection_state['state'] == 'completed':
         ejection_complete = True
         completion_reason = "State manager shows completed"
+    elif printer_type == 'bambu':
+        try:
+            with bambu_states_lock:
+                if printer_name in BAMBU_PRINTER_STATES:
+                    bambu_state = BAMBU_PRINTER_STATES[printer_name]
+                    pending_m400 = bambu_state.get('ejection_m400_pending', 0)
+                    waiting_m400 = bambu_state.get('waiting_for_m400', False)
+                    if pending_m400 > 0 or waiting_m400:
+                        ejection_complete = False
+                    elif bambu_state.get('ejection_complete', False):
+                        ejection_complete = True
+                        completion_reason = "Bambu ejection_complete flag"
+        except Exception as e:
+            logging.error(f"Error checking Bambu ejection state for {printer_name}: {e}")
     elif api_state in ['IDLE', 'READY', 'OPERATIONAL']:
         ejection_complete = True
         completion_reason = f"API state = {api_state}"
@@ -258,19 +356,6 @@ def _monitor_ejection_completion(printer, printer_index, printer_updates, start_
         elif api_state == 'FINISHED':
             ejection_complete = True
             completion_reason = "Prusa API shows FINISHED after ejection"
-    elif printer_type == 'bambu':
-        try:
-            with bambu_states_lock:
-                if printer_name in BAMBU_PRINTER_STATES:
-                    bambu_state = BAMBU_PRINTER_STATES[printer_name]
-                    if bambu_state.get('ejection_complete', False):
-                        ejection_complete = True
-                        completion_reason = "Bambu ejection_complete flag"
-                    elif bambu_state.get('state', '') in ['IDLE', 'READY']:
-                        ejection_complete = True
-                        completion_reason = f"Bambu state = {bambu_state.get('state', '')}"
-        except Exception as e:
-            logging.error(f"Error checking Bambu ejection state for {printer_name}: {e}")
 
     if ejection_complete:
         logging.warning(f"EJECTION COMPLETE: {printer_name} transitioning from EJECTING to READY ({completion_reason})")
@@ -317,9 +402,11 @@ def _monitor_cooling_state(printer):
             order = next((o for o in ORDERS if o['id'] == cooldown_order_id), None)
 
         if order and order.get('ejection_enabled', False):
-            gcode_content = order.get('end_gcode', '').strip()
+            gcode_content, _ = resolve_ejection_gcode(order.get('ejection_code_id'))
+            if gcode_content:
+                gcode_content = gcode_content.strip()
             if not gcode_content:
-                gcode_content = "G28 X Y\nM84"
+                gcode_content = DEFAULT_EJECTION_GCODE
 
             printer.update({
                 "state": 'EJECTING', "status": 'Ejecting',
@@ -604,7 +691,7 @@ async def get_printer_status_async(socketio, app, batch_index=None, batch_size=N
                                         ejection_start_time=None, finish_time=None,
                                         count_incremented_for_current_job=False,
                                     ))
-                                    threading.Timer(2.0, lambda: start_background_distribution(socketio, app)).start()
+                                    os_timer(2.0, lambda: start_background_distribution(socketio, app))
                                 elif stored_state == 'EJECTING':
                                     logging.warning(f"IMPORTANT: Printer {printer['name']} completed ejection (API={api_state}), transitioning from EJECTING to READY")
                                     updates.update(_ready_update(
@@ -680,9 +767,7 @@ async def get_printer_status_async(socketio, app, batch_index=None, batch_size=N
         _apply_printer_updates(printer_updates)
 
         def start_bg_dist():
-            threading.Timer(
-                2.0, lambda: start_background_distribution(socketio, app)
-            ).start()
+            os_timer(2.0, lambda: start_background_distribution(socketio, app))
 
         for i, printer in enumerate(PRINTERS):
             if printer.get('state') == 'EJECTING':
@@ -709,7 +794,7 @@ async def get_printer_status_async(socketio, app, batch_index=None, batch_size=N
 
     if batch_index is not None:
         logging.debug(f"Emitting status_update with total_filament: {current_filament}kg")
-        socketio.emit('status_update', {
+        emit_status_update(socketio, app, {
             'printers': printers_copy,
             'total_filament': current_filament,
             'orders': current_orders

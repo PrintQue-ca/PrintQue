@@ -1,4 +1,6 @@
+export * from './useLibrary'
 export * from './useOrders'
 export * from './usePrinters'
+export * from './useQueue'
 export * from './useStats'
 export * from './useTheme'

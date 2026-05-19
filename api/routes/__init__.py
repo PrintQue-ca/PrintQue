@@ -14,15 +14,24 @@ from .orders import register_order_routes
 from .system import register_misc_routes
 from .history import register_history_routes
 from .ejection_codes import register_ejection_codes_routes
+from .library import register_library_routes
+from .queue import register_queue_routes
 from services.state import (
     get_ejection_paused, set_ejection_paused,
-    PRINTERS, ORDERS,
+    PRINTERS, ORDERS, QUEUE_JOBS, LIBRARY_ITEMS,
     printers_rwlock, orders_lock, filament_lock,
     ReadLock, WriteLock, SafeLock,
-    save_data, load_data, PRINTERS_FILE, ORDERS_FILE, TOTAL_FILAMENT_FILE,
-    encrypt_api_key, sanitize_group_name
+    save_data, load_data, PRINTERS_FILE, QUEUE_FILE, LIBRARY_FILE, TOTAL_FILAMENT_FILE,
+    encrypt_api_key, sanitize_group_name,
+    apply_ejection_fields_to_order, resolve_ejection_gcode,
+    resolve_order_ejection_code_id, auto_save_ejection_code,
 )
 from services.printer_manager import prepare_printer_data_for_broadcast, start_background_distribution, extract_filament_from_file
+from services.library_queue import (
+    normalize_library_item,
+    snapshot_queue_job_from_library,
+    _next_int_id,
+)
 from services.default_settings import load_default_settings, save_default_settings
 from utils.logger import debug_log
 
@@ -33,6 +42,8 @@ __all__ = [
     'register_misc_routes',
     'register_history_routes',
     'register_ejection_codes_routes',
+    'register_library_routes',
+    'register_queue_routes',
 ]
 
 def register_routes(app, socketio):
@@ -41,6 +52,8 @@ def register_routes(app, socketio):
     register_misc_routes(app, socketio)
     register_history_routes(app, socketio)
     register_ejection_codes_routes(app, socketio)
+    register_library_routes(app, socketio)
+    register_queue_routes(app, socketio)
 
     # Ejection control routes
     @app.route('/pause_ejection', methods=['POST'])
@@ -134,24 +147,21 @@ def register_routes(app, socketio):
                 idle_printers = len([p for p in PRINTERS if p['state'] == 'READY'])
 
             with SafeLock(orders_lock):
-                # Library count: total available files (non-deleted orders)
-                library_count = len([o for o in ORDERS if not o.get('deleted', False)])
-                # In queue: orders actively being printed (sent > 0 but not complete)
+                library_count = len([i for i in LIBRARY_ITEMS if not i.get('deleted', False)])
                 in_queue_count = len([
-                    o for o in ORDERS
-                    if not o.get('deleted', False)
-                    and o.get('sent', 0) > 0
-                    and o.get('sent', 0) < o.get('quantity', 1)
+                    j for j in QUEUE_JOBS
+                    if not j.get('deleted', False)
+                    and j.get('sent', 0) > 0
+                    and j.get('sent', 0) < j.get('quantity', 1)
                 ])
-                # Count orders completed today
                 from datetime import datetime
                 today = datetime.now().date()
                 completed_today = len([
-                    o for o in ORDERS
-                    if o.get('sent', 0) >= o.get('quantity', 1)
-                    and not o.get('deleted', False)
-                    and o.get('completed_at')
-                    and datetime.fromisoformat(o.get('completed_at', '').replace('Z', '+00:00')).date() == today
+                    j for j in QUEUE_JOBS
+                    if j.get('sent', 0) >= j.get('quantity', 1)
+                    and not j.get('deleted', False)
+                    and j.get('completed_at')
+                    and datetime.fromisoformat(j.get('completed_at', '').replace('Z', '+00:00')).date() == today
                 ])
 
             # Return flat structure matching frontend Stats type
@@ -346,11 +356,10 @@ def register_routes(app, socketio):
     def api_get_logs_path():
         """API: Get log directory and file paths for debugging"""
         try:
-            log_dir = app.config.get('LOG_DIR', '')
-            if not log_dir:
-                log_dir = os.path.join(os.path.expanduser("~"), "PrintQueData")
-            app_log = os.path.join(log_dir, 'app.log')
-            logs_subdir = os.path.join(log_dir, 'logs')
+            from utils.paths import get_data_dir, get_log_file, get_logs_dir
+            log_dir = app.config.get('LOG_DIR') or get_data_dir()
+            app_log = get_log_file()
+            logs_subdir = get_logs_dir()
             return jsonify({
                 'log_dir': log_dir,
                 'app_log': app_log,
@@ -369,10 +378,8 @@ def register_routes(app, socketio):
             from utils.logger import get_recent_logs
 
             # Include main app log (PrintQueData/app.log) + logger's recent logs (PrintQueData/logs/*)
-            log_dir = app.config.get('LOG_DIR', '')
-            if not log_dir:
-                log_dir = os.path.join(os.path.expanduser("~"), "PrintQueData")
-            app_log = os.path.join(log_dir, 'app.log')
+            from utils.paths import get_log_file
+            app_log = get_log_file()
 
             parts = []
             if os.path.exists(app_log):
@@ -707,8 +714,17 @@ def register_routes(app, socketio):
 
     @app.route('/api/v1/printers/<printer_name>/stop', methods=['POST'])
     def api_stop_printer(printer_name):
-        """API: Stop a print on a printer"""
-        # This would need async implementation - for now return a simple response
+        """API: Stop or cancel a print on a printer (including PREPARING)."""
+        from services.print_jobs import schedule_stop_print_by_name
+
+        result = schedule_stop_print_by_name(printer_name, socketio, app)
+        if result is False:
+            return jsonify({'success': False, 'error': 'Printer not found'}), 404
+        if result is None:
+            return jsonify({
+                'success': False,
+                'error': 'Printer is not printing, paused, or preparing',
+            }), 400
         return jsonify({'success': True, 'message': 'Stop command sent'})
 
     @app.route('/api/v1/printers/<printer_name>/pause', methods=['POST'])
@@ -727,7 +743,16 @@ def register_routes(app, socketio):
         """API: Get all orders"""
         try:
             with SafeLock(orders_lock):
-                orders_data = [o for o in ORDERS if not o.get('deleted', False)]
+                orders_data = []
+                for o in ORDERS:
+                    if o.get('deleted', False):
+                        continue
+                    order_copy = o.copy()
+                    if order_copy.get('ejection_code_id'):
+                        _, code_name = resolve_ejection_gcode(order_copy['ejection_code_id'])
+                        if code_name:
+                            order_copy['ejection_code_name'] = code_name
+                    orders_data.append(order_copy)
             return jsonify(orders_data)
         except Exception as e:
             logging.error(f"Error in api_get_orders: {str(e)}")
@@ -739,8 +764,8 @@ def register_routes(app, socketio):
         try:
             export_fields = [
                 'id', 'filename', 'filepath', 'name', 'quantity', 'groups',
-                'ejection_enabled', 'ejection_code_id', 'ejection_code_name',
-                'end_gcode', 'cooldown_temp', 'extra_data', 'filament_g'
+                'ejection_enabled', 'ejection_code_id',
+                'cooldown_temp', 'extra_data', 'filament_g'
             ]
             with SafeLock(orders_lock):
                 orders_data = []
@@ -753,6 +778,12 @@ def register_routes(app, socketio):
                     export_order.setdefault('filepath', '')
                     export_order.setdefault('quantity', 1)
                     export_order.setdefault('groups', ['Default'])
+                    # Include resolved G-code for portable exports
+                    if o.get('ejection_enabled') and o.get('ejection_code_id'):
+                        gcode, code_name = resolve_ejection_gcode(o['ejection_code_id'])
+                        if gcode:
+                            export_order['end_gcode'] = gcode
+                            export_order['ejection_code_name'] = code_name
                     orders_data.append(export_order)
             body = json.dumps(orders_data, indent=2)
             response = make_response(body)
@@ -824,22 +855,26 @@ def register_routes(app, socketio):
                                 'status': 'pending',
                                 'filament_g': order_data.get('filament_g', 0),
                                 'groups': groups,
-                                'ejection_enabled': bool(order_data.get('ejection_enabled', False)),
-                                'ejection_code_id': order_data.get('ejection_code_id'),
-                                'ejection_code_name': order_data.get('ejection_code_name'),
-                                'end_gcode': order_data.get('end_gcode') or '',
                                 'cooldown_temp': order_data.get('cooldown_temp'),
                                 'extra_data': order_data.get('extra_data') or {},
                                 'created_at': datetime.now().isoformat(),
                                 'from_new_orders': True,
                             }
+                            apply_ejection_fields_to_order(
+                                new_order,
+                                ejection_enabled=bool(order_data.get('ejection_enabled', False)),
+                                ejection_code_id=order_data.get('ejection_code_id'),
+                                end_gcode=order_data.get('end_gcode'),
+                                name_hint=filename or os.path.basename(filepath),
+                                default_settings=default_settings,
+                            )
                             ORDERS.append(new_order)
                             success_count += 1
                     except Exception as e:
                         failures.append({'row': idx + 1, 'error': str(e)})
 
                 with SafeLock(orders_lock):
-                    save_data(ORDERS_FILE, ORDERS)
+                    save_data(QUEUE_FILE, QUEUE_JOBS)
                 if success_count > 0:
                     start_background_distribution(socketio, app)
 
@@ -908,18 +943,21 @@ def register_routes(app, socketio):
                                 'status': 'pending',
                                 'filament_g': filament_g,
                                 'groups': printer_groups,
-                                'ejection_enabled': False,
-                                'end_gcode': default_settings.get('default_end_gcode', ''),
                                 'created_at': datetime.now().isoformat(),
                                 'from_new_orders': True,
                             }
+                            apply_ejection_fields_to_order(
+                                new_order,
+                                ejection_enabled=False,
+                                default_settings=default_settings,
+                            )
                             ORDERS.append(new_order)
                             success_count += 1
                     except Exception as e:
                         failures.append({'row': row_index, 'error': str(e)})
 
                 with SafeLock(orders_lock):
-                    save_data(ORDERS_FILE, ORDERS)
+                    save_data(QUEUE_FILE, QUEUE_JOBS)
                 if success_count > 0:
                     start_background_distribution(socketio, app)
 
@@ -972,9 +1010,8 @@ def register_routes(app, socketio):
 
             # Handle ejection settings
             ejection_enabled = request.form.get('ejection_enabled', 'false').lower() == 'true'
-            end_gcode = request.form.get('end_gcode', '').strip()
+            end_gcode = request.form.get('end_gcode', '').strip() or None
             ejection_code_id = request.form.get('ejection_code_id', '').strip() or None
-            ejection_code_name = request.form.get('ejection_code_name', '').strip() or None
 
             # Handle cooldown temperature (Bambu printers only)
             cooldown_temp_str = request.form.get('cooldown_temp', '').strip()
@@ -991,10 +1028,6 @@ def register_routes(app, socketio):
                     debug_log('cooldown', f"Could not parse cooldown_temp '{cooldown_temp_str}'", 'warning')
                     cooldown_temp = None  # Invalid value
 
-            # Use default if ejection enabled but no custom gcode provided
-            if ejection_enabled and not end_gcode:
-                end_gcode = default_settings.get('default_end_gcode', '')
-
             # Save file
             upload_folder = current_app.config.get('UPLOAD_FOLDER', 'uploads')
             os.makedirs(upload_folder, exist_ok=True)
@@ -1004,51 +1037,51 @@ def register_routes(app, socketio):
             # Extract filament usage
             filament_g = extract_filament_from_file(filepath)
 
+            now = datetime.now().isoformat()
+            queue_job_id = None
             with SafeLock(orders_lock):
-                # Find next available ID
-                existing_int_ids = []
-                for order in ORDERS:
-                    try:
-                        int_id = int(order['id'])
-                        existing_int_ids.append(int_id)
-                    except (ValueError, TypeError):
-                        pass
-
-                order_id = max(existing_int_ids, default=0) + 1
-
-                order = {
-                    'id': order_id,
+                library_id = _next_int_id(LIBRARY_ITEMS)
+                item = normalize_library_item({
+                    'id': library_id,
                     'filename': filename,
-                    'name': order_name if order_name else None,
+                    'name': order_name or None,
                     'filepath': filepath,
-                    'quantity': quantity,
-                    'sent': 0,
-                    'status': 'pending',
                     'filament_g': filament_g,
                     'groups': groups,
-                    'ejection_enabled': ejection_enabled,
-                    'ejection_code_id': ejection_code_id,
-                    'ejection_code_name': ejection_code_name,
-                    'end_gcode': end_gcode,
-                    'cooldown_temp': cooldown_temp,  # Bed temp to wait for before ejection (Bambu only)
-                    'from_new_orders': True
-                }
-                ORDERS.append(order)
-                save_data(ORDERS_FILE, ORDERS)
-                logging.info(f"Created order {order_id}: {order_name or filename}, qty={quantity}")
-                debug_log('cooldown', f"Order {order_id} created with cooldown_temp={cooldown_temp}")
+                    'cooldown_temp': cooldown_temp,
+                    'created_at': now,
+                    'updated_at': now,
+                })
+                apply_ejection_fields_to_order(
+                    item,
+                    ejection_enabled=ejection_enabled,
+                    ejection_code_id=ejection_code_id,
+                    end_gcode=end_gcode,
+                    name_hint=order_name or filename,
+                    default_settings=default_settings,
+                )
+                LIBRARY_ITEMS.append(item)
+                save_data(LIBRARY_FILE, LIBRARY_ITEMS)
 
-            # Trigger distribution
-            start_background_distribution(socketio, app)
+                if quantity > 0:
+                    queue_job_id = _next_int_id(QUEUE_JOBS)
+                    job = snapshot_queue_job_from_library(item, quantity, groups)
+                    job['id'] = queue_job_id
+                    QUEUE_JOBS.append(job)
+                    save_data(QUEUE_FILE, QUEUE_JOBS)
+
+            if quantity > 0:
+                start_background_distribution(socketio, app)
 
             message = (
-                'Order added to library (set quantity to start printing)' if quantity == 0
-                else f'Order created for {quantity} print(s) of {filename}'
+                'Added to library' if quantity == 0
+                else f'Enqueued {quantity} print(s) of {filename}'
             )
             return jsonify({
                 'success': True,
                 'message': message,
-                'order_id': order_id
+                'library_item_id': library_id,
+                'order_id': queue_job_id,
             })
 
         except Exception as e:
@@ -1077,13 +1110,18 @@ def register_routes(app, socketio):
                 for order in ORDERS:
                     if order.get('id') == order_id:
                         if 'quantity' in data:
-                            order['quantity'] = int(data['quantity'])
+                            new_qty = int(data['quantity'])
+                            if new_qty < order.get('sent', 0):
+                                return jsonify({
+                                    'error': f'Quantity cannot be less than {order["sent"]} (already sent)',
+                                }), 400
+                            order['quantity'] = new_qty
                             quantity_updated = True
                         if 'groups' in data:
                             order['groups'] = data['groups']
                         if 'name' in data:
                             order['name'] = data['name'].strip() if data['name'] else None
-                        save_data(ORDERS_FILE, ORDERS)
+                        save_data(QUEUE_FILE, QUEUE_JOBS)
                         if quantity_updated and order.get('quantity', 0) > 0:
                             start_background_distribution(socketio, app)
                         return jsonify({'success': True})
@@ -1099,7 +1137,7 @@ def register_routes(app, socketio):
                 for order in ORDERS:
                     if order.get('id') == order_id:
                         order['deleted'] = True
-                        save_data(ORDERS_FILE, ORDERS)
+                        save_data(QUEUE_FILE, QUEUE_JOBS)
                         return jsonify({'success': True, 'message': 'Order deleted'})
             return jsonify({'error': 'Order not found'}), 404
         except Exception as e:
@@ -1121,7 +1159,7 @@ def register_routes(app, socketio):
                         order['deleted'] = True
                         deleted_count += 1
                 if deleted_count > 0:
-                    save_data(ORDERS_FILE, ORDERS)
+                    save_data(QUEUE_FILE, QUEUE_JOBS)
             return jsonify({'success': True, 'deleted_count': deleted_count})
         except Exception as e:
             logging.error(f"Error in api_bulk_delete_orders: {str(e)}")
@@ -1132,21 +1170,89 @@ def register_routes(app, socketio):
         """API: Update order ejection settings"""
         try:
             data = request.get_json()
+
+            cooldown_provided = 'cooldown_temp' in data
+            cooldown_value = None
+            if cooldown_provided and data['cooldown_temp'] is not None:
+                raw = data['cooldown_temp']
+                # bool is a subclass of int; reject it explicitly
+                if isinstance(raw, bool) or not isinstance(raw, (int, float)):
+                    return jsonify({'error': 'cooldown_temp must be an integer between 0 and 100, or null'}), 400
+                try:
+                    cooldown_value = int(raw)
+                except (TypeError, ValueError):
+                    return jsonify({'error': 'cooldown_temp must be an integer between 0 and 100, or null'}), 400
+                if cooldown_value < 0 or cooldown_value > 100:
+                    return jsonify({'error': 'cooldown_temp must be between 0 and 100'}), 400
+
+            updated_order = None
             with SafeLock(orders_lock):
                 for order in ORDERS:
                     if order.get('id') == order_id:
+                        ejection_enabled = order.get('ejection_enabled', False)
                         if 'ejection_enabled' in data:
-                            order['ejection_enabled'] = bool(data['ejection_enabled'])
-                        if 'ejection_code_id' in data:
-                            order['ejection_code_id'] = data['ejection_code_id']
-                        if 'ejection_code_name' in data:
-                            order['ejection_code_name'] = data['ejection_code_name']
-                        if 'end_gcode' in data:
-                            order['end_gcode'] = data['end_gcode']
-                        save_data(ORDERS_FILE, ORDERS)
-                        logging.info(f"Updated ejection settings for order {order_id}: enabled={order.get('ejection_enabled')}, code={order.get('ejection_code_name')}")
-                        return jsonify({'success': True, 'order': order})
-            return jsonify({'error': 'Order not found'}), 404
+                            ejection_enabled = bool(data['ejection_enabled'])
+
+                        ejection_code_id = data.get('ejection_code_id', order.get('ejection_code_id'))
+                        end_gcode = data.get('end_gcode') if 'end_gcode' in data else None
+
+                        if ejection_enabled:
+                            if end_gcode is not None and str(end_gcode).strip():
+                                ejection_code_id = auto_save_ejection_code(
+                                    str(end_gcode).strip(),
+                                    name_hint=order.get('filename') or order.get('name') or 'Custom',
+                                )['id']
+                            elif 'ejection_code_id' in data:
+                                resolved = resolve_order_ejection_code_id(
+                                    ejection_code_id=ejection_code_id,
+                                    name_hint=order.get('filename') or 'Custom',
+                                )
+                                if resolved:
+                                    ejection_code_id = resolved
+
+                        apply_ejection_fields_to_order(
+                            order,
+                            ejection_enabled=ejection_enabled,
+                            ejection_code_id=ejection_code_id if ejection_enabled else None,
+                            end_gcode=end_gcode if ejection_enabled and end_gcode else None,
+                            name_hint=order.get('filename') or order.get('name') or 'Custom',
+                        )
+
+                        if cooldown_provided:
+                            order['cooldown_temp'] = cooldown_value
+                        save_data(QUEUE_FILE, QUEUE_JOBS)
+                        _, code_name = resolve_ejection_gcode(order.get('ejection_code_id'))
+                        logging.info(
+                            f"Updated ejection settings for order {order_id}: "
+                            f"enabled={order.get('ejection_enabled')}, code={code_name}, "
+                            f"cooldown_temp={order.get('cooldown_temp')}"
+                        )
+                        updated_order = order.copy()
+                        break
+
+            if updated_order is None:
+                return jsonify({'error': 'Order not found'}), 404
+
+            _, resolved_name = resolve_ejection_gcode(updated_order.get('ejection_code_id'))
+            if resolved_name:
+                updated_order['ejection_code_name'] = resolved_name
+
+            # Sync any printer currently COOLING for this order so the new
+            # target takes effect immediately (otherwise users must wait for
+            # the next poll cycle to pick up the change).
+            if cooldown_provided:
+                with WriteLock(printers_rwlock):
+                    for printer in PRINTERS:
+                        if printer.get('state') == 'COOLING' and printer.get('cooldown_order_id') == order_id:
+                            if cooldown_value is None:
+                                printer['cooldown_target_temp'] = None
+                                printer['cooldown_order_id'] = None
+                            else:
+                                printer['cooldown_target_temp'] = cooldown_value
+                            save_data(PRINTERS_FILE, PRINTERS)
+                            logging.info(f"Synced cooldown target on printer {printer.get('name')} for order {order_id}: cooldown_temp={cooldown_value}")
+
+            return jsonify({'success': True, 'order': updated_order})
         except Exception as e:
             logging.error(f"Error updating order ejection: {str(e)}")
             return jsonify({'error': str(e)}), 500
@@ -1174,7 +1280,7 @@ def register_routes(app, socketio):
                 elif direction == 'down' and order_index < len(ORDERS) - 1:
                     ORDERS[order_index], ORDERS[order_index + 1] = ORDERS[order_index + 1], ORDERS[order_index]
 
-                save_data(ORDERS_FILE, ORDERS)
+                save_data(QUEUE_FILE, QUEUE_JOBS)
 
             return jsonify({'success': True})
         except Exception as e:
@@ -1229,7 +1335,7 @@ def register_routes(app, socketio):
                     new_real_index = active_indices_after[new_index]
 
                 ORDERS.insert(new_real_index, order)
-                save_data(ORDERS_FILE, ORDERS)
+                save_data(QUEUE_FILE, QUEUE_JOBS)
 
             return jsonify({'success': True})
         except Exception as e:
@@ -1241,9 +1347,10 @@ def register_routes(app, socketio):
         """API: Get default ejection settings"""
         try:
             settings = load_default_settings()
+            code_id = settings.get('default_ejection_code_id')
             return jsonify({
                 'ejection_enabled': settings.get('default_ejection_enabled', False),
-                'end_gcode': settings.get('default_end_gcode', '')
+                'ejection_code_id': code_id,
             })
         except Exception as e:
             logging.error(f"Error getting default ejection settings: {str(e)}")
@@ -1255,23 +1362,32 @@ def register_routes(app, socketio):
         try:
             data = request.get_json()
 
-            # Load current settings
             current_settings = load_default_settings()
 
-            # Update settings
             if 'ejection_enabled' in data:
                 current_settings['default_ejection_enabled'] = bool(data['ejection_enabled'])
-            if 'end_gcode' in data:
-                current_settings['default_end_gcode'] = data['end_gcode'].strip()
 
-            # Save settings
+            if 'ejection_code_id' in data:
+                code_id = data['ejection_code_id']
+                current_settings['default_ejection_code_id'] = code_id if code_id else None
+                current_settings.pop('default_end_gcode', None)
+            elif 'end_gcode' in data and str(data['end_gcode']).strip():
+                code = auto_save_ejection_code(str(data['end_gcode']).strip(), 'Default')
+                current_settings['default_ejection_code_id'] = code['id']
+                current_settings.pop('default_end_gcode', None)
+
             success = save_default_settings(current_settings)
 
             if success:
-                logging.info(f"API: Saved default ejection settings: enabled={current_settings.get('default_ejection_enabled')}")
+                logging.info(
+                    f"API: Saved default ejection settings: enabled="
+                    f"{current_settings.get('default_ejection_enabled')}, "
+                    f"code_id={current_settings.get('default_ejection_code_id')}"
+                )
                 return jsonify({
                     'success': True,
-                    'message': 'Default ejection settings saved'
+                    'message': 'Default ejection settings saved',
+                    'ejection_code_id': current_settings.get('default_ejection_code_id'),
                 })
             else:
                 return jsonify({'error': 'Failed to save settings'}), 500

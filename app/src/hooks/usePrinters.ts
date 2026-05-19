@@ -81,9 +81,11 @@ export function useSendPrint() {
 export function useStopPrint() {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: (printerName: string) => api.post<ApiResponse>(`/printers/${printerName}/stop`),
+    mutationFn: (printerName: string) =>
+      api.post<ApiResponse>(`/printers/${encodeURIComponent(printerName)}/stop`),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['printers'] })
+      queryClient.invalidateQueries({ queryKey: ['queue'] })
     },
   })
 }

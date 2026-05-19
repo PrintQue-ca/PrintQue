@@ -10,8 +10,6 @@ from the following submodules:
 - order_distributor: Order distribution logic
 """
 import time
-import threading
-import asyncio
 
 from services.state import (
     PRINTERS, ORDERS, TOTAL_FILAMENT_CONSUMPTION,
@@ -19,6 +17,7 @@ from services.state import (
     SafeLock, ReadLock, reconcile_order_counts
 )
 from utils.config import Config
+from utils.socketio_emit import emit_status_update
 
 # Re-export from printer_utils
 from services.printer_utils import (
@@ -28,6 +27,8 @@ from services.printer_utils import (
     convert_mm_to_g,
     extract_filament_from_file,
     get_event_loop_for_thread,
+    run_async_in_thread,
+    spawn_os_thread,
     get_connection_pool,
     get_session,
     close_connection_pool,
@@ -118,8 +119,10 @@ def start_background_tasks(socketio, app):
             except Exception as e:
                 logging.error(f"Failed to connect Bambu printer {printer['name']}: {e}")
 
-    bambu_thread = threading.Thread(target=_connect_bambu_printers, daemon=True)
-    bambu_thread.start()
+    from services.bambu_handler import start_bambu_connection_maintenance
+
+    start_bambu_connection_maintenance()
+    spawn_os_thread(_connect_bambu_printers, daemon=True, name='BambuConnect')
 
     def schedule_status_polling():
         batch_index = 0
@@ -137,13 +140,9 @@ def start_background_tasks(socketio, app):
 
                 logging.debug(f"Processing batch {batch_index + 1}/{num_batches}")
 
-                try:
-                    loop = asyncio.get_event_loop()
-                except RuntimeError:
-                    loop = asyncio.new_event_loop()
-                    asyncio.set_event_loop(loop)
-
-                loop.run_until_complete(get_printer_status_async(socketio, app, batch_index, Config.STATUS_BATCH_SIZE))
+                run_async_in_thread(
+                    get_printer_status_async(socketio, app, batch_index, Config.STATUS_BATCH_SIZE)
+                )
 
                 batch_index = (batch_index + 1) % num_batches
                 time.sleep(Config.STATUS_REFRESH_INTERVAL)
@@ -152,9 +151,7 @@ def start_background_tasks(socketio, app):
                 logging.error(f"Error in status polling: {str(e)}")
                 time.sleep(Config.STATUS_REFRESH_INTERVAL)
 
-    status_thread = threading.Thread(target=schedule_status_polling)
-    status_thread.daemon = True
-    status_thread.start()
+    spawn_os_thread(schedule_status_polling, daemon=True, name='StatusPolling')
 
     def schedule_order_reconciliation():
         while True:
@@ -174,7 +171,7 @@ def start_background_tasks(socketio, app):
                     with ReadLock(printers_rwlock):
                         printers_copy = prepare_printer_data_for_broadcast(PRINTERS)
 
-                    socketio.emit('status_update', {
+                    emit_status_update(socketio, app, {
                         'printers': printers_copy,
                         'total_filament': total_filament,
                         'orders': orders_data
@@ -183,14 +180,14 @@ def start_background_tasks(socketio, app):
                 logging.error(f"Error in order reconciliation scheduler: {str(e)}")
                 time.sleep(300)
 
-    reconciliation_thread = threading.Thread(target=schedule_order_reconciliation)
-    reconciliation_thread.daemon = True
-    reconciliation_thread.start()
+    spawn_os_thread(schedule_order_reconciliation, daemon=True, name='OrderReconciliation')
 
     # Add periodic deduplication check
-    dedup_thread = threading.Thread(target=lambda: periodic_deduplication_check(socketio, app))
-    dedup_thread.daemon = True
-    dedup_thread.start()
+    spawn_os_thread(
+        lambda: periodic_deduplication_check(socketio, app),
+        daemon=True,
+        name='Deduplication',
+    )
 
     logging.debug("Background tasks started")
 
@@ -204,6 +201,8 @@ __all__ = [
     'convert_mm_to_g',
     'extract_filament_from_file',
     'get_event_loop_for_thread',
+    'run_async_in_thread',
+    'spawn_os_thread',
     'get_connection_pool',
     'get_session',
     'close_connection_pool',

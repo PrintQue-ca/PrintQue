@@ -129,6 +129,23 @@ class TestPreparePrinterDataForBroadcast:
         # status is overwritten to match state (raw value)
         assert result[0]['status'] == 'PRINTING'
 
+    @patch('utils.status_poller_helpers.BAMBU_PRINTER_STATES', {})
+    def test_preserves_order_id_and_queue_job_id(self):
+        from services.status_poller import prepare_printer_data_for_broadcast
+        result = prepare_printer_data_for_broadcast(
+            [make_printer(state='PRINTING', order_id=42)]
+        )[0]
+        assert result['order_id'] == 42
+        assert result['queue_job_id'] == 42
+
+    @patch('utils.status_poller_helpers.BAMBU_PRINTER_STATES', {})
+    def test_queue_job_id_from_cooldown_order_id(self):
+        from services.status_poller import prepare_printer_data_for_broadcast
+        result = prepare_printer_data_for_broadcast(
+            [make_printer(state='COOLING', order_id=None, cooldown_order_id=7)]
+        )[0]
+        assert result['queue_job_id'] == 7
+
     # -- print_stage / stage_detail for every state --
 
     @patch('utils.status_poller_helpers.BAMBU_PRINTER_STATES', {})
@@ -373,7 +390,14 @@ class TestUpdateBambuPrinterStates:
         mock_save.assert_not_called()
 
     def test_sets_finish_time_on_transition(self):
-        printers = [make_printer(name='B1', type='bambu', state='PRINTING')]
+        printers = [
+            make_printer(
+                name='B1',
+                type='bambu',
+                state='PRINTING',
+                count_incremented_for_current_job=True,
+            )
+        ]
         before = time.time()
         self._run(printers, {'B1': {'state': 'FINISHED', 'nozzle_temp': 200, 'bed_temp': 55}})
         after = time.time()
@@ -479,7 +503,7 @@ class TestStateTransitions:
              patch('services.status_poller.log_state_transition'), \
              patch('aiohttp.ClientSession',
                    return_value=self._make_session_mock(job_response)), \
-             patch('threading.Timer', return_value=MagicMock()):
+             patch('utils.threading_compat.os_timer', return_value=MagicMock()):
             await get_printer_status_async(
                 mock_socketio, mock_app, batch_index=0, batch_size=10
             )
@@ -527,7 +551,7 @@ class TestStateTransitions:
              patch('services.status_poller.log_state_transition'), \
              patch('aiohttp.ClientSession',
                    return_value=self._make_session_mock()), \
-             patch('threading.Timer', return_value=MagicMock()):
+             patch('utils.threading_compat.os_timer', return_value=MagicMock()):
             await get_printer_status_async(mock_sio, MagicMock(), batch_index=0, batch_size=10)
 
         assert printers[0]['state'] == 'OFFLINE'

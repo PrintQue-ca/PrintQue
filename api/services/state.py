@@ -2,51 +2,74 @@ from datetime import datetime
 import importlib.util
 import json
 import os
+import shutil
 import threading
 import logging
 import time
 from cryptography.fernet import Fernet
 from utils.config import Config
+from utils.paths import (
+    LazyPath,
+    get_data_dir,
+    get_ejection_codes_file,
+    get_ejection_paused_file,
+    get_library_file,
+    get_log_file,
+    get_orders_file,
+    get_printers_file,
+    get_print_history_file,
+    get_queue_file,
+    get_total_filament_file,
+    get_user_home_printque_dir,
+    get_backups_dir,
+)
+from services.library_queue import (
+    migrate_orders_to_library_and_queue,
+    normalize_library_item,
+    normalize_queue_job,
+)
 import copy
 import uuid
 import re
 from flask import current_app
+from utils.threading_compat import native_threading, spawn_os_daemon
 
-# Set up logging directory
-# Support DATA_DIR environment variable for test isolation
-LOG_DIR = os.path.join(os.getenv('DATA_DIR', os.path.expanduser("~")), "PrintQueData")
-os.makedirs(LOG_DIR, exist_ok=True)
-LOG_FILE = os.path.join(LOG_DIR, "app.log")
+_threading = native_threading()
+
+# Lazy paths — resolved on each use so DATA_DIR / test isolation stays correct
+LOG_DIR = LazyPath(get_data_dir)
+LOG_FILE = LazyPath(get_log_file)
+USER_DATA_DIR = LOG_DIR
+PRINTERS_FILE = LazyPath(get_printers_file)
+TOTAL_FILAMENT_FILE = LazyPath(get_total_filament_file)
+ORDERS_FILE = LazyPath(get_orders_file)
+LIBRARY_FILE = LazyPath(get_library_file)
+QUEUE_FILE = LazyPath(get_queue_file)
+EJECTION_CODES_FILE = LazyPath(get_ejection_codes_file)
 
 # Note: Main logging configuration is done in app.py to support dynamic log levels
-# This module just ensures the logging directory exists and gets a logger instance
 logger = logging.getLogger(__name__)
-
-# File paths (moved to writable directory)
-USER_DATA_DIR = LOG_DIR  # Use the same directory for consistency
-PRINTERS_FILE = os.path.join(LOG_DIR, "printers.json")
-TOTAL_FILAMENT_FILE = os.path.join(LOG_DIR, "total_filament.json")
-ORDERS_FILE = os.path.join(LOG_DIR, "orders.json")
-EJECTION_CODES_FILE = os.path.join(LOG_DIR, "ejection_codes.json")
 
 # Global state variables
 PRINTERS = []
 TOTAL_FILAMENT_CONSUMPTION = 0
-ORDERS = []
+LIBRARY_ITEMS = []
+QUEUE_JOBS = []
+ORDERS = QUEUE_JOBS  # Backward-compatible alias for print queue
 EJECTION_CODES = []  # List of stored ejection code presets
 _STATE_INITIALIZED = False  # ← ADDED THIS LINE
 
 # Global ejection control
 EJECTION_PAUSED = False
-EJECTION_PAUSED_FILE = os.path.join(USER_DATA_DIR, "ejection_paused.json")
+EJECTION_PAUSED_FILE = LazyPath(get_ejection_paused_file)
 
 # Enhanced ejection state tracking
 EJECTION_STATES = {}  # Track ejection state per printer
-EJECTION_STATES_LOCK = threading.Lock()
+EJECTION_STATES_LOCK = _threading.Lock()
 
 # Ejection locks for each printer
 EJECTION_LOCKS = {}
-EJECTION_LOCKS_LOCK = threading.Lock()
+EJECTION_LOCKS_LOCK = _threading.Lock()
 
 # Task tracking
 TASKS = {}
@@ -98,13 +121,13 @@ LOCK_ACQUISITION_ORDER = {
 
 class NamedLock:
     def __init__(self, name=None):
-        self._lock = threading.RLock()
+        self._lock = _threading.RLock()
         self.name = name or str(id(self._lock))
         self._owner = None
         self._acquire_time = None
 
     def acquire(self, timeout=None):
-        current_thread = threading.get_ident()
+        current_thread = _threading.get_ident()
         if self._owner == current_thread:
             logging.warning(f"Thread {current_thread} attempting to re-acquire lock {self.name} it already holds")
             return True
@@ -149,8 +172,8 @@ class SafeLock:
     def __enter__(self):
         logging.debug(f"Acquiring lock {self.name}")
         self.start_time = time.time()
-        self.thread_id = threading.get_ident()
-        self.thread_name = threading.current_thread().name
+        self.thread_id = _threading.get_ident()
+        self.thread_name = _threading.current_thread().name
 
         logging.debug(f"Thread {self.thread_name} (ID: {self.thread_id}) is trying to acquire {self.name}")
 
@@ -166,7 +189,7 @@ class SafeLock:
                 raise TimeoutError(f"Lock acquisition timed out for {self.name}")
 
         with lock_owners_lock:
-            thread_id = threading.get_ident()
+            thread_id = _threading.get_ident()
             lock_owners[self.name] = thread_id
 
         duration = time.time() - self.start_time
@@ -213,7 +236,7 @@ class SafeLock:
 
 class ReadWriteLock:
     def __init__(self, name=None):
-        self._read_ready = threading.Condition(threading.Lock())
+        self._read_ready = _threading.Condition(_threading.Lock())
         self._readers = 0
         self._writers = 0
         self.name = name or str(id(self))
@@ -513,17 +536,87 @@ def decrypt_api_key(encrypted_api_key):
         )
         return None
 
-def save_data(filename, data):
+def _resolve_path(filename) -> str:
+    return os.fspath(filename)
+
+
+def _assert_safe_write_path(filename) -> None:
+    """Block pytest from writing to real ~/PrintQueData if paths were bound too early."""
+    if not os.environ.get('PYTEST_CURRENT_TEST'):
+        return
+    path = _resolve_path(filename)
     try:
-        with open(filename, 'w', encoding='utf-8') as f:
+        real_home = os.path.normcase(os.path.realpath(get_user_home_printque_dir()))
+        path_norm = os.path.normcase(os.path.realpath(path))
+        data_norm = os.path.normcase(os.path.realpath(get_data_dir()))
+    except OSError:
+        return
+    if path_norm.startswith(real_home) and not path_norm.startswith(data_norm):
+        raise RuntimeError(
+            f"Refusing to write {path} during tests: path is under real user data "
+            f"({real_home}) but tests must only write under {data_norm}. "
+            f"Ensure DATA_DIR is set in api/tests/conftest.py before importing services.state."
+        )
+
+
+def backup_data_files_before_migration(*filenames: str) -> str | None:
+    """Copy data files to PrintQueData/backups/{timestamp}/ before a migration write."""
+    if not filenames:
+        return None
+    stamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    backup_dir = os.path.join(get_backups_dir(), f'migration_{stamp}')
+    os.makedirs(backup_dir, exist_ok=True)
+    data_dir = get_data_dir()
+    for name in filenames:
+        src = os.path.join(data_dir, name)
+        if os.path.exists(src):
+            shutil.copy2(src, os.path.join(backup_dir, name))
+    logging.info("Pre-migration backup saved to %s", backup_dir)
+    return backup_dir
+
+
+def _should_skip_empty_printers_save(path: str, data) -> bool:
+    """Refuse to overwrite a populated printers.json with an empty list."""
+    printers_path = os.path.normcase(os.path.realpath(os.fspath(PRINTERS_FILE)))
+    path_norm = os.path.normcase(os.path.realpath(path))
+    if path_norm != printers_path:
+        return False
+    if data != []:
+        return False
+    if not os.path.exists(path):
+        return False
+    try:
+        with open(path, encoding='utf-8') as f:
+            existing = json.load(f)
+    except (json.JSONDecodeError, OSError) as e:
+        logger.warning("Could not read existing printers file %s: %s", path, e)
+        return False
+    if isinstance(existing, list) and len(existing) > 0:
+        logger.error(
+            "Refusing to save empty printers list over %d existing printer(s) in %s",
+            len(existing),
+            path,
+        )
+        return True
+    return False
+
+
+def save_data(filename, data, *, allow_empty_printers=False):
+    _assert_safe_write_path(filename)
+    path = _resolve_path(filename)
+    if not allow_empty_printers and _should_skip_empty_printers_save(path, data):
+        return
+    try:
+        with open(path, 'w', encoding='utf-8') as f:
             json.dump(data, f, indent=4, ensure_ascii=False)
-        logger.debug(f"Saved data to {filename}")
+        logger.debug(f"Saved data to {path}")
     except Exception as e:
-        logger.error(f"Failed to save data to {filename}: {str(e)}")
+        logger.error(f"Failed to save data to {path}: {str(e)}")
 
 def load_data(filename, default_value):
-    bundle_path = os.path.join(os.path.dirname(__file__), os.path.basename(filename))
-    path = filename if os.path.exists(filename) else bundle_path
+    path = _resolve_path(filename)
+    bundle_path = os.path.join(os.path.dirname(__file__), os.path.basename(path))
+    path = path if os.path.exists(path) else bundle_path
     if os.path.exists(path):
         try:
             with open(path, 'r', encoding='utf-8') as f:
@@ -586,6 +679,193 @@ def validate_ejection_file(file):
     return False, "Invalid file format. Please use .gcode, .txt, .gc, .nc, or .bgcode files"
 
 
+DEFAULT_EJECTION_GCODE = "G28 X Y\nM84"
+
+
+def _normalize_gcode_for_compare(gcode):
+    """Normalize G-code for deduplication (strip comments/whitespace)."""
+    if not gcode:
+        return ''
+    lines = []
+    for line in gcode.strip().split('\n'):
+        stripped = line.split(';')[0].strip()
+        if stripped:
+            lines.append(stripped.upper())
+    return '\n'.join(lines)
+
+
+def resolve_ejection_gcode(ejection_code_id):
+    """Resolve ejection code ID to G-code content. Returns (gcode, name) or (None, None)."""
+    if not ejection_code_id:
+        return None, None
+    with SafeLock(ejection_codes_lock):
+        for code in EJECTION_CODES:
+            if code['id'] == ejection_code_id:
+                return code.get('gcode', ''), code.get('name', '')
+    return None, None
+
+
+def auto_save_ejection_code(gcode_content, name_hint="Custom"):
+    """Auto-save custom G-code as a preset. Deduplicates by content. Returns the code dict."""
+    gcode_content = (gcode_content or '').strip()
+    if not gcode_content:
+        raise ValueError("G-code content is required")
+
+    normalized = _normalize_gcode_for_compare(gcode_content)
+
+    with SafeLock(ejection_codes_lock):
+        for existing in EJECTION_CODES:
+            if _normalize_gcode_for_compare(existing.get('gcode', '')) == normalized:
+                return existing.copy()
+
+        base_name = (name_hint or 'Custom').strip() or 'Custom'
+        name = base_name
+        suffix = 1
+        existing_names = {c['name'].lower() for c in EJECTION_CODES}
+        while name.lower() in existing_names:
+            suffix += 1
+            name = f"{base_name} ({suffix})"
+
+        new_code = {
+            'id': str(uuid.uuid4()),
+            'name': name,
+            'gcode': gcode_content,
+            'created_at': datetime.now().isoformat(),
+        }
+        EJECTION_CODES.append(new_code)
+        save_data(EJECTION_CODES_FILE, EJECTION_CODES)
+        logger.info(f"Auto-saved ejection code: {name} (ID: {new_code['id']})")
+        return new_code.copy()
+
+
+def resolve_order_ejection_code_id(ejection_code_id=None, end_gcode=None, name_hint="Custom", default_settings=None):
+    """Resolve the ejection_code_id to store on an order when ejection is enabled."""
+    if ejection_code_id and ejection_code_id not in ('default', 'custom'):
+        gcode, _ = resolve_ejection_gcode(ejection_code_id)
+        if gcode:
+            return ejection_code_id
+
+    if ejection_code_id == 'default' and default_settings:
+        default_id = default_settings.get('default_ejection_code_id')
+        if default_id:
+            gcode, _ = resolve_ejection_gcode(default_id)
+            if gcode:
+                return default_id
+        legacy_gcode = (default_settings.get('default_end_gcode') or '').strip()
+        if legacy_gcode:
+            return auto_save_ejection_code(legacy_gcode, 'Default')['id']
+
+    if end_gcode and end_gcode.strip():
+        return auto_save_ejection_code(end_gcode.strip(), name_hint)['id']
+
+    if default_settings:
+        default_id = default_settings.get('default_ejection_code_id')
+        if default_id:
+            gcode, _ = resolve_ejection_gcode(default_id)
+            if gcode:
+                return default_id
+        legacy_gcode = (default_settings.get('default_end_gcode') or '').strip()
+        if legacy_gcode:
+            return auto_save_ejection_code(legacy_gcode, 'Default')['id']
+
+    return None
+
+
+def apply_ejection_fields_to_order(order, ejection_enabled, ejection_code_id=None, end_gcode=None,
+                                   name_hint="Custom", default_settings=None):
+    """Set ejection fields on an order dict (ID reference only, no embedded G-code)."""
+    order['ejection_enabled'] = bool(ejection_enabled)
+    order.pop('end_gcode', None)
+    order.pop('ejection_code_name', None)
+
+    if not ejection_enabled:
+        order.pop('ejection_code_id', None)
+        return
+
+    resolved_id = resolve_order_ejection_code_id(
+        ejection_code_id=ejection_code_id,
+        end_gcode=end_gcode,
+        name_hint=name_hint,
+        default_settings=default_settings,
+    )
+    if resolved_id:
+        order['ejection_code_id'] = resolved_id
+    else:
+        order.pop('ejection_code_id', None)
+
+
+def _migrate_ejection_fields_on_items(items):
+    migrated = False
+    for order in items:
+            legacy_gcode = (order.pop('end_gcode', None) or '').strip()
+            order.pop('ejection_code_name', None)
+
+            if not order.get('ejection_enabled'):
+                continue
+
+            existing_id = order.get('ejection_code_id')
+            if existing_id:
+                gcode, _ = resolve_ejection_gcode(existing_id)
+                if gcode:
+                    migrated = True
+                    continue
+                if legacy_gcode:
+                    order['ejection_code_id'] = auto_save_ejection_code(
+                        legacy_gcode,
+                        name_hint=order.get('filename') or order.get('name') or 'Custom',
+                    )['id']
+                    migrated = True
+                    continue
+
+            if legacy_gcode:
+                order['ejection_code_id'] = auto_save_ejection_code(
+                    legacy_gcode,
+                    name_hint=order.get('filename') or order.get('name') or 'Custom',
+                )['id']
+                migrated = True
+    return migrated
+
+
+def migrate_legacy_order_ejection_fields():
+    """Convert orders with embedded end_gcode to ejection_code_id references."""
+    migrated = False
+    with SafeLock(orders_lock):
+        all_items = LIBRARY_ITEMS + QUEUE_JOBS
+        needs_backup = any(
+            order.get('ejection_enabled')
+            and (order.get('end_gcode') or '').strip()
+            for order in all_items
+        )
+        if needs_backup:
+            backup_data_files_before_migration(
+                'library.json', 'queue.json', 'orders.json', 'ejection_codes.json'
+            )
+
+        if _migrate_ejection_fields_on_items(LIBRARY_ITEMS):
+            migrated = True
+        if _migrate_ejection_fields_on_items(QUEUE_JOBS):
+            migrated = True
+
+        if migrated:
+            save_data(LIBRARY_FILE, LIBRARY_ITEMS)
+            save_data(QUEUE_FILE, QUEUE_JOBS)
+            logger.info("Migrated legacy ejection fields to ejection_code_id references")
+
+    return migrated
+
+
+def count_orders_using_ejection_code(ejection_code_id):
+    """Count non-deleted library/queue items referencing an ejection code."""
+    count = 0
+    with SafeLock(orders_lock):
+        for order in LIBRARY_ITEMS + QUEUE_JOBS:
+            if order.get('deleted'):
+                continue
+            if order.get('ejection_code_id') == ejection_code_id:
+                count += 1
+    return count
+
+
 def get_order_lock(order_id):
     with SafeLock(order_locks_lock):
         if order_id not in order_locks:
@@ -596,7 +876,7 @@ def get_order_lock(order_id):
 def clean_order_locks():
     with SafeLock(order_locks_lock):
         with SafeLock(orders_lock):
-            active_order_ids = {o['id'] for o in ORDERS}
+            active_order_ids = {o['id'] for o in QUEUE_JOBS}
             for order_id in list(order_locks.keys()):
                 if order_id not in active_order_ids:
                     del order_locks[order_id]
@@ -604,8 +884,7 @@ def clean_order_locks():
 def save_order_to_history_direct(order):
     """Direct method to save completed order to history when Flask context is not available"""
     try:
-        # Use the global LOG_DIR constant
-        history_file = os.path.join(LOG_DIR, 'print_history.json')
+        history_file = get_print_history_file()
 
         # Ensure the directory exists
         os.makedirs(os.path.dirname(history_file), exist_ok=True)
@@ -648,85 +927,94 @@ def save_order_to_history_direct(order):
     except Exception as e:
         logging.error(f"Error saving order to history directly: {e}")
 
-def increment_order_sent_count(order_id, increment=1):
+def increment_queue_sent_count(job_id, increment=1):
     """
-    Atomically increment the 'sent' count for an order.
-    NO LONGER automatically marks as completed when quantity is reached.
-    Returns (success, updated_order) tuple.
+    Atomically increment the 'sent' count for a queue job.
+    Returns (success, updated_job) tuple.
     """
     with SafeLock(orders_lock):
         start_time = time.time()
         current_thread = threading.current_thread().name
         thread_id = threading.get_ident()
-        logging.debug(f"Thread {current_thread} (ID: {thread_id}) beginning increment_order_sent_count for order {order_id}")
+        logging.debug(
+            f"Thread {current_thread} (ID: {thread_id}) beginning increment_queue_sent_count for job {job_id}"
+        )
 
-        # Copy the current orders list for verification purposes
-        orders_before = copy.deepcopy(ORDERS)
+        jobs_before = copy.deepcopy(QUEUE_JOBS)
 
-        for i, order in enumerate(ORDERS):
-            if order['id'] == order_id:
+        for i, order in enumerate(QUEUE_JOBS):
+            if order['id'] == job_id:
                 previous_sent = order['sent']
 
-                # Additional check to prevent over-counting - but don't stop incrementing
                 if previous_sent >= order['quantity']:
-                    logging.info(f"Order {order_id} has sent count {previous_sent} >= quantity {order['quantity']}, but still incrementing as requested")
+                    logging.info(
+                        f"Queue job {job_id} has sent count {previous_sent} >= quantity "
+                        f"{order['quantity']}, but still incrementing as requested"
+                    )
 
-                # Verify no other thread has modified this order since we started the function
-                if i < len(orders_before) and orders_before[i]['id'] == order_id and orders_before[i]['sent'] != previous_sent:
-                    logging.warning(f"Order {order_id} sent count changed during processing from {orders_before[i]['sent']} to {previous_sent}, not incrementing")
-                    return False, ORDERS[i].copy()
+                if (
+                    i < len(jobs_before)
+                    and jobs_before[i]['id'] == job_id
+                    and jobs_before[i]['sent'] != previous_sent
+                ):
+                    logging.warning(
+                        f"Queue job {job_id} sent count changed during processing from "
+                        f"{jobs_before[i]['sent']} to {previous_sent}, not incrementing"
+                    )
+                    return False, QUEUE_JOBS[i].copy()
 
-                # Increment without capping at quantity - allow over-fulfillment
                 order['sent'] = previous_sent + increment
 
-                # Update status to show fulfillment progress but DON'T mark as completed
                 if order['sent'] >= order['quantity']:
-                    # Change status to 'fulfilled' instead of 'completed' to keep it visible
                     order['status'] = 'fulfilled'
-                    # Still add completed_at timestamp for history tracking
                     if 'completed_at' not in order:
                         order['completed_at'] = datetime.now().isoformat()
-                    logging.info(f"Order {order_id} fulfilled (sent={order['sent']}, quantity={order['quantity']}) but keeping in active orders")
+                    logging.info(
+                        f"Queue job {job_id} fulfilled (sent={order['sent']}, quantity={order['quantity']})"
+                    )
                 elif order['sent'] > 0:
                     order['status'] = 'partial'
 
-                save_data(ORDERS_FILE, ORDERS)
-                logging.debug(f"Saved ORDERS_FILE after increment for order {order_id} to {order['sent']}")
+                save_data(QUEUE_FILE, QUEUE_JOBS)
+                logging.debug(f"Saved QUEUE_FILE after increment for job {job_id} to {order['sent']}")
 
-                # Save to history when order reaches or exceeds quantity
                 if order['sent'] >= order['quantity']:
                     try:
-                        # Try to call the save_completed_order_to_history function if it exists
                         if hasattr(current_app, 'save_completed_order_to_history'):
-                            current_app.save_completed_order_to_history(ORDERS[i])
-                            logging.info(f"Saved fulfilled order {order_id} to history via Flask app")
+                            current_app.save_completed_order_to_history(QUEUE_JOBS[i])
+                            logging.info(f"Saved fulfilled queue job {job_id} to history via Flask app")
                         else:
-                            # Flask app exists but function not attached
-                            logging.debug("Flask app found but save_completed_order_to_history not available, using direct method")
-                            save_order_to_history_direct(ORDERS[i])
+                            save_order_to_history_direct(QUEUE_JOBS[i])
                     except RuntimeError as e:
-                        # Specifically catch "working outside of application context" error
                         if "application context" in str(e):
                             logging.debug("Not in Flask context, saving directly")
                         else:
                             logging.debug(f"Flask runtime error, saving directly: {e}")
-                        save_order_to_history_direct(ORDERS[i])
+                        save_order_to_history_direct(QUEUE_JOBS[i])
                     except Exception as e:
-                        # Other errors
                         logging.debug(f"Could not use Flask app function, saving directly: {e}")
-                        save_order_to_history_direct(ORDERS[i])
+                        save_order_to_history_direct(QUEUE_JOBS[i])
 
                 elapsed = time.time() - start_time
-                logging.debug(f"Thread {current_thread} completed order {order_id} increment operation in {elapsed:.4f}s (new sent={order['sent']})")
-                return True, ORDERS[i].copy()
+                logging.debug(
+                    f"Thread {current_thread} completed queue job {job_id} increment in "
+                    f"{elapsed:.4f}s (new sent={order['sent']})"
+                )
+                return True, QUEUE_JOBS[i].copy()
 
-        logging.error(f"Failed to increment order {order_id}: order not found in {len(ORDERS)} orders")
+        logging.error(f"Failed to increment queue job {job_id}: not found in {len(QUEUE_JOBS)} jobs")
         return False, None
+
+
+def increment_order_sent_count(order_id, increment=1):
+    """Backward-compatible alias for increment_queue_sent_count."""
+    return increment_queue_sent_count(order_id, increment)
+
 
 def _do_reset_order_counts():
     """Internal function to do the actual reset work"""
     corrections = 0
-    for order in ORDERS:
+    for order in QUEUE_JOBS:
         if 'sent' in order and 'quantity' in order and order['sent'] > order['quantity']:
             logging.warning(f"Fixing order {order.get('id', 'unknown')} with sent count {order['sent']} > quantity {order['quantity']}")
             order['sent'] = order['quantity']
@@ -735,8 +1023,8 @@ def _do_reset_order_counts():
             corrections += 1
 
     if corrections > 0:
-        save_data(ORDERS_FILE, ORDERS)
-        logging.info(f"Fixed {corrections} orders with excessive sent counts")
+        save_data(QUEUE_FILE, QUEUE_JOBS)
+        logging.info(f"Fixed {corrections} queue jobs with excessive sent counts")
 
     return corrections
 
@@ -803,7 +1091,7 @@ def reconcile_order_counts():
 
     # Get all active orders
     with SafeLock(orders_lock):
-        active_orders = [o for o in ORDERS if o['status'] != 'completed']
+        active_orders = [o for o in QUEUE_JOBS if o['status'] != 'completed']
         if not active_orders:
             logging.debug("No active orders to reconcile")
             return 0, []
@@ -823,7 +1111,7 @@ def reconcile_order_counts():
 
     # Compare with the recorded sent counts
     with SafeLock(orders_lock):
-        for order in ORDERS:
+        for order in QUEUE_JOBS:
             if order['id'] in order_print_count:
                 actual_count = order_print_count[order['id']]
                 max_count = order['quantity']
@@ -832,14 +1120,14 @@ def reconcile_order_counts():
                 if order['sent'] < actual_count and actual_count <= max_count:
                     old_count = order['sent']
                     order['sent'] = actual_count
-                    logging.warning(f"Order {order['id']} has sent count {old_count} but {actual_count} actual prints found. Increasing count.")
+                    logging.warning(f"Queue job {order['id']} has sent count {old_count} but {actual_count} actual prints found. Increasing count.")
                     corrections += 1
                     changed_orders.append(order['id'])
                 elif actual_count > max_count:
-                    logging.error(f"Order {order['id']} has {actual_count} actual prints but quantity is only {max_count}. This suggests a synchronization issue.")
+                    logging.error(f"Queue job {order['id']} has {actual_count} actual prints but quantity is only {max_count}. This suggests a synchronization issue.")
 
         if corrections > 0:
-            save_data(ORDERS_FILE, ORDERS)
+            save_data(QUEUE_FILE, QUEUE_JOBS)
             logging.info(f"Corrected {corrections} order counts during reconciliation")
 
     return corrections, changed_orders
@@ -975,9 +1263,39 @@ def reap_threads():
             logging.error(f"Error in thread reaper: {e}")
             time.sleep(60)
 
+def _load_library_and_queue():
+    """Load or migrate library.json and queue.json."""
+    library_path = str(LIBRARY_FILE)
+    queue_path = str(QUEUE_FILE)
+    orders_path = str(ORDERS_FILE)
+
+    if not os.path.exists(library_path) and not os.path.exists(queue_path) and os.path.exists(orders_path):
+        legacy_orders = load_data(ORDERS_FILE, [])
+        migrate_orders_to_library_and_queue(
+            legacy_orders,
+            LIBRARY_ITEMS,
+            QUEUE_JOBS,
+            backup_data_files_before_migration,
+        )
+        save_data(LIBRARY_FILE, LIBRARY_ITEMS)
+        save_data(QUEUE_FILE, QUEUE_JOBS)
+        logger.info(
+            f"Migrated {len(legacy_orders)} legacy orders to "
+            f"{len(LIBRARY_ITEMS)} library items and {len(QUEUE_JOBS)} queue jobs"
+        )
+    else:
+        LIBRARY_ITEMS.extend(load_data(LIBRARY_FILE, []))
+        QUEUE_JOBS.extend(load_data(QUEUE_FILE, []))
+
+    for item in LIBRARY_ITEMS:
+        normalize_library_item(item)
+    for job in QUEUE_JOBS:
+        normalize_queue_job(job)
+
+
 def initialize_state():
     """Initialize application state from disk"""
-    global PRINTERS, ORDERS, TOTAL_FILAMENT_CONSUMPTION, EJECTION_PAUSED, EJECTION_CODES, _STATE_INITIALIZED        # CRITICAL: Prevent re-initialization to avoid duplicates
+    global PRINTERS, TOTAL_FILAMENT_CONSUMPTION, EJECTION_PAUSED, EJECTION_CODES, _STATE_INITIALIZED
     if _STATE_INITIALIZED:
         logging.warning("⚠️ BLOCKED RE-INITIALIZATION - State already loaded. This prevents duplicates.")
         return
@@ -988,31 +1306,7 @@ def initialize_state():
         TOTAL_FILAMENT_CONSUMPTION = filament_data.get("total_filament_used_g", 0)
 
     with SafeLock(orders_lock):
-        ORDERS.extend(load_data(ORDERS_FILE, []))
-        for order in ORDERS:
-            # Handle groups - keep them flexible (can be strings or integers)
-            if 'groups' in order:
-                processed_groups = []
-                for g in order['groups']:
-                    try:
-                        # Try to convert to int if it's a numeric string
-                        processed_groups.append(int(g))
-                    except (ValueError, TypeError):
-                        # Keep string groups as-is
-                        logger.warning(f"Order {order.get('id', 'unknown')} has non-numeric group: {g}")
-                        processed_groups.append(g)
-                order['groups'] = processed_groups
-
-            if 'sent' not in order:
-                order['sent'] = 0
-            if 'status' not in order:
-                order['status'] = 'pending'
-            if 'filament_g' not in order:
-                order['filament_g'] = 0
-            if 'deleted' not in order:
-                order['deleted'] = False
-
-        # Fix any incorrect order counts - pass True to indicate we're already inside the lock
+        _load_library_and_queue()
         try:
             reset_order_counts(inside_lock=True)
         except Exception as e:
@@ -1048,13 +1342,19 @@ def initialize_state():
         EJECTION_CODES.extend(load_data(EJECTION_CODES_FILE, []))
         logger.debug(f"Loaded {len(EJECTION_CODES)} ejection codes")
 
+    migrate_legacy_order_ejection_fields()
+
     # Clean up all ejection states on startup
     cleanup_all_ejection_states()
 
     # Emergency reset on startup
     reset_all_ejection_states()
 
-    logger.debug(f"State initialized: {len(PRINTERS)} printers, {len(ORDERS)} orders, {len(EJECTION_CODES)} ejection codes, {TOTAL_FILAMENT_CONSUMPTION}g filament, ejection_paused={EJECTION_PAUSED}")
+    logger.debug(
+        f"State initialized: {len(PRINTERS)} printers, {len(LIBRARY_ITEMS)} library items, "
+        f"{len(QUEUE_JOBS)} queue jobs, {len(EJECTION_CODES)} ejection codes, "
+        f"{TOTAL_FILAMENT_CONSUMPTION}g filament, ejection_paused={EJECTION_PAUSED}"
+    )
 
     # NOTE: Bambu connections are deferred to start_background_tasks()
     # so they don't block the server from starting up.
@@ -1130,15 +1430,15 @@ def validate_ejection_system():
 
     return issues
 
-# Start background threads
-threading.Thread(target=monitor_locks, daemon=True).start()
+# Start background threads on real OS threads (eventlet patches threading.Thread)
+spawn_os_daemon(monitor_locks, name='LockMonitor')
 # Check if psutil is available before starting memory monitoring
 if importlib.util.find_spec("psutil") is not None:
-    threading.Thread(target=monitor_memory_usage, daemon=True).start()
+    spawn_os_daemon(monitor_memory_usage, name='MemoryMonitor')
     logging.info("Memory monitoring started")
 else:
     logging.warning("psutil not installed, memory monitoring disabled")
-threading.Thread(target=reap_threads, daemon=True).start()
+spawn_os_daemon(reap_threads, name='ThreadReaper')
 
 def cleanup_mqtt_connections():
     """Clean up MQTT connections on shutdown"""

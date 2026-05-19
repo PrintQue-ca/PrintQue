@@ -4,6 +4,7 @@ export type PrinterStatus =
   | 'IDLE'
   | 'READY'
   | 'PRINTING'
+  | 'PREPARING'
   | 'FINISHED'
   | 'ERROR'
   | 'EJECTING'
@@ -18,6 +19,10 @@ export interface Printer {
   status: PrinterStatus
   progress?: number
   current_file?: string
+  order_id?: number | null
+  cooldown_order_id?: number | null
+  /** Resolved queue job id (order_id or cooldown_order_id) from API broadcast */
+  queue_job_id?: number | null
   groups?: number[]
   group?: string
   api_key?: string
@@ -45,25 +50,62 @@ export interface PrinterFormData {
   group?: string
 }
 
-// Order types
-export type OrderStatus = 'active' | 'completed' | 'paused'
-
-export interface Order {
+// Library catalog (reusable print templates)
+export interface LibraryItem {
   id: number
   filename: string
-  name?: string // Optional custom name for the order
+  name?: string
+  filepath?: string
+  groups: (number | string)[]
+  filament_g?: number
+  ejection_enabled?: boolean
+  ejection_code_id?: string
+  ejection_code_name?: string
+  cooldown_temp?: number | null
+  created_at?: string
+  updated_at?: string
+}
+
+// Print queue jobs
+export type QueueJobStatus = 'pending' | 'partial' | 'fulfilled'
+
+export interface QueueJobErrorEvent {
+  at: string
+  message: string
+  printer?: string
+  phase?: string
+  batch_id?: string
+  task_id?: string
+}
+
+export interface QueueJob {
+  id: number
+  library_item_id?: number | null
+  filename: string
+  name?: string
   quantity: number
   sent: number
-  priority: number
-  groups: number[]
-  status: OrderStatus
+  status: QueueJobStatus
+  groups: (number | string)[]
   created_at?: string
   filepath?: string
   ejection_enabled?: boolean
-  ejection_code_id?: string // Reference to saved ejection code
-  ejection_code_name?: string // Name of the ejection code (for display)
-  end_gcode?: string // The actual G-code content
-  cooldown_temp?: number // Bed temperature to wait for before ejection (Bambu only)
+  ejection_code_id?: string
+  ejection_code_name?: string
+  cooldown_temp?: number | null
+  last_error?: string | null
+  last_error_at?: string | null
+  last_error_printer?: string | null
+  last_error_phase?: string | null
+  error_events?: QueueJobErrorEvent[]
+}
+
+/** @deprecated Use QueueJob — kept for gradual migration */
+export type OrderStatus = QueueJobStatus
+
+/** @deprecated Use QueueJob */
+export interface Order extends QueueJob {
+  priority?: number
 }
 
 export interface OrderFormData {

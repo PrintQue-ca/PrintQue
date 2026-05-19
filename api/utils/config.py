@@ -10,10 +10,8 @@ from __version__ import __version__
 
 def _get_data_dir() -> str:
     """Return the PrintQue data directory, creating it if needed."""
-    base = os.getenv('DATA_DIR', os.path.expanduser("~"))
-    data_dir = os.path.join(base, "PrintQueData")
-    os.makedirs(data_dir, exist_ok=True)
-    return data_dir
+    from utils.paths import get_data_dir
+    return get_data_dir()
 
 
 def _load_or_create_secret_key() -> str:

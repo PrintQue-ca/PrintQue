@@ -11,7 +11,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
-import { useImportOrders } from '@/hooks'
+import { useImportLibrary } from '@/hooks'
 
 interface BulkImportDialogProps {
   open: boolean
@@ -25,7 +25,7 @@ export function BulkImportDialog({ open, onOpenChange }: BulkImportDialogProps) 
     failed_count: number
     failures: Array<{ row: number; error: string }>
   } | null>(null)
-  const importOrders = useImportOrders()
+  const importLibrary = useImportLibrary()
 
   const reset = useCallback(() => {
     setFile(null)
@@ -71,14 +71,14 @@ export function BulkImportDialog({ open, onOpenChange }: BulkImportDialogProps) 
     }
     setResult(null)
     try {
-      const data = await importOrders.mutateAsync(file)
+      const data = await importLibrary.mutateAsync(file)
       setResult({
         success_count: data.success_count,
         failed_count: data.failed_count,
         failures: data.failures ?? [],
       })
       if (data.success_count > 0) {
-        toast.success(`${data.success_count} order(s) imported`)
+        toast.success(`${data.success_count} item(s) imported to library`)
       }
       if (data.failed_count > 0) {
         toast.error(`${data.failed_count} row(s) failed`)
@@ -98,7 +98,7 @@ export function BulkImportDialog({ open, onOpenChange }: BulkImportDialogProps) 
     <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent className="max-w-lg">
         <DialogHeader>
-          <DialogTitle>Bulk import orders</DialogTitle>
+          <DialogTitle>Bulk import library</DialogTitle>
           <DialogDescription>
             Import from a JSON export (re-import) or a CSV file with columns: folder_path, filename,
             quantity, printer_groups.
@@ -189,8 +189,8 @@ export function BulkImportDialog({ open, onOpenChange }: BulkImportDialogProps) 
           <Button variant="outline" onClick={() => handleOpenChange(false)}>
             Close
           </Button>
-          <Button onClick={handleSubmit} disabled={!file || importOrders.isPending}>
-            {importOrders.isPending ? 'Importing...' : 'Import'}
+          <Button onClick={handleSubmit} disabled={!file || importLibrary.isPending}>
+            {importLibrary.isPending ? 'Importing...' : 'Import'}
           </Button>
         </DialogFooter>
       </DialogContent>

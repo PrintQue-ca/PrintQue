@@ -5,8 +5,9 @@ from werkzeug.utils import secure_filename
 from services.state import (
     PRINTERS, TOTAL_FILAMENT_CONSUMPTION, ORDERS,
     save_data, logging, orders_lock, filament_lock, printers_rwlock, SafeLock, ReadLock, get_order_lock,
-    ORDERS_FILE,
-    validate_gcode_file, sanitize_group_name
+    QUEUE_FILE,
+    validate_gcode_file, sanitize_group_name,
+    apply_ejection_fields_to_order, auto_save_ejection_code,
 )
 from services.printer_manager import extract_filament_from_file, start_background_distribution, prepare_printer_data_for_broadcast
 from services.default_settings import load_default_settings, save_default_settings
@@ -49,13 +50,10 @@ def register_order_routes(app, socketio):
             return redirect(url_for('index'))
 
         default_settings = load_default_settings()
-        default_settings.get('default_ejection_enabled', False)
 
         ejection_enabled = request.form.get('ejection_enabled') == 'on'
-
-        end_gcode = request.form.get('end_gcode', '').strip()
-        if ejection_enabled and not end_gcode:
-            end_gcode = default_settings.get('default_end_gcode', '')
+        end_gcode = request.form.get('end_gcode', '').strip() or None
+        ejection_code_id = request.form.get('ejection_code_id', '').strip() or None
 
         # Cooldown temperature for Bambu printers (optional)
         # If set, PrintQue will wait for bed to cool to this temp before running ejection
@@ -99,13 +97,19 @@ def register_order_routes(app, socketio):
                 'status': 'pending',
                 'filament_g': filament_g,
                 'groups': groups,  # Now contains sanitized strings instead of integers
-                'ejection_enabled': ejection_enabled,
-                'end_gcode': end_gcode,
                 'cooldown_temp': cooldown_temp,  # Bed temp to wait for before ejection (Bambu only)
                 'from_new_orders': True
             }
+            apply_ejection_fields_to_order(
+                order,
+                ejection_enabled=ejection_enabled,
+                ejection_code_id=ejection_code_id,
+                end_gcode=end_gcode,
+                name_hint=filename,
+                default_settings=default_settings,
+            )
             ORDERS.append(order)
-            save_data(ORDERS_FILE, ORDERS)
+            save_data(QUEUE_FILE, ORDERS)
             logging.info(f"Created order {order_id}: {filename}, qty={quantity}")
             debug_log('cooldown', f"Order {order_id} created with cooldown_temp={cooldown_temp}")
 
@@ -124,20 +128,29 @@ def register_order_routes(app, socketio):
         try:
             data = request.get_json()
             default_gcode = data.get('default_gcode', '').strip()
+            ejection_code_id = data.get('ejection_code_id')
             ejection_enabled = data.get('ejection_enabled', False)
 
-            # Load current settings
             current_settings = load_default_settings()
-
-            # Update settings
-            current_settings['default_end_gcode'] = default_gcode
             current_settings['default_ejection_enabled'] = ejection_enabled
 
-            # Save settings
+            if ejection_code_id:
+                current_settings['default_ejection_code_id'] = ejection_code_id
+                current_settings.pop('default_end_gcode', None)
+            elif default_gcode:
+                code = auto_save_ejection_code(default_gcode, 'Default')
+                current_settings['default_ejection_code_id'] = code['id']
+                current_settings.pop('default_end_gcode', None)
+            elif not ejection_enabled:
+                current_settings['default_ejection_code_id'] = None
+
             success = save_default_settings(current_settings)
 
             if success:
-                logging.info(f"Default settings saved: ejection_enabled={ejection_enabled}, gcode_length={len(default_gcode)}")
+                logging.info(
+                    f"Default settings saved: ejection_enabled={ejection_enabled}, "
+                    f"code_id={current_settings.get('default_ejection_code_id')}"
+                )
                 return jsonify({
                     'success': True,
                     'message': 'Default end G-code settings saved successfully!'
@@ -199,7 +212,7 @@ def register_order_routes(app, socketio):
             for i, order in enumerate(ORDERS):
                 if compare_order_ids(order['id'], order_id) and i > 0:
                     ORDERS[i], ORDERS[i-1] = ORDERS[i-1], ORDERS[i]
-                    save_data(ORDERS_FILE, ORDERS)
+                    save_data(QUEUE_FILE, ORDERS)
                     logging.debug(f"Moved order {order_id} up. New order: {[o['id'] for o in ORDERS]}")
                     with SafeLock(filament_lock):
                         total_filament = TOTAL_FILAMENT_CONSUMPTION / 1000
@@ -220,7 +233,7 @@ def register_order_routes(app, socketio):
             for i, order in enumerate(ORDERS):
                 if compare_order_ids(order['id'], order_id) and i < len(ORDERS) - 1:
                     ORDERS[i], ORDERS[i+1] = ORDERS[i+1], ORDERS[i]
-                    save_data(ORDERS_FILE, ORDERS)
+                    save_data(QUEUE_FILE, ORDERS)
                     logging.debug(f"Moved order {order_id} down. New order: {[o['id'] for o in ORDERS]}")
                     with SafeLock(filament_lock):
                         total_filament = TOTAL_FILAMENT_CONSUMPTION / 1000
@@ -242,7 +255,7 @@ def register_order_routes(app, socketio):
                     if compare_order_ids(order['id'], order_id):
                         # Hard delete the order by removing it from the list
                         ORDERS.pop(i)
-                        save_data(ORDERS_FILE, ORDERS)
+                        save_data(QUEUE_FILE, ORDERS)
                         logging.debug(f"Hard deleted order {order_id}. Remaining ORDERS IDs: {[o['id'] for o in ORDERS]}")
 
                         with SafeLock(filament_lock):
@@ -302,7 +315,7 @@ def register_order_routes(app, socketio):
                             else:
                                 order['status'] = 'pending'
 
-                            save_data(ORDERS_FILE, ORDERS)
+                            save_data(QUEUE_FILE, ORDERS)
 
                             # Emit update
                             with SafeLock(filament_lock):
