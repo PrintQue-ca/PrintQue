@@ -1078,9 +1078,19 @@ async def get_printer_status_async(socketio, app, batch_index=None, batch_size=N
                                         "job_id": None,
                                         "manually_set": False,
                                         "ejection_in_progress": False,
+                                        "count_incremented_for_current_job": False,
                                     })
                     elif api_state not in ['PRINTING', 'PAUSED', 'FINISHED', 'EJECTING']:
-                        updates.update({"progress": 0, "time_remaining": 0, "file": "None", "job_id": None, "manually_set": False, "finish_time": None, "ejection_in_progress": False})
+                        updates.update({
+                            "progress": 0,
+                            "time_remaining": 0,
+                            "file": "None",
+                            "job_id": None,
+                            "manually_set": False,
+                            "finish_time": None,
+                            "ejection_in_progress": False,
+                            "count_incremented_for_current_job": False,
+                        })
 
                 printer_updates.append({
                     'index': printer_indices[idx],
