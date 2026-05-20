@@ -69,21 +69,23 @@ export function BulkEnqueueDialog({ open, onOpenChange, items }: BulkEnqueueDial
           </DialogDescription>
         </DialogHeader>
 
-        <div className="flex items-end gap-2 py-2 border-b">
-          <div className="space-y-1 flex-1">
-            <Label htmlFor="apply-all-qty">Quantity for all</Label>
-            <Input
-              id="apply-all-qty"
-              type="number"
-              min={1}
-              value={applyAllQty}
-              onChange={(e) => setApplyAllQty(e.target.value)}
-            />
+        {items.length > 1 && (
+          <div className="flex items-end gap-2 py-2 border-b">
+            <div className="space-y-1 flex-1">
+              <Label htmlFor="apply-all-qty">Quantity for all</Label>
+              <Input
+                id="apply-all-qty"
+                type="number"
+                min={1}
+                value={applyAllQty}
+                onChange={(e) => setApplyAllQty(e.target.value)}
+              />
+            </div>
+            <Button type="button" variant="secondary" onClick={handleApplyAll}>
+              Apply to all
+            </Button>
           </div>
-          <Button type="button" variant="secondary" onClick={handleApplyAll}>
-            Apply to all
-          </Button>
-        </div>
+        )}
 
         <div className="flex-1 overflow-y-auto space-y-3 py-2 min-h-0">
           {items.map((item) => (

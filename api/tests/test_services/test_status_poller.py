@@ -422,6 +422,100 @@ class TestUpdateBambuPrinterStates:
         self._run(printers, {'B1': {'state': 'PRINTING', 'file': 'fallback.3mf'}})
         assert printers[0]['file'] == 'fallback.3mf'
 
+    def test_offline_reconnect_does_not_double_increment_sent(self):
+        """MQTT reconnect after brief OFFLINE must not count the same copy twice."""
+        printers = [make_printer(
+            name='B1',
+            type='bambu',
+            state='OFFLINE',
+            from_queue=True,
+            order_id=39,
+            count_incremented_for_current_job=True,
+        )]
+        bambu = {
+            'B1': {
+                'state': 'PRINTING',
+                'nozzle_temp': 220,
+                'bed_temp': 60,
+                'progress': 40,
+                'time_remaining': 1800,
+                'current_file': 'test.3mf',
+            }
+        }
+        with patch('services.status_poller.PRINTERS', printers), \
+             patch('services.status_poller.BAMBU_PRINTER_STATES', bambu), \
+             patch('services.status_poller.save_data'), \
+             patch('services.status_poller.PRINTERS_FILE', '/tmp/test.json'), \
+             patch('services.status_poller.increment_queue_sent_count') as mock_inc:
+            from services.status_poller import update_bambu_printer_states
+            update_bambu_printer_states()
+            mock_inc.assert_not_called()
+        assert printers[0]['state'] == 'PRINTING'
+        assert printers[0]['count_incremented_for_current_job'] is True
+
+    def test_error_resume_does_not_double_increment_sent(self):
+        """Recovering from ERROR mid-print must not count the same copy again."""
+        printers = [make_printer(
+            name='B1',
+            type='bambu',
+            state='ERROR',
+            from_queue=True,
+            order_id=39,
+            count_incremented_for_current_job=False,
+        )]
+        bambu = {'B1': {'state': 'PRINTING', 'progress': 55, 'time_remaining': 900}}
+        with patch('services.status_poller.PRINTERS', printers), \
+             patch('services.status_poller.BAMBU_PRINTER_STATES', bambu), \
+             patch('services.status_poller.save_data'), \
+             patch('services.status_poller.PRINTERS_FILE', '/tmp/test.json'), \
+             patch('services.status_poller.increment_queue_sent_count') as mock_inc:
+            from services.status_poller import update_bambu_printer_states
+            update_bambu_printer_states()
+            mock_inc.assert_not_called()
+
+    def test_prepare_to_printing_increments_sent(self):
+        """A newly distributed copy increments sent on PREPARING -> PRINTING."""
+        printers = [make_printer(
+            name='B1',
+            type='bambu',
+            state='PREPARING',
+            from_queue=True,
+            order_id=39,
+            count_incremented_for_current_job=False,
+        )]
+        bambu = {'B1': {'state': 'PRINTING', 'progress': 1, 'time_remaining': 3600}}
+        with patch('services.status_poller.PRINTERS', printers), \
+             patch('services.status_poller.BAMBU_PRINTER_STATES', bambu), \
+             patch('services.status_poller.save_data') as mock_save, \
+             patch('services.status_poller.PRINTERS_FILE', '/tmp/test.json'), \
+             patch('services.status_poller.increment_queue_sent_count', return_value=(True, {'sent': 1})) as mock_inc:
+            from services.status_poller import update_bambu_printer_states
+            update_bambu_printer_states()
+            mock_inc.assert_called_once_with(39)
+        assert printers[0]['count_incremented_for_current_job'] is True
+        assert mock_save.call_count >= 1
+
+    def test_offline_update_preserves_count_incremented_flag(self):
+        """Transient OFFLINE must not reset per-copy sent tracking."""
+        from utils.status_poller_helpers import _offline_update
+        from services.status_poller import _apply_printer_updates
+
+        printers = [make_printer(
+            name='B1',
+            type='bambu',
+            state='PRINTING',
+            from_queue=True,
+            order_id=39,
+            count_incremented_for_current_job=True,
+        )]
+        with patch('services.status_poller.PRINTERS', printers), \
+             patch('services.status_poller.WriteLock'):
+            _apply_printer_updates([{'index': 0, 'updates': _offline_update()}])
+
+        assert printers[0]['state'] == 'OFFLINE'
+        assert printers[0]['count_incremented_for_current_job'] is True
+        assert printers[0]['order_id'] == 39
+
 
 # ===========================================================================
 # get_printer_status_async  (state-machine integration tests)

@@ -185,7 +185,7 @@ def _offline_update():
         "temps": {"nozzle": 0, "bed": 0},
         "progress": 0, "time_remaining": 0, "file": "None", "job_id": None,
         "manually_set": False, "ejection_in_progress": False,
-        "finish_time": None, "count_incremented_for_current_job": False,
+        "finish_time": None,
     }
 
 

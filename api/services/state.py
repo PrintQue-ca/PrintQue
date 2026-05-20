@@ -28,6 +28,7 @@ from services.library_queue import (
     normalize_library_item,
     normalize_queue_job,
 )
+from utils.debug_session_log import agent_debug_log
 import copy
 import uuid
 import re
@@ -964,6 +965,18 @@ def increment_queue_sent_count(job_id, increment=1):
                     return False, QUEUE_JOBS[i].copy()
 
                 order['sent'] = previous_sent + increment
+                agent_debug_log(
+                    'state.py:increment_queue_sent_count',
+                    'queue sent incremented',
+                    {
+                        'job_id': job_id,
+                        'previous_sent': previous_sent,
+                        'new_sent': order['sent'],
+                        'quantity': order['quantity'],
+                        'thread': current_thread,
+                    },
+                    hypothesis_id='H3-H5',
+                )
 
                 if order['sent'] >= order['quantity']:
                     order['status'] = 'fulfilled'
