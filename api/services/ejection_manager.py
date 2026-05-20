@@ -253,10 +253,20 @@ def handle_finished_state_ejection(printer, printer_name, current_file, current_
         except Exception as e:
             logging.warning(f"Could not get bed temp for {printer_name}: {e}")
 
-        debug_log('cooldown', f"{printer_name}: bed={current_bed_temp}°C vs target={cooldown_temp}°C, needs_cooling={current_bed_temp > cooldown_temp}")
+        from utils.status_poller_helpers import bed_temp_needs_cooling
 
-        if current_bed_temp > cooldown_temp:
-            logging.info(f"FINISHED->COOLING: {printer_name} (bed temp {current_bed_temp}°C > target {cooldown_temp}°C)")
+        needs_cooling = bed_temp_needs_cooling(current_bed_temp, cooldown_temp)
+        debug_log(
+            'cooldown',
+            f"{printer_name}: bed={current_bed_temp}°C vs target={cooldown_temp}°C, "
+            f"needs_cooling={needs_cooling}",
+        )
+
+        if needs_cooling:
+            logging.info(
+                f"FINISHED->COOLING: {printer_name} "
+                f"(bed temp {current_bed_temp}°C above target {cooldown_temp}°C)"
+            )
             updates.update({
                 "state": 'COOLING',
                 "status": f'Cooling ({current_bed_temp}°C → {cooldown_temp}°C)',

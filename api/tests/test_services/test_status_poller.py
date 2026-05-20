@@ -625,6 +625,65 @@ class TestStateTransitions:
         )
         assert result[0]['state'] == 'COOLING'
 
+    @pytest.mark.asyncio
+    async def test_cooling_triggers_when_slightly_above_integer_target(self):
+        """40.4°C bed with 40°C target should eject (sensor tolerance)."""
+        orders = [{
+            'id': 1,
+            'ejection_enabled': True,
+            'ejection_code_id': None,
+            'status': 'pending',
+            'quantity': 1,
+            'sent': 0,
+        }]
+        printers = [make_printer(
+            name='Printer1', type='bambu', state='COOLING',
+            cooldown_target_temp=40, cooldown_order_id=1,
+            finish_time=time.time() - 60,
+        )]
+        bambu = {'Printer1': {'bed_temp': 40.4, 'nozzle_temp': 45, 'state': 'IDLE'}}
+        with patch(
+            'services.status_poller.send_bambu_ejection_gcode', return_value=True
+        ) as mock_send:
+            result, _ = await self._run_poll(
+                printers,
+                {'Printer1': make_api_response(state='IDLE', temp_bed=40.4)},
+                bambu_states=bambu,
+                orders=orders,
+            )
+        assert result[0]['state'] == 'EJECTING'
+        mock_send.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_cooling_triggers_bambu_ejection_at_target(self):
+        """COOLING transitions to EJECTING and sends G-code when bed <= target."""
+        orders = [{
+            'id': 1,
+            'ejection_enabled': True,
+            'ejection_code_id': None,
+            'status': 'pending',
+            'quantity': 1,
+            'sent': 0,
+        }]
+        printers = [make_printer(
+            name='Printer1', type='bambu', state='COOLING',
+            cooldown_target_temp=40, cooldown_order_id=1,
+            finish_time=time.time() - 60,
+        )]
+        bambu = {'Printer1': {'bed_temp': 25, 'nozzle_temp': 25, 'state': 'IDLE'}}
+        with patch(
+            'services.status_poller.send_bambu_ejection_gcode', return_value=True
+        ) as mock_send:
+            result, _ = await self._run_poll(
+                printers,
+                {'Printer1': make_api_response(state='IDLE', temp_bed=25)},
+                bambu_states=bambu,
+                orders=orders,
+            )
+        assert result[0]['state'] == 'EJECTING'
+        assert result[0]['ejection_in_progress'] is True
+        mock_send.assert_called_once()
+
     # -- stored FINISHED + API IDLE -> READY --
 
     @pytest.mark.asyncio

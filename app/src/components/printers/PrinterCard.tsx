@@ -82,7 +82,24 @@ export function PrinterCard({ printer, queueJobs = [] }: PrinterCardProps) {
 
   const handlePause = () => pausePrint.mutate(printer.name)
   const handleResume = () => resumePrint.mutate(printer.name)
-  const handleMarkReady = () => markReady.mutate(printer.name)
+  const handleMarkReady = () => {
+    markReady.mutate(printer.name, {
+      onSuccess: () => {
+        toast.success(
+          printer.state === 'COOLING' || printer.status === 'COOLING'
+            ? 'Cooldown skipped'
+            : 'Printer marked ready'
+        )
+      },
+      onError: () => {
+        toast.error(
+          printer.state === 'COOLING' || printer.status === 'COOLING'
+            ? 'Failed to skip cooldown (API may be busy — try again)'
+            : 'Failed to mark printer ready'
+        )
+      },
+    })
+  }
   const handleClearError = () => clearError.mutate(printer.name)
   const handleDelete = async () => {
     if (confirm(`Are you sure you want to delete printer "${printer.name}"?`)) {
@@ -236,7 +253,12 @@ export function PrinterCard({ printer, queueJobs = [] }: PrinterCardProps) {
               </p>
               <div className="flex items-center gap-2 mt-2 text-sm">
                 <Thermometer className="h-4 w-4 text-cyan-500" />
-                <span>Bed: {(printer.bed_temp ?? 0).toFixed(1)}°C</span>
+                <span>
+                  Bed: {(printer.bed_temp ?? 0).toFixed(1)}°C
+                  {printer.cooldown_target_temp != null
+                    ? ` → target ${printer.cooldown_target_temp}°C`
+                    : ''}
+                </span>
               </div>
             </div>
             <Button size="sm" variant="outline" onClick={handleMarkReady}>

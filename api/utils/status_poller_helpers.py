@@ -19,6 +19,24 @@ state_map = {
     'OFFLINE': 'Offline', 'COOLING': 'Cooling',
 }
 
+# Bed sensors often read slightly above an integer target (e.g. 40.4°C vs 40°C).
+COOLDOWN_TEMP_TOLERANCE_C = 1.0
+
+
+def bed_temp_reached_cooldown_target(bed_temp, target_temp) -> bool:
+    """True when bed is at or below target within tolerance (ready for ejection)."""
+    try:
+        target = float(target_temp)
+        bed = float(bed_temp if bed_temp is not None else 0)
+    except (TypeError, ValueError):
+        return False
+    return bed <= target + COOLDOWN_TEMP_TOLERANCE_C
+
+
+def bed_temp_needs_cooling(bed_temp, target_temp) -> bool:
+    """True when bed must still cool before ejection."""
+    return not bed_temp_reached_cooldown_target(bed_temp, target_temp)
+
 
 def get_minutes_since_finished(printer):
     """Calculate minutes elapsed since printer entered FINISHED state"""

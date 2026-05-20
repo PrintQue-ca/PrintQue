@@ -1,5 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '@/lib/api'
+import { createDebouncedQueueQuantityActions } from '@/lib/debounced-queue-quantity'
+import { optimisticRemoveQueueJobs, restoreQueueCache } from '@/lib/optimistic-queue-cache'
 import type { ApiResponse, QueueJob } from '@/types'
 
 export function useQueue() {
@@ -28,9 +30,17 @@ export function useBulkEnqueue() {
 export function useDeleteQueueJob() {
   const queryClient = useQueryClient()
   return useMutation({
+    mutationKey: ['deleteQueueJob'],
     mutationFn: (id: number) => api.delete<ApiResponse>(`/queue/${id}`),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['queue'] })
+    onMutate: async (id) => {
+      const { previous } = await optimisticRemoveQueueJobs(queryClient, id)
+      return { previous }
+    },
+    onError: (_err, _id, context) => {
+      restoreQueueCache(queryClient, context?.previous)
+      void import('sonner').then(({ toast }) => {
+        toast.error('Failed to delete queue job')
+      })
     },
   })
 }
@@ -49,12 +59,32 @@ export function useUpdateQueueJob() {
 export function useUpdateQueueQuantity() {
   const queryClient = useQueryClient()
   return useMutation({
+    mutationKey: ['updateQueueQuantity'],
     mutationFn: ({ id, quantity }: { id: number; quantity: number }) =>
       api.patch<ApiResponse>(`/queue/${id}`, { quantity }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['queue'] })
     },
   })
+}
+
+/** Optimistic quantity edits with debounced PATCH (for queue table +/- controls). */
+export function useDebouncedQueueQuantity() {
+  const queryClient = useQueryClient()
+
+  const mutation = useMutation({
+    mutationKey: ['updateQueueQuantity'],
+    mutationFn: ({ id, quantity }: { id: number; quantity: number }) =>
+      api.patch<ApiResponse>(`/queue/${id}`, { quantity }),
+    onError: () => {
+      void import('sonner').then(({ toast }) => {
+        toast.error('Failed to update quantity')
+      })
+      queryClient.invalidateQueries({ queryKey: ['queue'] })
+    },
+  })
+
+  return createDebouncedQueueQuantityActions(queryClient, mutation.mutate)
 }
 
 export function useReorderQueueJob() {
@@ -117,10 +147,18 @@ export function useUpdateQueueEjection() {
 export function useBulkDeleteQueue() {
   const queryClient = useQueryClient()
   return useMutation({
+    mutationKey: ['bulkDeleteQueueJob'],
     mutationFn: (ids: number[]) =>
       api.post<{ success: boolean; deleted_count: number }>('/queue/bulk-delete', { ids }),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['queue'] })
+    onMutate: async (ids) => {
+      const { previous } = await optimisticRemoveQueueJobs(queryClient, ids)
+      return { previous }
+    },
+    onError: (_err, _ids, context) => {
+      restoreQueueCache(queryClient, context?.previous)
+      void import('sonner').then(({ toast }) => {
+        toast.error('Failed to delete queue jobs')
+      })
     },
   })
 }

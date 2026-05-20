@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '@/lib/api'
+import { optimisticRemoveQueueJobs, restoreQueueCache } from '@/lib/optimistic-queue-cache'
 import type { ApiResponse, QueueJob } from '@/types'
 
 /** @deprecated Use useQueue */
@@ -32,9 +33,17 @@ export function useCreateOrder() {
 export function useDeleteOrder() {
   const queryClient = useQueryClient()
   return useMutation({
+    mutationKey: ['deleteQueueJob'],
     mutationFn: (id: number) => api.delete<ApiResponse>(`/queue/${id}`),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['library'] })
+    onMutate: async (id) => {
+      const { previous } = await optimisticRemoveQueueJobs(queryClient, id)
+      return { previous }
+    },
+    onError: (_err, _id, context) => {
+      restoreQueueCache(queryClient, context?.previous)
+      void import('sonner').then(({ toast }) => {
+        toast.error('Failed to delete queue job')
+      })
     },
   })
 }
@@ -67,6 +76,7 @@ export function useUpdateQuantity() {
     mutationFn: ({ id, quantity }: { id: number; quantity: number }) =>
       api.patch<ApiResponse>(`/queue/${id}`, { quantity }),
     onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['queue'] })
       queryClient.invalidateQueries({ queryKey: ['library'] })
     },
   })
@@ -134,11 +144,18 @@ export function useUpdateOrderEjection() {
 export function useBulkDeleteOrders() {
   const queryClient = useQueryClient()
   return useMutation({
+    mutationKey: ['bulkDeleteQueueJob'],
     mutationFn: (ids: number[]) =>
       api.post<{ success: boolean; deleted_count: number }>('/queue/bulk-delete', { ids }),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['queue'] })
-      queryClient.invalidateQueries({ queryKey: ['library'] })
+    onMutate: async (ids) => {
+      const { previous } = await optimisticRemoveQueueJobs(queryClient, ids)
+      return { previous }
+    },
+    onError: (_err, _ids, context) => {
+      restoreQueueCache(queryClient, context?.previous)
+      void import('sonner').then(({ toast }) => {
+        toast.error('Failed to delete queue jobs')
+      })
     },
   })
 }
