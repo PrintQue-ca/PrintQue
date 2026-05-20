@@ -128,14 +128,28 @@ describe('useOrders', () => {
   })
 
   describe('useDeleteOrder hook', () => {
-    it('should delete order successfully', async () => {
+    it('should delete order successfully and remove from queue cache immediately', async () => {
       vi.mocked(api.delete).mockResolvedValue({ success: true })
 
+      const queryClient = new QueryClient({
+        defaultOptions: {
+          queries: { retry: false },
+          mutations: { retry: false },
+        },
+      })
+      queryClient.setQueryData(['queue'], mockOrders)
+
       const { result } = renderHook(() => useDeleteOrder(), {
-        wrapper: createWrapper(),
+        wrapper: ({ children }: { children: React.ReactNode }) => (
+          <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+        ),
       })
 
       result.current.mutate(1)
+
+      await waitFor(() => {
+        expect(queryClient.getQueryData<Order[]>(['queue'])?.map((o) => o.id)).toEqual([2])
+      })
 
       await waitFor(() => {
         expect(result.current.isSuccess).toBe(true)

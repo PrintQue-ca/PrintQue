@@ -62,12 +62,12 @@ import {
 } from '@/components/ui/table'
 import {
   useBulkDeleteOrders,
+  useDebouncedQueueQuantity,
   useDeleteOrder,
   useEjectionCodes,
   useReorderOrder,
   useUpdateOrder,
   useUpdateOrderEjection,
-  useUpdateQuantity,
 } from '@/hooks'
 import type { Order } from '@/types'
 
@@ -197,7 +197,7 @@ export function OrdersTable({ orders }: OrdersTableProps) {
   const deleteOrder = useDeleteOrder()
   const bulkDeleteOrders = useBulkDeleteOrders()
   const reorderOrder = useReorderOrder()
-  const updateQuantity = useUpdateQuantity()
+  const { bumpQuantity, setQuantity, flushQuantity } = useDebouncedQueueQuantity()
   const updateOrder = useUpdateOrder()
   const updateOrderEjection = useUpdateOrderEjection()
   const { data: ejectionCodes } = useEjectionCodes()
@@ -314,19 +314,18 @@ export function OrdersTable({ orders }: OrdersTableProps) {
 
   const handleQuantitySubmit = (id: number) => {
     if (quantityValue >= 0) {
-      updateQuantity.mutate({ id, quantity: quantityValue })
+      setQuantity(id, quantityValue)
+      flushQuantity(id)
     }
     setEditingQuantity(null)
   }
 
-  const handleQuantityIncrement = (id: number, currentQuantity: number) => {
-    updateQuantity.mutate({ id, quantity: currentQuantity + 1 })
+  const handleQuantityIncrement = (id: number) => {
+    bumpQuantity(id, 1)
   }
 
-  const handleQuantityDecrement = (id: number, currentQuantity: number) => {
-    if (currentQuantity > 0) {
-      updateQuantity.mutate({ id, quantity: currentQuantity - 1 })
-    }
+  const handleQuantityDecrement = (id: number) => {
+    bumpQuantity(id, -1)
   }
 
   const handleNameChange = (order: Order) => {
@@ -386,13 +385,12 @@ export function OrdersTable({ orders }: OrdersTableProps) {
   const handleBulkDelete = () => {
     if (selectedIds.size === 0) return
     if (!confirm(`Delete ${selectedIds.size} selected order(s)?`)) return
-    bulkDeleteOrders.mutate(Array.from(selectedIds), {
+    const ids = Array.from(selectedIds)
+    const count = ids.length
+    setSelectedIds(new Set())
+    bulkDeleteOrders.mutate(ids, {
       onSuccess: (data) => {
-        setSelectedIds(new Set())
-        toast.success(`${data?.deleted_count ?? selectedIds.size} order(s) deleted`)
-      },
-      onError: () => {
-        toast.error('Failed to delete orders')
+        toast.success(`${data?.deleted_count ?? count} order(s) deleted`)
       },
     })
   }
@@ -497,7 +495,7 @@ export function OrdersTable({ orders }: OrdersTableProps) {
               variant="ghost"
               size="sm"
               className="h-6 w-6 p-0"
-              onClick={() => handleQuantityDecrement(id, currentQty)}
+              onClick={() => handleQuantityDecrement(id)}
             >
               <Minus className="h-3 w-3" />
             </Button>
@@ -511,7 +509,7 @@ export function OrdersTable({ orders }: OrdersTableProps) {
               variant="ghost"
               size="sm"
               className="h-6 w-6 p-0"
-              onClick={() => handleQuantityIncrement(id, currentQty)}
+              onClick={() => handleQuantityIncrement(id)}
             >
               <Plus className="h-3 w-3" />
             </Button>

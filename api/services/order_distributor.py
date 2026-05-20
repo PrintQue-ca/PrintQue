@@ -3,6 +3,7 @@ Order distribution logic - handles assigning orders to available printers.
 """
 import os
 import re
+import time
 import uuid
 import asyncio
 import aiohttp
@@ -45,6 +46,51 @@ def _printer_available_for_distribution(printer: dict) -> bool:
         if bambu.get('waiting_for_m400') or bambu.get('ejection_m400_pending', 0) > 0:
             return False
     return True
+
+
+def has_pending_queue_copies() -> bool:
+    """True if any queue job still needs more copies (same filter as distribute_orders_async)."""
+    with SafeLock(orders_lock):
+        for job in QUEUE_JOBS:
+            if (
+                not job.get('deleted', False)
+                and job.get('status') != 'completed'
+                and job.get('sent', 0) < job.get('quantity', 1)
+            ):
+                return True
+    return False
+
+
+def count_distributable_printers() -> int:
+    """Count non-service printers that can accept a new queue job."""
+    with ReadLock(printers_rwlock):
+        return sum(
+            1
+            for p in PRINTERS
+            if not p.get('service_mode', False) and _printer_available_for_distribution(p)
+        )
+
+
+def pending_distribution_needed() -> bool:
+    """True when pending copies exist and at least one printer can take a job."""
+    return has_pending_queue_copies() and count_distributable_printers() > 0
+
+
+def periodic_pending_distribution_check(socketio, app):
+    """Periodically trigger distribution when partial jobs and ready printers coexist."""
+    interval = Config.DISTRIBUTION_INTERVAL
+    while True:
+        try:
+            time.sleep(interval)
+            if pending_distribution_needed():
+                logging.debug(
+                    "Periodic check: pending queue copies and distributable printers — "
+                    "starting distribution"
+                )
+                start_background_distribution(socketio, app)
+        except Exception as e:
+            logging.error(f"Error in periodic pending distribution check: {e}")
+            time.sleep(interval)
 
 
 def start_background_distribution(socketio, app, batch_size=10):
@@ -331,8 +377,7 @@ async def distribute_orders_async(socketio, app, task_id=None, batch_size=10):
                     if p['name'] in updated_printers:
                         for key, value in updated_printers[p['name']].items():
                             PRINTERS[i][key] = value
-
-                save_data(PRINTERS_FILE, PRINTERS)
+            save_data(PRINTERS_FILE, PRINTERS)
 
     with SafeLock(filament_lock):
         total_filament = TOTAL_FILAMENT_CONSUMPTION / 1000

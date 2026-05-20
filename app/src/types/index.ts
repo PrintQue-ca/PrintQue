@@ -21,6 +21,8 @@ export interface Printer {
   current_file?: string
   order_id?: number | null
   cooldown_order_id?: number | null
+  cooldown_target_temp?: number | null
+  state?: PrinterStatus
   /** Resolved queue job id (order_id or cooldown_order_id) from API broadcast */
   queue_job_id?: number | null
   groups?: number[]

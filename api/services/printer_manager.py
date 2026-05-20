@@ -89,6 +89,7 @@ from services.order_distributor import (
     start_background_distribution,
     run_background_distribution,
     distribute_orders_async,
+    periodic_pending_distribution_check,
 )
 
 
@@ -97,9 +98,17 @@ def start_background_tasks(socketio, app):
     Start all background tasks for the printer management system.
     This coordinates startup across all submodules.
     """
-    from services.status_poller import get_printer_status_async, prepare_printer_data_for_broadcast
+    from services.status_poller import (
+        get_printer_status_async,
+        prepare_printer_data_for_broadcast,
+        set_status_broadcast_refs,
+        start_cooling_maintenance,
+    )
     from services.printer_utils import periodic_deduplication_check
     from services.ejection_manager import start_prusa_ejection_monitor
+
+    set_status_broadcast_refs(socketio, app)
+    start_cooling_maintenance()
 
     # Start enhanced Prusa ejection monitoring
     start_prusa_ejection_monitor()
@@ -182,6 +191,12 @@ def start_background_tasks(socketio, app):
 
     spawn_os_thread(schedule_order_reconciliation, daemon=True, name='OrderReconciliation')
 
+    spawn_os_thread(
+        lambda: periodic_pending_distribution_check(socketio, app),
+        daemon=True,
+        name='PendingDistribution',
+    )
+
     # Add periodic deduplication check
     spawn_os_thread(
         lambda: periodic_deduplication_check(socketio, app),
@@ -251,6 +266,7 @@ __all__ = [
     'start_background_distribution',
     'run_background_distribution',
     'distribute_orders_async',
+    'periodic_pending_distribution_check',
     # Main function
     'start_background_tasks',
 ]

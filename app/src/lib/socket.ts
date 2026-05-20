@@ -6,6 +6,15 @@ const SOCKET_URL = import.meta.env.DEV ? 'http://localhost:5000' : undefined
 
 let socket: Socket | null = null
 
+function isQueueMutationInFlight(queryClient: QueryClient): boolean {
+  return (
+    queryClient.isMutating({ mutationKey: ['reorderQueueJob'] }) > 0 ||
+    queryClient.isMutating({ mutationKey: ['updateQueueQuantity'] }) > 0 ||
+    queryClient.isMutating({ mutationKey: ['deleteQueueJob'] }) > 0 ||
+    queryClient.isMutating({ mutationKey: ['bulkDeleteQueueJob'] }) > 0
+  )
+}
+
 export function initSocket(queryClient: QueryClient) {
   if (socket) return socket
 
@@ -29,8 +38,7 @@ export function initSocket(queryClient: QueryClient) {
       queryClient.setQueryData(['printers'], data.printers)
     }
     if (data.orders) {
-      const isMutating = queryClient.isMutating({ mutationKey: ['reorderQueueJob'] })
-      if (!isMutating) {
+      if (!isQueueMutationInFlight(queryClient)) {
         queryClient.invalidateQueries({ queryKey: ['queue'] })
         queryClient.invalidateQueries({ queryKey: ['library'] })
       }
@@ -53,9 +61,8 @@ export function initSocket(queryClient: QueryClient) {
 
   // Order updates
   socket.on('order_update', () => {
-    // Only update if no mutation is in progress to avoid flickering during drag-drop
-    const isMutating = queryClient.isMutating({ mutationKey: ['reorderQueueJob'] })
-    if (!isMutating) {
+    // Skip refetch while reorder or debounced quantity save is in flight
+    if (!isQueueMutationInFlight(queryClient)) {
       queryClient.invalidateQueries({ queryKey: ['queue'] })
       queryClient.invalidateQueries({ queryKey: ['library'] })
     }
