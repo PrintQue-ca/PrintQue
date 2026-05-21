@@ -737,6 +737,21 @@ def register_routes(app, socketio):
         """API: Resume a print on a printer"""
         return jsonify({'success': True, 'message': 'Resume command sent'})
 
+    @app.route('/api/v1/printers/<printer_name>/clear-error', methods=['POST'])
+    def api_clear_printer_error(printer_name):
+        """API: Clear error state and mark printer ready."""
+        from routes.printers import clear_error
+
+        printer_index = None
+        with ReadLock(printers_rwlock):
+            for i, printer in enumerate(PRINTERS):
+                if printer['name'] == printer_name:
+                    printer_index = i
+                    break
+        if printer_index is None:
+            return jsonify({'success': False, 'message': 'Printer not found'}), 404
+        return clear_error(printer_index)
+
     # Order routes
     @app.route('/api/v1/orders', methods=['GET'])
     def api_get_orders():

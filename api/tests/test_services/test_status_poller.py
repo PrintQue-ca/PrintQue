@@ -376,6 +376,40 @@ class TestUpdateBambuPrinterStates:
         assert printers[0]['state'] == 'READY'
         assert printers[0]['nozzle_temp'] == 30   # temps still updated
 
+    def test_manual_ready_clears_stale_bambu_error(self):
+        printers = [make_printer(name='B1', type='bambu', state='READY', manually_set=True)]
+        bambu = {
+            'B1': {
+                'state': 'ERROR',
+                'gcode_state': 'IDLE',
+                'error': 'Old rejection',
+                'nozzle_temp': 30,
+                'bed_temp': 25,
+            },
+        }
+        with patch('services.status_poller.PRINTERS', printers), \
+             patch('services.status_poller.BAMBU_PRINTER_STATES', bambu), \
+             patch('services.bambu_handler.BAMBU_PRINTER_STATES', bambu), \
+             patch('services.status_poller.save_data'), \
+             patch('services.status_poller.PRINTERS_FILE', '/tmp/test.json'):
+            from services.status_poller import update_bambu_printer_states
+            update_bambu_printer_states()
+        assert printers[0]['state'] == 'READY'
+        assert bambu['B1']['state'] == 'READY'
+        assert bambu['B1']['error'] is None
+
+    def test_manual_ready_syncs_real_bambu_error(self):
+        printers = [make_printer(name='B1', type='bambu', state='READY', manually_set=True)]
+        bambu = {
+            'B1': {
+                'state': 'ERROR',
+                'gcode_state': 'RUNNING',
+                'error': 'Heater fault',
+            },
+        }
+        self._run(printers, bambu)
+        assert printers[0]['state'] == 'ERROR'
+
     def test_manual_ready_allows_printing(self):
         printers = [make_printer(name='B1', type='bambu', state='READY', manually_set=True)]
         self._run(printers, {'B1': {'state': 'PRINTING', 'nozzle_temp': 220, 'bed_temp': 60,

@@ -673,6 +673,16 @@ def on_message(client, userdata, msg):
                         logging.warning(f"Bambu {printer_name} HMS alerts: {hms_errors}")
                 else:
                     BAMBU_PRINTER_STATES[printer_name]['hms_alerts'] = []
+                    BAMBU_PRINTER_STATES[printer_name].pop('hms_alerts_raw', None)
+                    err = BAMBU_PRINTER_STATES[printer_name].get('error') or ''
+                    gcode = print_data.get('gcode_state', '')
+                    if (
+                        BAMBU_PRINTER_STATES[printer_name].get('state') == 'ERROR'
+                        and err.startswith('HMS Alert:')
+                        and gcode in ('IDLE', 'FINISH', 'FAILED')
+                    ):
+                        BAMBU_PRINTER_STATES[printer_name]['state'] = 'READY'
+                        BAMBU_PRINTER_STATES[printer_name]['error'] = None
 
             # Periodic INFO heartbeat so logs show live MQTT data (throttled)
             if "print" in data and "gcode_state" in data.get("print", {}):
@@ -1037,6 +1047,40 @@ def get_bambu_status(printer: Dict[str, Any]) -> Tuple[Dict[str, Any], Optional[
 
     return printer, status
 
+_BAMBU_NO_JOB_PRINT_ERROR = 50331648
+
+
+def bambu_error_looks_stale(bambu_state: dict) -> bool:
+    """True when BAMBU cache is ERROR but gcode_state indicates idle/ready."""
+    if not bambu_state or bambu_state.get('state') != 'ERROR':
+        return False
+    if bambu_state.get('hms_alerts'):
+        return False
+    gcode = (bambu_state.get('gcode_state') or '').upper()
+    if gcode in ('IDLE', 'FINISH'):
+        return True
+    if gcode == 'FAILED':
+        last_err = bambu_state.get('last_print_error', 0)
+        return last_err in (0, _BAMBU_NO_JOB_PRINT_ERROR, None)
+    return False
+
+
+def clear_stale_bambu_error_if_idle(printer_name: str) -> bool:
+    """Clear stale ERROR in the MQTT cache when gcode_state shows idle. Returns True if cleared."""
+    with bambu_states_lock:
+        state = BAMBU_PRINTER_STATES.get(printer_name)
+        if not state or not bambu_error_looks_stale(state):
+            return False
+        gcode = state.get('gcode_state')
+        state['state'] = 'READY'
+        state['error'] = None
+        state.pop('last_print_rejection', None)
+        logging.info(
+            f"Cleared stale BAMBU ERROR for {printer_name} (gcode_state={gcode})"
+        )
+        return True
+
+
 def clear_bambu_error(printer: Dict[str, Any]) -> bool:
     """Clear error state for a Bambu printer"""
     printer_name = printer['name']
@@ -1046,6 +1090,7 @@ def clear_bambu_error(printer: Dict[str, Any]) -> bool:
             BAMBU_PRINTER_STATES[printer_name]['state'] = 'READY'
             BAMBU_PRINTER_STATES[printer_name]['error'] = None
             BAMBU_PRINTER_STATES[printer_name]['hms_alerts'] = []
+            BAMBU_PRINTER_STATES[printer_name].pop('last_print_rejection', None)
             logging.info(f"Cleared error state for Bambu printer {printer_name}")
             return True
 
@@ -1066,6 +1111,8 @@ def send_bambu_print_command(printer: Dict[str, Any], filename: str, filepath: s
         Tuple of (success, error_message). error_message is set on failure.
     """
     printer_name = printer['name']
+
+    clear_stale_bambu_error_if_idle(printer_name)
 
     # Check if printer is in error state
     with bambu_states_lock:

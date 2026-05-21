@@ -16,7 +16,6 @@ from services.state import (
     save_data, decrypt_api_key,
     logging, filament_lock, SafeLock, increment_order_sent_count
 )
-from utils.debug_session_log import agent_debug_log
 from services.bambu_handler import (
     send_bambu_print_command,
     stop_bambu_print,
@@ -207,17 +206,6 @@ async def pause_print_async(session, printer):
         if success:
             printer['state'] = 'PAUSED'
             printer['status'] = 'Paused'
-            agent_debug_log(
-                'print_jobs.py:pause_print_async',
-                'print paused',
-                {
-                    'printer_name': printer.get('name'),
-                    'order_id': printer.get('order_id'),
-                    'count_incremented': printer.get('count_incremented_for_current_job', False),
-                    'from_queue': printer.get('from_queue'),
-                },
-                hypothesis_id='H2',
-            )
         return success
 
     # Prusa API - try both v1 and legacy endpoints
@@ -273,17 +261,6 @@ async def resume_print_async(session, printer):
         if success:
             printer['state'] = 'PRINTING'
             printer['status'] = 'Printing'
-            agent_debug_log(
-                'print_jobs.py:resume_print_async',
-                'print resumed',
-                {
-                    'printer_name': printer.get('name'),
-                    'order_id': printer.get('order_id'),
-                    'count_incremented': printer.get('count_incremented_for_current_job', False),
-                    'from_queue': printer.get('from_queue'),
-                },
-                hypothesis_id='H1-H4',
-            )
         return success
 
     # Prusa API - try both v1 and legacy endpoints
@@ -448,19 +425,6 @@ async def check_and_start_print(session, printer, order, headers, batch_id, app)
 
     # Reset the count increment flag for this new job
     printer['count_incremented_for_current_job'] = False
-    agent_debug_log(
-        'print_jobs.py:check_and_start_print',
-        'distribution starting print job',
-        {
-            'printer_name': printer.get('name'),
-            'printer_type': printer.get('type'),
-            'order_id': order.get('id'),
-            'printer_state': printer.get('state'),
-            'order_sent': order.get('sent'),
-            'order_quantity': order.get('quantity'),
-        },
-        hypothesis_id='H3',
-    )
     logging.debug(f"Starting new job for {printer['name']} - reset count increment flag")
 
     # Handle Bambu printers differently
@@ -579,17 +543,6 @@ async def check_and_start_print(session, printer, order, headers, batch_id, app)
 
             # Increment count when print starts
             success_increment, updated_order = increment_order_sent_count(order['id'])
-            agent_debug_log(
-                'print_jobs.py:check_and_start_print',
-                'prusa upload incremented sent',
-                {
-                    'printer_name': printer.get('name'),
-                    'order_id': order['id'],
-                    'success_increment': success_increment,
-                    'new_sent': (updated_order or {}).get('sent'),
-                },
-                hypothesis_id='H5',
-            )
             if success_increment:
                 clear_queue_job_error(order['id'])
                 logging.info(f"Incremented sent count for Prusa order {order['id']} to {updated_order['sent']}")

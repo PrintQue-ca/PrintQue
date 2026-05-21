@@ -21,8 +21,8 @@ from services.bambu_handler import (
     get_bambu_status, send_bambu_ejection_gcode,
     BAMBU_PRINTER_STATES, bambu_states_lock,
     clear_bambu_print_assignment,
+    clear_stale_bambu_error_if_idle,
 )
-from utils.debug_session_log import agent_debug_log
 from services.ejection_manager import (
     clear_stuck_ejection_locks, release_ejection_lock,
     handle_finished_state_ejection, async_send_ejection_gcode
@@ -356,15 +356,23 @@ def update_bambu_printer_states():
                         printer['bed_temp'] = bambu_state['bed_temp']
                     continue
                 if new_state not in ['PRINTING', 'PREPARING', 'EJECTING', 'PREPARE', 'PAUSED']:
-                    logging.debug(
-                        f"Bambu {printer_name}: preserving manually-set READY state "
-                        f"(ignoring MQTT state {new_state})"
-                    )
-                    if 'nozzle_temp' in bambu_state:
-                        printer['nozzle_temp'] = bambu_state['nozzle_temp']
-                    if 'bed_temp' in bambu_state:
-                        printer['bed_temp'] = bambu_state['bed_temp']
-                    continue
+                    if new_state == 'ERROR':
+                        if clear_stale_bambu_error_if_idle(printer_name):
+                            if 'nozzle_temp' in bambu_state:
+                                printer['nozzle_temp'] = bambu_state['nozzle_temp']
+                            if 'bed_temp' in bambu_state:
+                                printer['bed_temp'] = bambu_state['bed_temp']
+                            continue
+                    else:
+                        logging.debug(
+                            f"Bambu {printer_name}: preserving manually-set READY state "
+                            f"(ignoring MQTT state {new_state})"
+                        )
+                        if 'nozzle_temp' in bambu_state:
+                            printer['nozzle_temp'] = bambu_state['nozzle_temp']
+                        if 'bed_temp' in bambu_state:
+                            printer['bed_temp'] = bambu_state['bed_temp']
+                        continue
 
             # Update temperatures
             if 'nozzle_temp' in bambu_state:
@@ -394,40 +402,9 @@ def update_bambu_printer_states():
             ):
                 job_id = printer['order_id']
                 pending_sent_increments.append((printer_name, job_id))
-                agent_debug_log(
-                    'status_poller.py:update_bambu_printer_states',
-                    'bambu PRINTING queued sent increment',
-                    {
-                        'printer_name': printer_name,
-                        'job_id': job_id,
-                        'current_state': current_state,
-                        'new_state': new_state,
-                        'count_incremented': printer.get('count_incremented_for_current_job', False),
-                        'from_queue': printer.get('from_queue'),
-                        'manually_set': printer.get('manually_set', False),
-                    },
-                    hypothesis_id='H1-H4',
-                )
                 filament_g = printer.get('filament_used_g', 0)
                 if filament_g and printer.get('from_queue'):
                     pending_filament_g.append((printer_name, filament_g))
-            elif (
-                new_state == 'PRINTING'
-                and printer.get('from_queue')
-                and printer.get('order_id')
-                and current_state not in _BAMBU_SENT_COUNT_START_STATES
-            ):
-                agent_debug_log(
-                    'status_poller.py:update_bambu_printer_states',
-                    'bambu PRINTING skipped sent increment (not a prepare->print start)',
-                    {
-                        'printer_name': printer_name,
-                        'job_id': printer.get('order_id'),
-                        'current_state': current_state,
-                        'count_incremented': printer.get('count_incremented_for_current_job', False),
-                    },
-                    hypothesis_id='H6',
-                )
 
             # Ignore spurious FINISHED when the assigned job never started printing.
             if (
@@ -495,7 +472,6 @@ def update_bambu_printer_states():
         success_inc, updated_job = increment_queue_sent_count(job_id)
         if success_inc:
             clear_queue_job_error(job_id)
-            flag_set = False
             try:
                 with WriteLock(printers_rwlock):
                     printer = next(
@@ -503,24 +479,11 @@ def update_bambu_printer_states():
                     )
                     if printer:
                         printer['count_incremented_for_current_job'] = True
-                        flag_set = True
                         flag_updates_need_save = True
             except TimeoutError:
                 logging.error(
                     f"Could not mark count_incremented for {printer_name} after sent increment"
                 )
-            agent_debug_log(
-                'status_poller.py:update_bambu_printer_states',
-                'bambu sent increment applied',
-                {
-                    'printer_name': printer_name,
-                    'job_id': job_id,
-                    'success_inc': success_inc,
-                    'flag_set': flag_set,
-                    'updated_sent': (updated_job or {}).get('sent'),
-                },
-                hypothesis_id='H1',
-            )
             logging.info(
                 f"Bambu {printer_name}: incremented sent for queue job "
                 f"{job_id} on PRINTING"
@@ -632,18 +595,6 @@ def _apply_printer_updates(printer_updates):
             'PREPARING', 'PREPARE', 'COOLING', 'FINISHED',
         ]:
             logging.warning(f"Failsafe: Fixing printer {printer['name']} - has manually_set=True but state={printer['state']}. Setting back to READY")
-            agent_debug_log(
-                'status_poller.py:_apply_printer_updates',
-                'failsafe cleared count_incremented_for_current_job',
-                {
-                    'printer_name': printer.get('name'),
-                    'state': printer.get('state'),
-                    'order_id': printer.get('order_id'),
-                    'was_count_incremented': printer.get('count_incremented_for_current_job', False),
-                    'manually_set': True,
-                },
-                hypothesis_id='H2',
-            )
             printer['state'] = 'READY'
             printer['status'] = 'Ready'
             printer['manually_set'] = True

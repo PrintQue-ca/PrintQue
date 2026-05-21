@@ -23,7 +23,11 @@ from utils.config import Config
 from utils.logger import log_distribution_event, log_job_lifecycle
 from utils.threading_compat import native_threading
 from utils.socketio_emit import emit_status_update
-from services.bambu_handler import BAMBU_PRINTER_STATES, bambu_states_lock
+from services.bambu_handler import (
+    BAMBU_PRINTER_STATES,
+    bambu_states_lock,
+    clear_stale_bambu_error_if_idle,
+)
 
 # Semaphore to prevent concurrent distribution runs (native — acquired from OS threads)
 distribution_semaphore = native_threading().Semaphore(1)
@@ -45,6 +49,11 @@ def _printer_available_for_distribution(printer: dict) -> bool:
             return False
         if bambu.get('waiting_for_m400') or bambu.get('ejection_m400_pending', 0) > 0:
             return False
+        if bambu.get('state') == 'ERROR':
+            if not clear_stale_bambu_error_if_idle(name):
+                return False
+            with bambu_states_lock:
+                bambu = BAMBU_PRINTER_STATES.get(name, {})
     return True
 
 

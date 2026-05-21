@@ -124,7 +124,7 @@ export function useClearError() {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: (printerName: string) =>
-      api.post<ApiResponse>(`/clear_error_by_name`, { printer_name: printerName }),
+      api.post<ApiResponse>(`/printers/${encodeURIComponent(printerName)}/clear-error`),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['printers'] })
     },

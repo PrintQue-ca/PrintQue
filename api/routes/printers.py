@@ -1448,12 +1448,17 @@ def clear_error_by_name():
     if not printer_name:
         return jsonify({"success": False, "message": "Printer name not provided"}), 400
 
+    printer_index = None
     with ReadLock(printers_rwlock):
         for i, printer in enumerate(PRINTERS):
             if printer['name'] == printer_name:
-                return clear_error(i)
+                printer_index = i
+                break
 
-    return jsonify({"success": False, "message": f"Printer {printer_name} not found"}), 404
+    if printer_index is None:
+        return jsonify({"success": False, "message": f"Printer {printer_name} not found"}), 404
+
+    return clear_error(printer_index)
 
 def register_printer_routes(app, socketio):
     """Register the printer routes blueprint with the app"""
