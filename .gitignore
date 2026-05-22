@@ -30,6 +30,10 @@ app/.vscode/*
 *.swp
 *.swo
 
+# Cursor — commit shared rules/hooks, ignore local state
+.cursor/hooks/state/
+.cursor/**/*.log
+
 # Logs
 logs/
 *.log
