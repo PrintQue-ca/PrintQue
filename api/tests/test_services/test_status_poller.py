@@ -642,16 +642,54 @@ class TestStateTransitions:
 
     @pytest.mark.asyncio
     async def test_offline_when_api_returns_none(self):
+        from services.status_poller import PRUSA_LIVE_STATUS_SEEN
+
         printers = [make_printer()]
+        PRUSA_LIVE_STATUS_SEEN.add('Printer1')
         result, _ = await self._run_poll(printers, {'Printer1': None})
         assert result[0]['state'] == 'OFFLINE'
 
     @pytest.mark.asyncio
+    async def test_prusa_preserves_state_before_live_status(self):
+        from services.status_poller import PRUSA_LIVE_STATUS_SEEN, PRUSA_OFFLINE_POLL_FAILURES
+
+        PRUSA_LIVE_STATUS_SEEN.clear()
+        PRUSA_OFFLINE_POLL_FAILURES.clear()
+        printers = [make_printer(state='READY')]
+        result, _ = await self._run_poll(printers, {'Printer1': None})
+        assert result[0]['state'] == 'READY'
+
+    @pytest.mark.asyncio
+    async def test_bambu_preserves_printing_on_offline_api_before_live(self):
+        from services.bambu_handler import BAMBU_LIVE_STATUS_SEEN
+
+        BAMBU_LIVE_STATUS_SEEN.clear()
+        printers = [make_printer(
+            name='B1',
+            type='bambu',
+            state='PRINTING',
+            device_id='sn',
+            serial_number='sn',
+            access_code='enc',
+        )]
+        offline = {
+            'printer': {
+                'state': 'OFFLINE',
+                'temp_nozzle': 0,
+                'temp_bed': 0,
+                'axis_z': 0,
+            }
+        }
+        result, _ = await self._run_poll(printers, {'B1': offline})
+        assert result[0]['state'] == 'PRINTING'
+
+    @pytest.mark.asyncio
     async def test_offline_on_fetch_exception(self):
         """fetch_status raising maps to OFFLINE."""
-        from services.status_poller import get_printer_status_async
+        from services.status_poller import get_printer_status_async, PRUSA_LIVE_STATUS_SEEN
 
         printers = [make_printer()]
+        PRUSA_LIVE_STATUS_SEEN.add('Printer1')
         mock_sio = MagicMock()
 
         async def _boom(session, printer):

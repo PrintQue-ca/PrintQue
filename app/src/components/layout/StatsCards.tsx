@@ -1,7 +1,8 @@
-import { FileText, Layers, Pause, Play, Printer } from 'lucide-react'
+import { Layers, Pause, Play, Printer, TrendingUp } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { useEjectionStatus, usePauseEjection, useResumeEjection, useStats } from '@/hooks'
+import { formatFilamentKg } from '@/lib/format-filament'
 
 export function StatsCards() {
   const { data: stats, isLoading: statsLoading } = useStats()
@@ -51,12 +52,14 @@ export function StatsCards() {
 
       <Card>
         <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-          <CardTitle className="text-sm font-medium">In Queue</CardTitle>
-          <FileText className="h-4 w-4 text-muted-foreground" />
+          <CardTitle className="text-sm font-medium">Queue Activity</CardTitle>
+          <TrendingUp className="h-4 w-4 text-muted-foreground" />
         </CardHeader>
         <CardContent>
-          <div className="text-2xl font-bold">{stats?.in_queue_count || 0}</div>
-          <p className="text-xs text-muted-foreground">Orders actively printing</p>
+          <div className="text-2xl font-bold">
+            {stats?.active_prints ?? 0} printing · {stats?.queue_pending_count ?? 0} queued
+          </div>
+          <p className="text-xs text-muted-foreground">Active prints and jobs waiting to start</p>
         </CardContent>
       </Card>
 
@@ -66,9 +69,7 @@ export function StatsCards() {
           <Layers className="h-4 w-4 text-muted-foreground" />
         </CardHeader>
         <CardContent>
-          <div className="text-2xl font-bold">
-            {stats?.total_filament ? `${(stats.total_filament / 1000).toFixed(1)}kg` : '0g'}
-          </div>
+          <div className="text-2xl font-bold">{formatFilamentKg(stats?.total_filament ?? 0)}</div>
           <p className="text-xs text-muted-foreground">Total filament consumption</p>
         </CardContent>
       </Card>

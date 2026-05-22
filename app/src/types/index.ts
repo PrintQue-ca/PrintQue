@@ -125,9 +125,13 @@ export interface Group {
 
 // Stats types
 export interface Stats {
+  /** Total filament consumed (kilograms). */
   total_filament: number
   printers_count: number
   library_count: number
+  /** Jobs waiting to start (sent === 0). */
+  queue_pending_count: number
+  /** Legacy: partial multi-copy jobs (0 < sent < quantity). */
   in_queue_count: number
   active_prints: number
   idle_printers: number

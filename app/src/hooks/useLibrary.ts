@@ -1,12 +1,39 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { toast } from 'sonner'
+import { useIsApiConnected } from '@/hooks/useApiConnection'
 import { api } from '@/lib/api'
+import { optimisticRemoveLibraryItems, restoreLibraryCache } from '@/lib/optimistic-library-cache'
+import { libraryRefetchInterval } from '@/lib/refetch-intervals'
 import type { ApiResponse, LibraryItem } from '@/types'
 
+export interface BulkDeleteLibraryResult {
+  success: boolean
+  deleted_count: number
+  failures: Array<{ id: number; error: string }>
+}
+
+export interface BulkUpdateLibraryPayload {
+  ids: number[]
+  groups?: (number | string)[]
+  ejectionEnabled?: boolean
+  ejectionCodeId?: string | null
+  endGcode?: string
+  cooldownTemp?: number | null
+}
+
+export interface BulkUpdateLibraryResult {
+  success: boolean
+  updated_count: number
+  failures: Array<{ id: number; error: string }>
+}
+
 export function useLibrary() {
+  const isConnected = useIsApiConnected()
   return useQuery({
     queryKey: ['library'],
     queryFn: () => api.get<LibraryItem[]>('/library'),
     staleTime: 5000,
+    refetchInterval: (query) => libraryRefetchInterval(isConnected, query.state.dataUpdatedAt),
   })
 }
 
@@ -90,6 +117,69 @@ export interface ImportLibraryResult {
   success_count: number
   failed_count: number
   failures: Array<{ row: number; error: string }>
+}
+
+export function useBulkDeleteLibrary() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationKey: ['bulkDeleteLibrary'],
+    mutationFn: (ids: number[]) =>
+      api.post<BulkDeleteLibraryResult>('/library/bulk-delete', { ids }),
+    onMutate: async (ids) => {
+      const { previous } = await optimisticRemoveLibraryItems(queryClient, ids)
+      return { previous }
+    },
+    onSuccess: (data) => {
+      const failures = data?.failures ?? []
+      const deleted = data?.deleted_count ?? 0
+      if (deleted > 0) {
+        toast.success(
+          failures.length > 0
+            ? `${deleted} deleted; ${failures.length} could not be deleted`
+            : `${deleted} library item(s) deleted`
+        )
+      } else if (failures.length > 0) {
+        toast.error(failures[0]?.error ?? 'Could not delete selected items')
+      }
+      queryClient.invalidateQueries({ queryKey: ['library'] })
+    },
+    onError: (_err, _ids, context) => {
+      restoreLibraryCache(queryClient, context?.previous)
+      toast.error('Failed to delete library items')
+    },
+  })
+}
+
+export function useBulkUpdateLibrary() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (payload: BulkUpdateLibraryPayload) => {
+      const body: Record<string, unknown> = { ids: payload.ids }
+      if (payload.groups !== undefined) body.groups = payload.groups
+      if (payload.ejectionEnabled !== undefined) body.ejection_enabled = payload.ejectionEnabled
+      if (payload.ejectionCodeId !== undefined) body.ejection_code_id = payload.ejectionCodeId
+      if (payload.endGcode !== undefined) body.end_gcode = payload.endGcode
+      if (payload.cooldownTemp !== undefined) body.cooldown_temp = payload.cooldownTemp
+      return api.post<BulkUpdateLibraryResult>('/library/bulk-update', body)
+    },
+    onSuccess: (data) => {
+      const failures = data?.failures ?? []
+      const updated = data?.updated_count ?? 0
+      if (updated > 0) {
+        toast.success(
+          failures.length > 0
+            ? `${updated} updated; ${failures.length} could not be updated`
+            : `${updated} library item(s) updated`
+        )
+      } else if (failures.length > 0) {
+        toast.error(failures[0]?.error ?? 'Could not update selected items')
+      }
+      queryClient.invalidateQueries({ queryKey: ['library'] })
+    },
+    onError: () => {
+      toast.error('Failed to update library items')
+    },
+  })
 }
 
 export function useImportLibrary() {

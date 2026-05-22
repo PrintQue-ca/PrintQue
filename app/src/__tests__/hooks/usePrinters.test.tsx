@@ -9,6 +9,12 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { useAddPrinter, useDeletePrinter, usePrinters, useStopPrint } from '../../hooks/usePrinters'
 import type { Printer } from '../../types'
 
+vi.mock('../../hooks/useApiConnection', () => ({
+  useAdaptiveRefetchInterval: () => false,
+  useIsApiConnected: () => true,
+  useApiConnection: () => 'connected' as const,
+}))
+
 // Mock the API module
 vi.mock('../../lib/api', () => ({
   api: {
@@ -164,7 +170,7 @@ describe('usePrinters', () => {
         expect(result.current.isSuccess).toBe(true)
       })
 
-      expect(api.post).toHaveBeenCalledWith('/printers/Printer 1/stop')
+      expect(api.post).toHaveBeenCalledWith('/printers/Printer%201/stop')
     })
   })
 })

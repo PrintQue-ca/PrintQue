@@ -19,7 +19,7 @@ from services.state import (
 from services.library_queue import clear_queue_job_error, record_queue_job_error
 from services.bambu_handler import (
     get_bambu_status, send_bambu_ejection_gcode,
-    BAMBU_PRINTER_STATES, bambu_states_lock,
+    BAMBU_PRINTER_STATES, BAMBU_LIVE_STATUS_SEEN, bambu_states_lock,
     clear_bambu_print_assignment,
     clear_stale_bambu_error_if_idle,
 )
@@ -48,6 +48,25 @@ from utils.status_poller_helpers import (           # noqa: F401
 
 # Set from start_background_tasks so MQTT-driven cooling checks can broadcast.
 _status_broadcast_refs = {'socketio': None, 'app': None}
+
+# Session-only: Prusa/Octoprint printers with a successful HTTP status this process.
+PRUSA_LIVE_STATUS_SEEN: set[str] = set()
+PRUSA_OFFLINE_POLL_FAILURES: dict[str, int] = {}
+PRUSA_LIVE_MAX_OFFLINE_POLLS = 3
+
+
+def _should_preserve_on_unreachable(printer: dict) -> bool:
+    """Skip OFFLINE downgrade during API restart reconnect (before live status)."""
+    name = printer['name']
+    if printer.get('state', 'READY') == 'OFFLINE':
+        return False
+    if printer.get('type') == 'bambu':
+        return name not in BAMBU_LIVE_STATUS_SEEN
+    if name in PRUSA_LIVE_STATUS_SEEN:
+        return False
+    failures = PRUSA_OFFLINE_POLL_FAILURES.get(name, 0) + 1
+    PRUSA_OFFLINE_POLL_FAILURES[name] = failures
+    return failures < PRUSA_LIVE_MAX_OFFLINE_POLLS
 _cooling_check_timers = {}
 _cooling_ui_broadcast_last = {}
 _cooling_printer_names: set = set()
@@ -194,14 +213,11 @@ def _broadcast_status_snapshot(socketio, app):
     with SafeLock(filament_lock):
         filament_data = load_data(TOTAL_FILAMENT_FILE, {"total_filament_used_g": 0})
         current_filament = filament_data.get("total_filament_used_g", 0) / 1000
-    with SafeLock(orders_lock):
-        current_orders = copy.deepcopy(ORDERS)
     with ReadLock(printers_rwlock):
         printers_copy = prepare_printer_data_for_broadcast(PRINTERS)
     emit_status_update(socketio, app, {
         'printers': printers_copy,
         'total_filament': current_filament,
-        'orders': current_orders,
     })
 
 
@@ -537,6 +553,8 @@ async def fetch_status(session, printer):
                 if resp.status == 200:
                     data = await resp.json()
                     logging.debug(f"Successfully fetched status for {printer['name']}: {data['printer']['state']}")
+                    PRUSA_LIVE_STATUS_SEEN.add(printer['name'])
+                    PRUSA_OFFLINE_POLL_FAILURES.pop(printer['name'], None)
                     return printer, data
                 logging.warning(f"Failed to fetch status for {printer['name']}: HTTP {resp.status}")
                 return printer, None
@@ -809,6 +827,12 @@ async def get_printer_status_async(socketio, app, batch_index=None, batch_size=N
         for idx, result in enumerate(results):
             if isinstance(result, Exception):
                 logging.error(f"Error fetching status for {printers_to_process[idx]['name']}: {str(result)}")
+                if _should_preserve_on_unreachable(printers_to_process[idx]):
+                    logging.debug(
+                        f"Preserving state for {printers_to_process[idx]['name']} "
+                        "(fetch error before live status)"
+                    )
+                    continue
                 printer_updates.append({
                     'index': printer_indices[idx],
                     'updates': _offline_update(),
@@ -816,8 +840,27 @@ async def get_printer_status_async(socketio, app, batch_index=None, batch_size=N
                 continue
 
             printer, data = result
+            if not data:
+                if _should_preserve_on_unreachable(printer):
+                    logging.debug(
+                        f"Preserving state for {printer['name']} "
+                        "(no API data before live status)"
+                    )
+                    continue
+                printer_updates.append({
+                    'index': printer_indices[idx],
+                    'updates': _offline_update(),
+                })
+                continue
+
             if data:
                 api_state = data['printer']['state']
+                if api_state == 'OFFLINE' and _should_preserve_on_unreachable(printer):
+                    logging.debug(
+                        f"Preserving state for {printer['name']} "
+                        "(OFFLINE API response before live status)"
+                    )
+                    continue
                 manually_set = printer.get('manually_set', False)
                 current_state = printer.get('state', 'Unknown')
                 ejection_processed = printer.get('ejection_processed', False)
@@ -1070,11 +1113,6 @@ async def get_printer_status_async(socketio, app, batch_index=None, batch_size=N
                             if printer_indices[idx] < len(PRINTERS):
                                 PRINTERS[printer_indices[idx]]['pending_ejection'] = None
                                 logging.info(f"EJECTION: Queued pending ejection task for {printer['name']}")
-            else:
-                printer_updates.append({
-                    'index': printer_indices[idx],
-                    'updates': _offline_update(),
-                })
 
         if ejection_tasks:
             logging.info(f"EJECTION: Executing {len(ejection_tasks)} ejection tasks")
@@ -1127,10 +1165,6 @@ async def get_printer_status_async(socketio, app, batch_index=None, batch_size=N
         current_filament = TOTAL_FILAMENT_CONSUMPTION / 1000
         logging.debug(f"Loaded filament data: total={TOTAL_FILAMENT_CONSUMPTION}g ({current_filament}kg)")
 
-    current_orders = None
-    with SafeLock(orders_lock):
-        current_orders = copy.deepcopy(ORDERS)
-
     with ReadLock(printers_rwlock):
         printers_copy = prepare_printer_data_for_broadcast(PRINTERS)
 
@@ -1139,5 +1173,4 @@ async def get_printer_status_async(socketio, app, batch_index=None, batch_size=N
         emit_status_update(socketio, app, {
             'printers': printers_copy,
             'total_filament': current_filament,
-            'orders': current_orders
         })

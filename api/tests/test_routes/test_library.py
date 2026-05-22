@@ -2,6 +2,7 @@
 
 import json
 import os
+from unittest.mock import patch
 
 import pytest
 
@@ -65,3 +66,57 @@ class TestLibraryAPI:
         assert response.status_code == 200
         item = client.get(f'/api/v1/library/{item_id}').get_json()
         assert item['name'] == 'Renamed'
+
+    def _create_two_library_items(self, client, sample_gcode_in_uploads):
+        ids = []
+        for _ in range(2):
+            with open(sample_gcode_in_uploads, 'rb') as f:
+                client.post(
+                    '/api/v1/library',
+                    data={'file': (f, 'test_part.gcode')},
+                    content_type='multipart/form-data',
+                )
+            ids.append(client.get('/api/v1/library').get_json()[-1]['id'])
+        return ids
+
+    def test_bulk_delete_library(self, client, sample_gcode_in_uploads):
+        id1, id2 = self._create_two_library_items(client, sample_gcode_in_uploads)
+        response = client.post('/api/v1/library/bulk-delete', json={'ids': [id1, id2]})
+        assert response.status_code == 200
+        data = response.get_json()
+        assert data['success'] is True
+        assert data['deleted_count'] == 2
+        assert data['failures'] == []
+        assert client.get('/api/v1/library').get_json() == []
+
+    def test_bulk_delete_skips_active_prints(self, client, sample_gcode_in_uploads):
+        item_id = self._create_two_library_items(client, sample_gcode_in_uploads)[0]
+        with patch(
+            'routes.library.library_item_has_active_prints',
+            side_effect=lambda lib_id, *_: lib_id == item_id,
+        ):
+            response = client.post('/api/v1/library/bulk-delete', json={'ids': [item_id]})
+        assert response.status_code == 200
+        data = response.get_json()
+        assert data['deleted_count'] == 0
+        assert len(data['failures']) == 1
+        assert 'prints in progress' in data['failures'][0]['error']
+        assert client.get('/api/v1/library').get_json()
+
+    def test_bulk_update_library(self, client, sample_gcode_in_uploads):
+        id1, id2 = self._create_two_library_items(client, sample_gcode_in_uploads)
+        response = client.post(
+            '/api/v1/library/bulk-update',
+            json={
+                'ids': [id1, id2],
+                'groups': ['GroupA'],
+                'ejection_enabled': True,
+            },
+        )
+        assert response.status_code == 200
+        data = response.get_json()
+        assert data['updated_count'] == 2
+        assert data['failures'] == []
+        for item in client.get('/api/v1/library').get_json():
+            assert item['groups'] == ['GroupA']
+            assert item['ejection_enabled'] is True

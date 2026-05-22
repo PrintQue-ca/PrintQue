@@ -1,4 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useAdaptiveRefetchInterval } from '@/hooks/useApiConnection'
 import { api } from '@/lib/api'
 import type {
   ApiResponse,
@@ -11,11 +12,12 @@ import type {
 } from '@/types'
 
 export function useStats() {
+  const refetchInterval = useAdaptiveRefetchInterval()
   return useQuery({
     queryKey: ['stats'],
     queryFn: () => api.get<Stats>('/system/stats'),
     staleTime: 5000,
-    refetchInterval: 30000,
+    refetchInterval,
   })
 }
 

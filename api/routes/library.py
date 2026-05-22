@@ -18,6 +18,11 @@ from services.library_queue import (
     can_replace_library_file,
     update_pending_queue_snapshots_for_library,
     library_item_has_active_prints,
+    apply_library_groups,
+    apply_library_ejection_fields,
+    parse_library_cooldown_temp,
+    parse_library_id_list,
+    LIBRARY_BULK_UPDATE_FIELDS,
     _next_int_id,
 )
 from services.printer_manager import extract_filament_from_file
@@ -28,11 +33,9 @@ from services.state import (
     QUEUE_FILE,
     PRINTERS,
     apply_ejection_fields_to_order,
-    auto_save_ejection_code,
     orders_lock,
     printers_rwlock,
     resolve_ejection_gcode,
-    resolve_order_ejection_code_id,
     sanitize_group_name,
     save_data,
     SafeLock,
@@ -159,9 +162,7 @@ def register_library_routes(app, socketio):
                     if 'name' in data:
                         item['name'] = data['name'].strip() if data['name'] else None
                     if 'groups' in data:
-                        item['groups'] = [
-                            sanitize_group_name(str(g)) for g in data['groups'] if g
-                        ] or ['Default']
+                        apply_library_groups(item, data['groups'], sanitize_group_name)
                     item['updated_at'] = datetime.now().isoformat()
                     save_data(LIBRARY_FILE, LIBRARY_ITEMS)
                     return jsonify({'success': True, 'item': _attach_ejection_name(item)})
@@ -173,46 +174,20 @@ def register_library_routes(app, socketio):
     def api_update_library_ejection(item_id):
         try:
             data = request.get_json() or {}
-            cooldown_provided = 'cooldown_temp' in data
-            cooldown_value = None
-            if cooldown_provided and data['cooldown_temp'] is not None:
-                raw = data['cooldown_temp']
-                if isinstance(raw, bool) or not isinstance(raw, (int, float)):
-                    return jsonify({'error': 'cooldown_temp must be an integer between 0 and 100, or null'}), 400
-                cooldown_value = int(raw)
-                if cooldown_value < 0 or cooldown_value > 100:
-                    return jsonify({'error': 'cooldown_temp must be between 0 and 100'}), 400
+            cooldown_provided, cooldown_value, cooldown_err = parse_library_cooldown_temp(data)
+            if cooldown_err:
+                return jsonify({'error': cooldown_err}), 400
 
             with SafeLock(orders_lock):
                 for item in LIBRARY_ITEMS:
                     if item.get('id') != item_id or item.get('deleted'):
                         continue
-                    ejection_enabled = item.get('ejection_enabled', False)
-                    if 'ejection_enabled' in data:
-                        ejection_enabled = bool(data['ejection_enabled'])
-                    ejection_code_id = data.get('ejection_code_id', item.get('ejection_code_id'))
-                    end_gcode = data.get('end_gcode') if 'end_gcode' in data else None
-                    if ejection_enabled and end_gcode is not None and str(end_gcode).strip():
-                        ejection_code_id = auto_save_ejection_code(
-                            str(end_gcode).strip(),
-                            name_hint=item.get('filename') or item.get('name') or 'Custom',
-                        )['id']
-                    elif ejection_enabled and 'ejection_code_id' in data:
-                        resolved = resolve_order_ejection_code_id(
-                            ejection_code_id=ejection_code_id,
-                            name_hint=item.get('filename') or 'Custom',
-                        )
-                        if resolved:
-                            ejection_code_id = resolved
-                    apply_ejection_fields_to_order(
+                    apply_library_ejection_fields(
                         item,
-                        ejection_enabled=ejection_enabled,
-                        ejection_code_id=ejection_code_id if ejection_enabled else None,
-                        end_gcode=end_gcode if ejection_enabled and end_gcode else None,
-                        name_hint=item.get('filename') or item.get('name') or 'Custom',
+                        data,
+                        cooldown_provided=cooldown_provided,
+                        cooldown_value=cooldown_value,
                     )
-                    if cooldown_provided:
-                        item['cooldown_temp'] = cooldown_value
                     item['updated_at'] = datetime.now().isoformat()
                     save_data(LIBRARY_FILE, LIBRARY_ITEMS)
                     return jsonify({'success': True, 'item': _attach_ejection_name(item)})
@@ -237,6 +212,99 @@ def register_library_routes(app, socketio):
                         return jsonify({'success': True})
             return jsonify({'error': 'Library item not found'}), 404
         except Exception as e:
+            return jsonify({'error': str(e)}), 500
+
+    @app.route('/api/v1/library/bulk-delete', methods=['POST'])
+    def api_bulk_delete_library():
+        try:
+            data = request.get_json() or {}
+            id_set = parse_library_id_list(data.get('ids'))
+            if id_set is None:
+                return jsonify({'error': 'ids array is required'}), 400
+
+            deleted_count = 0
+            failures = []
+            active_msg = 'Cannot delete: prints in progress for this library item'
+
+            with SafeLock(orders_lock):
+                with WriteLock(printers_rwlock):
+                    for item_id in id_set:
+                        item = None
+                        for row in LIBRARY_ITEMS:
+                            if row.get('id') == item_id:
+                                item = row
+                                break
+                        if not item or item.get('deleted'):
+                            failures.append({'id': item_id, 'error': 'Library item not found'})
+                            continue
+                        if library_item_has_active_prints(item_id, QUEUE_JOBS, PRINTERS):
+                            failures.append({'id': item_id, 'error': active_msg})
+                            continue
+                        item['deleted'] = True
+                        deleted_count += 1
+                if deleted_count > 0:
+                    save_data(LIBRARY_FILE, LIBRARY_ITEMS)
+
+            return jsonify({
+                'success': True,
+                'deleted_count': deleted_count,
+                'failures': failures,
+            })
+        except Exception as e:
+            logging.error(f"Error in api_bulk_delete_library: {e}")
+            return jsonify({'error': str(e)}), 500
+
+    @app.route('/api/v1/library/bulk-update', methods=['POST'])
+    def api_bulk_update_library():
+        try:
+            data = request.get_json() or {}
+            id_set = parse_library_id_list(data.get('ids'))
+            if id_set is None:
+                return jsonify({'error': 'ids array is required'}), 400
+
+            update_fields = {k: data[k] for k in LIBRARY_BULK_UPDATE_FIELDS if k in data}
+            if not update_fields:
+                return jsonify({'error': 'At least one update field is required'}), 400
+
+            cooldown_provided, cooldown_value, cooldown_err = parse_library_cooldown_temp(data)
+            if cooldown_err:
+                return jsonify({'error': cooldown_err}), 400
+
+            ejection_keys = {'ejection_enabled', 'ejection_code_id', 'end_gcode', 'cooldown_temp'}
+            has_ejection_update = bool(ejection_keys & update_fields.keys())
+
+            updated_count = 0
+            failures = []
+
+            with SafeLock(orders_lock):
+                for item_id in id_set:
+                    item = find_library_item(LIBRARY_ITEMS, item_id)
+                    if not item:
+                        failures.append({'id': item_id, 'error': 'Library item not found'})
+                        continue
+                    if 'groups' in update_fields:
+                        apply_library_groups(
+                            item, update_fields['groups'], sanitize_group_name
+                        )
+                    if has_ejection_update:
+                        apply_library_ejection_fields(
+                            item,
+                            update_fields,
+                            cooldown_provided=cooldown_provided,
+                            cooldown_value=cooldown_value,
+                        )
+                    item['updated_at'] = datetime.now().isoformat()
+                    updated_count += 1
+                if updated_count > 0:
+                    save_data(LIBRARY_FILE, LIBRARY_ITEMS)
+
+            return jsonify({
+                'success': True,
+                'updated_count': updated_count,
+                'failures': failures,
+            })
+        except Exception as e:
+            logging.error(f"Error in api_bulk_update_library: {e}")
             return jsonify({'error': str(e)}), 500
 
     @app.route('/api/v1/library/<int:item_id>/file', methods=['PUT'])

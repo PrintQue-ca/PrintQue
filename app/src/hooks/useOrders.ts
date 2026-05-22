@@ -1,6 +1,11 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '@/lib/api'
-import { optimisticRemoveQueueJobs, restoreQueueCache } from '@/lib/optimistic-queue-cache'
+import {
+  optimisticPatchQueueJobEjection,
+  optimisticRemoveQueueJobs,
+  type QueueEjectionPatch,
+  restoreQueueCache,
+} from '@/lib/optimistic-queue-cache'
 import type { ApiResponse, QueueJob } from '@/types'
 
 /** @deprecated Use useQueue */
@@ -54,7 +59,7 @@ export function useUpdateOrder() {
     mutationFn: ({ id, data }: { id: number; data: Partial<QueueJob> }) =>
       api.patch<ApiResponse>(`/queue/${id}`, data),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['library'] })
+      queryClient.invalidateQueries({ queryKey: ['queue'] })
     },
   })
 }
@@ -65,7 +70,7 @@ export function useMoveOrder() {
     mutationFn: ({ id, direction }: { id: number; direction: 'up' | 'down' }) =>
       api.post<ApiResponse>(`/queue/${id}/move`, { direction }),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['library'] })
+      queryClient.invalidateQueries({ queryKey: ['queue'] })
     },
   })
 }
@@ -133,10 +138,28 @@ export function useUpdateOrderEjection() {
       if (ejectionCodeId !== undefined) body.ejection_code_id = ejectionCodeId
       if (endGcode !== undefined) body.end_gcode = endGcode
       if (cooldownTemp !== undefined) body.cooldown_temp = cooldownTemp
-      return api.patch<ApiResponse>(`/queue/${id}/ejection`, body)
+      return api.patch<ApiResponse & { job?: QueueJob }>(`/queue/${id}/ejection`, body)
     },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['library'] })
+    onMutate: async (variables) => {
+      const patch: QueueEjectionPatch = {}
+      if (variables.ejectionEnabled !== undefined)
+        patch.ejection_enabled = variables.ejectionEnabled
+      if (variables.ejectionCodeId !== undefined) patch.ejection_code_id = variables.ejectionCodeId
+      if (variables.cooldownTemp !== undefined) patch.cooldown_temp = variables.cooldownTemp
+      if (Object.keys(patch).length === 0) return { previous: undefined }
+      return optimisticPatchQueueJobEjection(queryClient, variables.id, patch)
+    },
+    onSuccess: (data) => {
+      const job = data?.job
+      if (job) {
+        queryClient.setQueryData<QueueJob[]>(
+          ['queue'],
+          (old) => old?.map((j) => (j.id === job.id ? { ...j, ...job } : j)) ?? old
+        )
+      }
+    },
+    onError: (_err, _variables, context) => {
+      restoreQueueCache(queryClient, context?.previous)
     },
   })
 }

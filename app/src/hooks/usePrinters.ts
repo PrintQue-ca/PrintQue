@@ -1,13 +1,15 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useAdaptiveRefetchInterval } from '@/hooks/useApiConnection'
 import { api } from '@/lib/api'
 import type { ApiResponse, Printer, PrinterFormData } from '@/types'
 
 export function usePrinters() {
+  const refetchInterval = useAdaptiveRefetchInterval()
   return useQuery({
     queryKey: ['printers'],
     queryFn: () => api.get<Printer[]>('/printers'),
     staleTime: 5000,
-    refetchInterval: 10000, // Refetch every 10 seconds as backup to socket updates
+    refetchInterval,
   })
 }
 

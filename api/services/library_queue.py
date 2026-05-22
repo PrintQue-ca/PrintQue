@@ -261,19 +261,96 @@ def find_library_item(library_items, item_id):
     return None
 
 
+def parse_library_cooldown_temp(data):
+    """Return (cooldown_provided, cooldown_value, error_message)."""
+    if 'cooldown_temp' not in data:
+        return False, None, None
+    if data['cooldown_temp'] is None:
+        return True, None, None
+    raw = data['cooldown_temp']
+    if isinstance(raw, bool) or not isinstance(raw, (int, float)):
+        return True, None, 'cooldown_temp must be an integer between 0 and 100, or null'
+    cooldown_value = int(raw)
+    if cooldown_value < 0 or cooldown_value > 100:
+        return True, None, 'cooldown_temp must be between 0 and 100'
+    return True, cooldown_value, None
+
+
+def apply_library_groups(item, groups, sanitize_fn):
+    item['groups'] = [sanitize_fn(str(g)) for g in groups if g] or ['Default']
+
+
+def apply_library_ejection_fields(item, data, *, cooldown_provided=False, cooldown_value=None):
+    from services.state import (
+        apply_ejection_fields_to_order,
+        auto_save_ejection_code,
+        resolve_order_ejection_code_id,
+    )
+
+    ejection_enabled = item.get('ejection_enabled', False)
+    if 'ejection_enabled' in data:
+        ejection_enabled = bool(data['ejection_enabled'])
+    ejection_code_id = data.get('ejection_code_id', item.get('ejection_code_id'))
+    end_gcode = data.get('end_gcode') if 'end_gcode' in data else None
+    if ejection_enabled and end_gcode is not None and str(end_gcode).strip():
+        ejection_code_id = auto_save_ejection_code(
+            str(end_gcode).strip(),
+            name_hint=item.get('filename') or item.get('name') or 'Custom',
+        )['id']
+    elif ejection_enabled and 'ejection_code_id' in data:
+        resolved = resolve_order_ejection_code_id(
+            ejection_code_id=ejection_code_id,
+            name_hint=item.get('filename') or 'Custom',
+        )
+        if resolved:
+            ejection_code_id = resolved
+    apply_ejection_fields_to_order(
+        item,
+        ejection_enabled=ejection_enabled,
+        ejection_code_id=ejection_code_id if ejection_enabled else None,
+        end_gcode=end_gcode if ejection_enabled and end_gcode else None,
+        name_hint=item.get('filename') or item.get('name') or 'Custom',
+    )
+    if cooldown_provided:
+        item['cooldown_temp'] = cooldown_value
+
+
+LIBRARY_BULK_UPDATE_FIELDS = frozenset({
+    'groups',
+    'ejection_enabled',
+    'ejection_code_id',
+    'end_gcode',
+    'cooldown_temp',
+})
+
+
+def parse_library_id_list(ids):
+    if not ids or not isinstance(ids, list):
+        return None
+    return {
+        int(x) for x in ids
+        if isinstance(x, (int, float)) and not isinstance(x, bool)
+    }
+
+
+_PRINTER_ACTIVE_STATES = frozenset({'PRINTING', 'COOLING', 'EJECTING'})
+
+
 def library_item_has_active_prints(library_id, queue_jobs, printers):
     for job in queue_jobs:
         if job.get('deleted'):
             continue
         if job.get('library_item_id') != library_id:
             continue
-        if job.get('sent', 0) > 0:
+        sent = int(job.get('sent', 0) or 0)
+        quantity = int(job.get('quantity', 1) or 1)
+        if sent > 0 and sent < quantity:
             return True
         job_id = job.get('id')
         for printer in printers:
             if printer.get('order_id') == job_id:
                 state = printer.get('state', '')
-                if state in ('PRINTING', 'COOLING', 'EJECTING', 'FINISHED'):
+                if state in _PRINTER_ACTIVE_STATES:
                     return True
     return False
 

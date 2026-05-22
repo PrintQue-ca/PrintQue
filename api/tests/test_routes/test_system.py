@@ -9,6 +9,7 @@ Tests the /api/v1/system/* endpoints including:
 - Logging configuration
 """
 
+from datetime import datetime
 from unittest.mock import patch
 
 
@@ -28,6 +29,7 @@ class TestSystemStats:
             assert 'total_filament' in data
             assert 'printers_count' in data
             assert 'library_count' in data
+            assert 'queue_pending_count' in data
             assert 'in_queue_count' in data
             assert 'active_prints' in data
             assert 'idle_printers' in data
@@ -46,6 +48,70 @@ class TestSystemStats:
             # One printer is PRINTING, one is READY
             assert data['active_prints'] == 1
             assert data['idle_printers'] == 1
+
+    def test_get_stats_queue_pending_and_partial(self, client):
+        """queue_pending_count is pending jobs; in_queue_count stays partial-only."""
+        today = datetime.now().isoformat()
+        queue_jobs = [
+            {
+                'id': 1,
+                'sent': 0,
+                'quantity': 2,
+                'deleted': False,
+                'status': 'pending',
+                'created_at': today,
+            },
+            {
+                'id': 2,
+                'sent': 1,
+                'quantity': 3,
+                'deleted': False,
+                'status': 'partial',
+                'created_at': today,
+            },
+            {
+                'id': 3,
+                'sent': 1,
+                'quantity': 1,
+                'deleted': False,
+                'status': 'fulfilled',
+                'completed_at': today,
+                'created_at': today,
+            },
+        ]
+        with patch('routes.PRINTERS', []), \
+             patch('routes.QUEUE_JOBS', queue_jobs), \
+             patch('routes.LIBRARY_ITEMS', []):
+            response = client.get('/api/v1/system/stats')
+
+            assert response.status_code == 200
+            data = response.get_json()
+
+            assert data['queue_pending_count'] == 1
+            assert data['in_queue_count'] == 1
+            assert data['completed_today'] == 1
+
+    def test_completed_today_without_completed_at_uses_updated_at(self, client):
+        """Fulfilled jobs missing completed_at count when updated_at is today."""
+        today = datetime.now().isoformat()
+        queue_jobs = [
+            {
+                'id': 10,
+                'sent': 2,
+                'quantity': 2,
+                'deleted': False,
+                'status': 'fulfilled',
+                'updated_at': today,
+                'created_at': '2020-01-01T00:00:00',
+            },
+        ]
+        with patch('routes.PRINTERS', []), \
+             patch('routes.QUEUE_JOBS', queue_jobs), \
+             patch('routes.LIBRARY_ITEMS', []):
+            response = client.get('/api/v1/system/stats')
+
+            assert response.status_code == 200
+            assert response.get_json()['completed_today'] == 1
 
 
 class TestSystemLicense:

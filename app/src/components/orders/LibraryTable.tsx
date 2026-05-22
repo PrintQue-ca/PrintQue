@@ -1,5 +1,5 @@
 import { ListPlus, Pencil, Trash2 } from 'lucide-react'
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { toast } from 'sonner'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -12,9 +12,10 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
-import { useDeleteLibraryItem } from '@/hooks'
+import { useBulkDeleteLibrary, useDeleteLibraryItem } from '@/hooks'
 import type { LibraryItem } from '@/types'
 import { BulkEnqueueDialog } from './BulkEnqueueDialog'
+import { BulkLibraryEditDialog } from './BulkLibraryEditDialog'
 import { LibraryEditDialog } from './LibraryEditDialog'
 
 interface LibraryTableProps {
@@ -23,11 +24,18 @@ interface LibraryTableProps {
 
 export function LibraryTable({ items }: LibraryTableProps) {
   const deleteItem = useDeleteLibraryItem()
+  const bulkDelete = useBulkDeleteLibrary()
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set())
   const [enqueueOpen, setEnqueueOpen] = useState(false)
+  const [bulkEditOpen, setBulkEditOpen] = useState(false)
   const [editItem, setEditItem] = useState<LibraryItem | null>(null)
 
-  const selectedItems = items.filter((i) => selectedIds.has(i.id))
+  const itemIds = useMemo(() => new Set(items.map((i) => i.id)), [items])
+  const effectiveSelectedIds = useMemo(
+    () => new Set([...selectedIds].filter((id) => itemIds.has(id))),
+    [selectedIds, itemIds]
+  )
+  const selectedItems = items.filter((i) => effectiveSelectedIds.has(i.id))
 
   const toggleSelect = (id: number) => {
     setSelectedIds((prev) => {
@@ -39,11 +47,22 @@ export function LibraryTable({ items }: LibraryTableProps) {
   }
 
   const toggleAll = () => {
-    if (selectedIds.size === items.length) {
+    if (effectiveSelectedIds.size === items.length && items.length > 0) {
       setSelectedIds(new Set())
     } else {
       setSelectedIds(new Set(items.map((i) => i.id)))
     }
+  }
+
+  const clearSelection = () => setSelectedIds(new Set())
+
+  const handleBulkDelete = () => {
+    if (effectiveSelectedIds.size === 0) return
+    const count = effectiveSelectedIds.size
+    if (!confirm(`Delete ${count} selected library item(s)?`)) return
+    const ids = Array.from(effectiveSelectedIds)
+    clearSelection()
+    bulkDelete.mutate(ids)
   }
 
   const handleDelete = (id: number) => {
@@ -56,11 +75,23 @@ export function LibraryTable({ items }: LibraryTableProps) {
 
   return (
     <>
-      {selectedIds.size > 0 && (
-        <div className="flex items-center gap-2 mb-3">
+      {effectiveSelectedIds.size > 0 && (
+        <div className="flex items-center gap-3 rounded-md border bg-muted/50 px-3 py-2 mb-3">
+          <span className="text-sm">{effectiveSelectedIds.size} selected</span>
           <Button size="sm" onClick={() => setEnqueueOpen(true)}>
             <ListPlus className="h-4 w-4 mr-1" />
-            Add {selectedIds.size} to queue
+            Add to queue
+          </Button>
+          <Button size="sm" variant="outline" onClick={() => setBulkEditOpen(true)}>
+            <Pencil className="h-4 w-4 mr-1" />
+            Edit
+          </Button>
+          <Button size="sm" variant="destructive" onClick={handleBulkDelete}>
+            <Trash2 className="h-4 w-4 mr-1" />
+            Delete
+          </Button>
+          <Button size="sm" variant="ghost" onClick={clearSelection}>
+            Clear selection
           </Button>
         </div>
       )}
@@ -70,7 +101,7 @@ export function LibraryTable({ items }: LibraryTableProps) {
           <TableRow>
             <TableHead className="w-10">
               <Checkbox
-                checked={items.length > 0 && selectedIds.size === items.length}
+                checked={items.length > 0 && effectiveSelectedIds.size === items.length}
                 onCheckedChange={toggleAll}
               />
             </TableHead>
@@ -92,7 +123,7 @@ export function LibraryTable({ items }: LibraryTableProps) {
               <TableRow key={item.id}>
                 <TableCell>
                   <Checkbox
-                    checked={selectedIds.has(item.id)}
+                    checked={effectiveSelectedIds.has(item.id)}
                     onCheckedChange={() => toggleSelect(item.id)}
                   />
                 </TableCell>
@@ -141,6 +172,12 @@ export function LibraryTable({ items }: LibraryTableProps) {
       </Table>
 
       <BulkEnqueueDialog open={enqueueOpen} onOpenChange={setEnqueueOpen} items={selectedItems} />
+      <BulkLibraryEditDialog
+        open={bulkEditOpen}
+        onOpenChange={setBulkEditOpen}
+        items={selectedItems}
+        onSuccess={clearSelection}
+      />
       <LibraryEditDialog
         item={editItem}
         open={!!editItem}

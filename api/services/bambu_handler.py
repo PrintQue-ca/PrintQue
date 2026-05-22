@@ -254,6 +254,8 @@ BAMBU_ERROR_CODES = {
 
 # Store printer states (since MQTT is async)
 BAMBU_PRINTER_STATES = {}
+# Printers that received at least one MQTT gcode_state this process (session-only).
+BAMBU_LIVE_STATUS_SEEN: set[str] = set()
 # RLock: on_message holds this while calling _signal_gcode_line_ack / _complete_bambu_ejection.
 bambu_states_lock = _threading.RLock()
 
@@ -506,6 +508,7 @@ def on_message(client, userdata, msg):
 
                 # State updates
                 if "gcode_state" in print_data:
+                    BAMBU_LIVE_STATUS_SEEN.add(printer_name)
                     old_state = BAMBU_PRINTER_STATES[printer_name].get('gcode_state', 'UNKNOWN')
                     if old_state != gcode_state:
                         logging.info(f"Bambu {printer_name} state changed: {old_state} -> {gcode_state}")
@@ -919,6 +922,48 @@ def request_bambu_status(printer: Dict[str, Any]) -> None:
     except Exception as e:
         logging.error(f"Error requesting Bambu status for {printer_name}: {str(e)}")
 
+
+def _persisted_bambu_state(printer: Dict[str, Any]) -> str:
+    """Last-known state from PRINTERS / disk (via minimal printer copy)."""
+    return printer.get('state') or 'READY'
+
+
+def _bambu_printer_status_payload(
+    state: str,
+    *,
+    nozzle_temp: float = 0,
+    bed_temp: float = 0,
+) -> Dict[str, Any]:
+    return {
+        "printer": {
+            "state": state,
+            "temp_nozzle": nozzle_temp,
+            "temp_bed": bed_temp,
+            "axis_z": 0,
+        }
+    }
+
+
+def _persisted_bambu_fallback(
+    printer: Dict[str, Any],
+    state_data: Optional[Dict[str, Any]] = None,
+) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+    """Return persisted state until MQTT delivers live gcode_state this session."""
+    persisted = _persisted_bambu_state(printer)
+    nozzle_temp = 0
+    bed_temp = 0
+    if state_data:
+        nozzle_temp = state_data.get('nozzle_temp', 0)
+        bed_temp = state_data.get('bed_temp', 0)
+    logging.debug(
+        f"Bambu {printer['name']}: preserving persisted state {persisted} "
+        "(no live MQTT status this session yet)"
+    )
+    return printer, _bambu_printer_status_payload(
+        persisted, nozzle_temp=nozzle_temp, bed_temp=bed_temp
+    )
+
+
 def get_bambu_status(printer: Dict[str, Any]) -> Tuple[Dict[str, Any], Optional[Dict[str, Any]]]:
     """Get current status of Bambu printer"""
     printer_name = printer['name']
@@ -958,29 +1003,40 @@ def get_bambu_status(printer: Dict[str, Any]) -> Tuple[Dict[str, Any], Optional[
     # Ensure connected
     if printer_name not in MQTT_CLIENTS or not MQTT_CLIENTS[printer_name].is_connected():
         if not connect_bambu_printer(printer):
-            # CRITICAL FIX: Also update cached state to OFFLINE when connection fails
+            # Connection failed (credentials/unreachable) — report OFFLINE
             with bambu_states_lock:
                 if printer_name in BAMBU_PRINTER_STATES:
                     BAMBU_PRINTER_STATES[printer_name]['state'] = 'OFFLINE'
                     BAMBU_PRINTER_STATES[printer_name]['connected'] = False
-            return printer, {
-                "printer": {
-                    "state": "OFFLINE",
-                    "temp_nozzle": 0,
-                    "temp_bed": 0,
-                    "axis_z": 0
-                }
-            }
+            return printer, _bambu_printer_status_payload('OFFLINE')
 
-    # Get cached state
+    # No live MQTT status yet this session — keep persisted state (startup reconnect race)
+    if printer_name not in BAMBU_LIVE_STATUS_SEEN:
+        with bambu_states_lock:
+            if printer_name not in BAMBU_PRINTER_STATES:
+                BAMBU_PRINTER_STATES[printer_name] = {
+                    'state': _persisted_bambu_state(printer),
+                    'gcode_state': 'UNKNOWN',
+                    'last_seen': 0,
+                    'connected': (
+                        printer_name in MQTT_CLIENTS
+                        and MQTT_CLIENTS[printer_name].is_connected()
+                    ),
+                }
+            elif _persisted_bambu_state(printer) != 'OFFLINE':
+                BAMBU_PRINTER_STATES[printer_name]['state'] = _persisted_bambu_state(printer)
+            state_data = BAMBU_PRINTER_STATES[printer_name].copy()
+        request_bambu_status(printer)
+        return _persisted_bambu_fallback(printer, state_data)
+
+    # Get cached state (live status has been seen at least once)
     with bambu_states_lock:
         if printer_name not in BAMBU_PRINTER_STATES:
-            # Initialize with OFFLINE state if no data exists
             BAMBU_PRINTER_STATES[printer_name] = {
-                'state': 'OFFLINE',
+                'state': _persisted_bambu_state(printer),
                 'gcode_state': 'UNKNOWN',
                 'last_seen': 0,
-                'connected': False
+                'connected': False,
             }
 
         state_data = BAMBU_PRINTER_STATES[printer_name].copy()
@@ -992,24 +1048,26 @@ def get_bambu_status(printer: Dict[str, Any]) -> Tuple[Dict[str, Any], Optional[
     if time_since_seen > 30:
         request_bambu_status(printer)
 
-    # CRITICAL FIX: If data is very stale (60+ seconds) AND we haven't received any updates,
-    # the printer is likely offline or unreachable
+    # Very stale cache and not connected — only after we've had live status this session
     if time_since_seen > 60 and not state_data.get('connected', False):
-        logging.warning(f"Bambu printer {printer_name} data is stale ({time_since_seen:.0f}s) and not connected, marking OFFLINE")
+        logging.warning(
+            f"Bambu printer {printer_name} data is stale ({time_since_seen:.0f}s) "
+            "and not connected, marking OFFLINE"
+        )
         with bambu_states_lock:
             BAMBU_PRINTER_STATES[printer_name]['state'] = 'OFFLINE'
         state_data['state'] = 'OFFLINE'
 
-    # CRITICAL FIX: Also check the connected flag - if disconnected, state should be OFFLINE
+    # Disconnected after live status — report OFFLINE
     if not state_data.get('connected', False) and state_data.get('state') not in ['OFFLINE', 'EJECTING']:
-        # Double-check if we're actually connected
         if printer_name in MQTT_CLIENTS and MQTT_CLIENTS[printer_name].is_connected():
-            # We are connected, update the flag
             with bambu_states_lock:
                 BAMBU_PRINTER_STATES[printer_name]['connected'] = True
         else:
-            # Not connected, force OFFLINE state
-            logging.debug(f"Bambu printer {printer_name} shows {state_data.get('state')} but is not connected, returning OFFLINE")
+            logging.debug(
+                f"Bambu printer {printer_name} shows {state_data.get('state')} "
+                "but is not connected, returning OFFLINE"
+            )
             state_data['state'] = 'OFFLINE'
 
     # Format response similar to Prusa

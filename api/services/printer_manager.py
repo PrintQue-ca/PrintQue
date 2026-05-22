@@ -135,6 +135,13 @@ def start_background_tasks(socketio, app):
 
     def schedule_status_polling():
         batch_index = 0
+        startup_delay = getattr(Config, 'STARTUP_POLL_DELAY_SECONDS', 5)
+        if startup_delay > 0:
+            logging.info(
+                f"Status polling: waiting {startup_delay}s before first batch "
+                "(Bambu MQTT connect head start)"
+            )
+            time.sleep(startup_delay)
         while True:
             try:
                 with ReadLock(printers_rwlock):

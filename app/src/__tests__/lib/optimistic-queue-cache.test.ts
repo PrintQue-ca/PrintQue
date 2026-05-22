@@ -1,6 +1,10 @@
 import { QueryClient } from '@tanstack/react-query'
 import { describe, expect, it } from 'vitest'
-import { optimisticRemoveQueueJobs, restoreQueueCache } from '../../lib/optimistic-queue-cache'
+import {
+  optimisticPatchQueueJobEjection,
+  optimisticRemoveQueueJobs,
+  restoreQueueCache,
+} from '../../lib/optimistic-queue-cache'
 import type { QueueJob } from '../../types'
 
 const mockJobs: QueueJob[] = [
@@ -37,5 +41,31 @@ describe('optimisticRemoveQueueJobs', () => {
     restoreQueueCache(queryClient, previous)
 
     expect(queryClient.getQueryData<QueueJob[]>(['queue'])?.map((j) => j.id)).toEqual([1, 2, 3])
+  })
+})
+
+describe('optimisticPatchQueueJobEjection', () => {
+  it('patches cooldown_temp in the queue cache', async () => {
+    const queryClient = new QueryClient()
+    queryClient.setQueryData(['queue'], [...mockJobs])
+
+    await optimisticPatchQueueJobEjection(queryClient, 2, { cooldown_temp: 40 })
+
+    const job = queryClient.getQueryData<QueueJob[]>(['queue'])?.find((j) => j.id === 2)
+    expect(job?.cooldown_temp).toBe(40)
+  })
+
+  it('restoreQueueCache rolls back a failed ejection patch', async () => {
+    const queryClient = new QueryClient()
+    queryClient.setQueryData(['queue'], [...mockJobs])
+
+    const { previous } = await optimisticPatchQueueJobEjection(queryClient, 2, {
+      cooldown_temp: 40,
+    })
+    restoreQueueCache(queryClient, previous)
+
+    expect(
+      queryClient.getQueryData<QueueJob[]>(['queue'])?.find((j) => j.id === 2)?.cooldown_temp
+    ).toBeUndefined()
   })
 })

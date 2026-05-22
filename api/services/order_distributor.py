@@ -403,5 +403,5 @@ async def distribute_orders_async(socketio, app, task_id=None, batch_size=10):
     emit_status_update(socketio, app, {
         'printers': printers_copy,
         'total_filament': total_filament,
-        'orders': orders_data
+        'queue': orders_data,
     })

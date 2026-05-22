@@ -30,7 +30,7 @@ import {
   Zap,
   ZapOff,
 } from 'lucide-react'
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -95,11 +95,13 @@ function CooldownTempInput({
   initialValue: number | null | undefined
   onSave: (orderId: number, value: number | null) => Promise<void>
 }) {
+  const isFocusedRef = useRef(false)
   const [value, setValue] = useState<string>(
     initialValue === undefined || initialValue === null ? '' : String(initialValue)
   )
 
   useEffect(() => {
+    if (isFocusedRef.current) return
     setValue(initialValue === undefined || initialValue === null ? '' : String(initialValue))
   }, [initialValue])
 
@@ -136,7 +138,14 @@ function CooldownTempInput({
         value={value}
         placeholder="—"
         onChange={(e) => setValue(e.target.value)}
-        onBlur={commit}
+        onFocus={() => {
+          isFocusedRef.current = true
+        }}
+        onBlur={() => {
+          void commit().finally(() => {
+            isFocusedRef.current = false
+          })
+        }}
         onKeyDown={(e) => {
           if (e.key === 'Enter') {
             e.preventDefault()

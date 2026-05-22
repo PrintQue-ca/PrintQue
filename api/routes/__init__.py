@@ -46,6 +46,31 @@ __all__ = [
     'register_queue_routes',
 ]
 
+
+def _parse_iso_date(value):
+    """Parse ISO timestamp string to date, or None on failure."""
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(str(value).replace('Z', '+00:00')).date()
+    except (ValueError, TypeError):
+        return None
+
+
+def _queue_job_counted_completed_today(job, today):
+    """True if a fulfilled queue job should count toward completed_today (read-only)."""
+    if job.get('sent', 0) < job.get('quantity', 1):
+        return False
+    completed_date = _parse_iso_date(job.get('completed_at'))
+    if completed_date is not None:
+        return completed_date == today
+    for field in ('updated_at', 'created_at'):
+        ts_date = _parse_iso_date(job.get(field))
+        if ts_date == today:
+            return True
+    return False
+
+
 def register_routes(app, socketio):
     register_printer_routes(app, socketio)
     register_order_routes(app, socketio)
@@ -148,20 +173,22 @@ def register_routes(app, socketio):
 
             with SafeLock(orders_lock):
                 library_count = len([i for i in LIBRARY_ITEMS if not i.get('deleted', False)])
+                active_jobs = [
+                    j for j in QUEUE_JOBS if not j.get('deleted', False)
+                ]
+                queue_pending_count = len([
+                    j for j in active_jobs if j.get('sent', 0) == 0
+                ])
+                # Legacy: partial multi-copy jobs (0 < sent < quantity)
                 in_queue_count = len([
-                    j for j in QUEUE_JOBS
-                    if not j.get('deleted', False)
-                    and j.get('sent', 0) > 0
+                    j for j in active_jobs
+                    if j.get('sent', 0) > 0
                     and j.get('sent', 0) < j.get('quantity', 1)
                 ])
-                from datetime import datetime
                 today = datetime.now().date()
                 completed_today = len([
-                    j for j in QUEUE_JOBS
-                    if j.get('sent', 0) >= j.get('quantity', 1)
-                    and not j.get('deleted', False)
-                    and j.get('completed_at')
-                    and datetime.fromisoformat(j.get('completed_at', '').replace('Z', '+00:00')).date() == today
+                    j for j in active_jobs
+                    if _queue_job_counted_completed_today(j, today)
                 ])
 
             # Return flat structure matching frontend Stats type
@@ -169,6 +196,7 @@ def register_routes(app, socketio):
                 'total_filament': total_filament_kg,
                 'printers_count': printers_count,
                 'library_count': library_count,
+                'queue_pending_count': queue_pending_count,
                 'in_queue_count': in_queue_count,
                 'active_prints': active_prints,
                 'idle_printers': idle_printers,
