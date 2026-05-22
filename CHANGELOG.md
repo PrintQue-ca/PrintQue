@@ -2,6 +2,43 @@
 
 <!-- version list -->
 
+## v2.0.0 (2026-05-22)
+
+### Bug Fixes
+
+- Update continual learning state and adjust test assertions
+  ([#24](https://github.com/PrintQue-ca/PrintQue/pull/24),
+  [`8c5d569`](https://github.com/PrintQue-ca/PrintQue/commit/8c5d569d02e645b4d3a3762d5b7768135a513e2d))
+
+- **status discrepancy**: Fixing issues with the printer status vs app state
+  ([#24](https://github.com/PrintQue-ca/PrintQue/pull/24),
+  [`8c5d569`](https://github.com/PrintQue-ca/PrintQue/commit/8c5d569d02e645b4d3a3762d5b7768135a513e2d))
+
+### Features
+
+- **api**: Enhance Bambu ejection handling and distribution logic
+  ([#24](https://github.com/PrintQue-ca/PrintQue/pull/24),
+  [`8c5d569`](https://github.com/PrintQue-ca/PrintQue/commit/8c5d569d02e645b4d3a3762d5b7768135a513e2d))
+
+- **api**: Enhance print queue and library management
+  ([#24](https://github.com/PrintQue-ca/PrintQue/pull/24),
+  [`8c5d569`](https://github.com/PrintQue-ca/PrintQue/commit/8c5d569d02e645b4d3a3762d5b7768135a513e2d))
+
+- **import**: Ability to bulk import and export
+  ([#24](https://github.com/PrintQue-ca/PrintQue/pull/24),
+  [`8c5d569`](https://github.com/PrintQue-ca/PrintQue/commit/8c5d569d02e645b4d3a3762d5b7768135a513e2d))
+
+- **init**: Ability to bulk import ([#24](https://github.com/PrintQue-ca/PrintQue/pull/24),
+  [`8c5d569`](https://github.com/PrintQue-ca/PrintQue/commit/8c5d569d02e645b4d3a3762d5b7768135a513e2d))
+
+- **so much**: Many rewrites ([#24](https://github.com/PrintQue-ca/PrintQue/pull/24),
+  [`8c5d569`](https://github.com/PrintQue-ca/PrintQue/commit/8c5d569d02e645b4d3a3762d5b7768135a513e2d))
+
+- **vscode**: Add configuration for Biome extension and formatting settings
+  ([#24](https://github.com/PrintQue-ca/PrintQue/pull/24),
+  [`8c5d569`](https://github.com/PrintQue-ca/PrintQue/commit/8c5d569d02e645b4d3a3762d5b7768135a513e2d))
+
+
 ## v1.2.6 (2026-02-20)
 
 ### Bug Fixes
