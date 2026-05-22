@@ -1,8 +1,10 @@
 import { createFileRoute } from '@tanstack/react-router'
-import { Eye, EyeOff, Loader2, Plus, Settings, Trash2 } from 'lucide-react'
+import { Download, Eye, EyeOff, Loader2, Plus, Settings, Trash2, Upload } from 'lucide-react'
 import { useState } from 'react'
 import { toast } from 'sonner'
 import { EditPrinterDialog } from '@/components/printers/EditPrinterDialog'
+import { PrinterImportDialog } from '@/components/printers/PrinterImportDialog'
+import { QueueJobDetailSheet } from '@/components/printers/QueueJobDetailSheet'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -32,17 +34,28 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
-import { useAddPrinter, useDeletePrinter, usePrinters } from '@/hooks'
+import { useAddPrinter, useDeletePrinter, usePrinters, useQueue } from '@/hooks'
+import { api } from '@/lib/api'
+import {
+  findQueueJobForPrinter,
+  formatQueueJobProgressSummary,
+  getPrinterQueueJobId,
+  getQueueJobDisplayName,
+} from '@/lib/printer-queue-job'
 import type { Printer, PrinterFormData, PrinterType } from '@/types'
 
 export const Route = createFileRoute('/printers')({ component: PrintersPage })
 
 function PrintersPage() {
   const { data: printers, isLoading } = usePrinters()
+  const { data: queueJobs = [] } = useQueue()
   const addPrinter = useAddPrinter()
   const deletePrinter = useDeletePrinter()
   const [isDialogOpen, setIsDialogOpen] = useState(false)
+  const [importOpen, setImportOpen] = useState(false)
+  const [exporting, setExporting] = useState(false)
   const [editingPrinter, setEditingPrinter] = useState<Printer | null>(null)
+  const [jobSheetPrinter, setJobSheetPrinter] = useState<Printer | null>(null)
   const [showAccessCode, setShowAccessCode] = useState(false)
   const [formData, setFormData] = useState<PrinterFormData>({
     name: '',
@@ -98,15 +111,37 @@ function PrintersPage() {
     }
   }
 
+  const handleExport = async () => {
+    setExporting(true)
+    try {
+      const { blob, filename } = await api.download('/printers/export')
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = filename
+      a.click()
+      URL.revokeObjectURL(url)
+      toast.success('Printers exported')
+    } catch {
+      toast.error('Export failed')
+    } finally {
+      setExporting(false)
+    }
+  }
+
   const statusColors: Record<string, string> = {
     IDLE: 'bg-green-500',
     PRINTING: 'bg-blue-500',
+    PREPARING: 'bg-blue-400',
     FINISHED: 'bg-yellow-500',
     ERROR: 'bg-red-500',
     EJECTING: 'bg-purple-500',
+    COOLING: 'bg-cyan-500',
     PAUSED: 'bg-orange-500',
     OFFLINE: 'bg-gray-500',
   }
+
+  const sheetJob = jobSheetPrinter ? findQueueJobForPrinter(jobSheetPrinter, queueJobs) : null
 
   return (
     <div className="space-y-6">
@@ -115,133 +150,149 @@ function PrintersPage() {
           <h1 className="text-3xl font-bold tracking-tight">Printers</h1>
           <p className="text-muted-foreground">Manage your connected printers</p>
         </div>
-        <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
-          <DialogTrigger asChild>
-            <Button>
-              <Plus className="h-4 w-4 mr-2" />
-              Add Printer
-            </Button>
-          </DialogTrigger>
-          <DialogContent className="sm:max-w-[425px]">
-            <DialogHeader>
-              <DialogTitle>Add New Printer</DialogTitle>
-              <DialogDescription>
-                Connect a new printer to PrintQue. Fill in the details below.
-              </DialogDescription>
-            </DialogHeader>
-            <form onSubmit={handleSubmit}>
-              <div className="grid gap-4 py-4">
-                <div className="grid gap-2">
-                  <Label htmlFor="name">Printer Name</Label>
-                  <Input
-                    id="name"
-                    value={formData.name}
-                    onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-                    placeholder="My Printer"
-                  />
-                </div>
-                <div className="grid gap-2">
-                  <Label htmlFor="ip">IP Address</Label>
-                  <Input
-                    id="ip"
-                    value={formData.ip}
-                    onChange={(e) => setFormData({ ...formData, ip: e.target.value })}
-                    placeholder="192.168.1.100"
-                  />
-                </div>
-                <div className="grid gap-2">
-                  <Label htmlFor="type">Printer Type</Label>
-                  <Select
-                    value={formData.type}
-                    onValueChange={(value: PrinterType) =>
-                      setFormData({ ...formData, type: value })
-                    }
-                  >
-                    <SelectTrigger>
-                      <SelectValue placeholder="Select type" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="bambu">Bambu Lab</SelectItem>
-                      <SelectItem value="prusa">Prusa</SelectItem>
-                      <SelectItem value="octoprint">OctoPrint</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-                {formData.type === 'bambu' && (
-                  <>
-                    <p className="text-sm text-muted-foreground">
-                      You can find the IP address and access code on the printer under Settings →
-                      LAN mode.
-                    </p>
-                    <div className="grid gap-2">
-                      <Label htmlFor="serial">Serial Number</Label>
-                      <Input
-                        id="serial"
-                        value={formData.serial_number}
-                        onChange={(e) =>
-                          setFormData({ ...formData, serial_number: e.target.value })
-                        }
-                        placeholder="Serial number"
-                      />
-                    </div>
-                    <div className="grid gap-2">
-                      <Label htmlFor="api_key">Access Code</Label>
-                      <div className="relative">
-                        <Input
-                          id="api_key"
-                          type={showAccessCode ? 'text' : 'password'}
-                          value={formData.api_key}
-                          onChange={(e) => setFormData({ ...formData, api_key: e.target.value })}
-                          placeholder="Access code from printer"
-                          className="pr-9"
-                        />
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="icon"
-                          className="absolute right-0 top-0 h-full px-3 py-2 hover:bg-transparent"
-                          onClick={() => setShowAccessCode((prev) => !prev)}
-                          aria-label={showAccessCode ? 'Hide access code' : 'Show access code'}
-                        >
-                          {showAccessCode ? (
-                            <EyeOff className="h-4 w-4 text-muted-foreground" />
-                          ) : (
-                            <Eye className="h-4 w-4 text-muted-foreground" />
-                          )}
-                        </Button>
-                      </div>
-                    </div>
-                  </>
-                )}
-                {(formData.type === 'prusa' || formData.type === 'octoprint') && (
+        <div className="flex gap-2">
+          <Button variant="outline" size="sm" onClick={() => setImportOpen(true)}>
+            <Upload className="h-4 w-4 mr-2" />
+            Import
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={handleExport}
+            disabled={exporting || !printers?.length}
+          >
+            <Download className="h-4 w-4 mr-2" />
+            {exporting ? 'Exporting...' : 'Export'}
+          </Button>
+          <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
+            <DialogTrigger asChild>
+              <Button>
+                <Plus className="h-4 w-4 mr-2" />
+                Add Printer
+              </Button>
+            </DialogTrigger>
+            <DialogContent className="sm:max-w-[425px]">
+              <DialogHeader>
+                <DialogTitle>Add New Printer</DialogTitle>
+                <DialogDescription>
+                  Connect a new printer to PrintQue. Fill in the details below.
+                </DialogDescription>
+              </DialogHeader>
+              <form onSubmit={handleSubmit}>
+                <div className="grid gap-4 py-4">
                   <div className="grid gap-2">
-                    <Label htmlFor="api_key">API Key</Label>
+                    <Label htmlFor="name">Printer Name</Label>
                     <Input
-                      id="api_key"
-                      type="password"
-                      value={formData.api_key}
-                      onChange={(e) => setFormData({ ...formData, api_key: e.target.value })}
-                      placeholder="API key"
+                      id="name"
+                      value={formData.name}
+                      onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+                      placeholder="My Printer"
                     />
                   </div>
-                )}
-              </div>
-              <DialogFooter>
-                <Button type="submit" disabled={addPrinter.isPending}>
-                  {addPrinter.isPending ? (
+                  <div className="grid gap-2">
+                    <Label htmlFor="ip">IP Address</Label>
+                    <Input
+                      id="ip"
+                      value={formData.ip}
+                      onChange={(e) => setFormData({ ...formData, ip: e.target.value })}
+                      placeholder="192.168.1.100"
+                    />
+                  </div>
+                  <div className="grid gap-2">
+                    <Label htmlFor="type">Printer Type</Label>
+                    <Select
+                      value={formData.type}
+                      onValueChange={(value: PrinterType) =>
+                        setFormData({ ...formData, type: value })
+                      }
+                    >
+                      <SelectTrigger>
+                        <SelectValue placeholder="Select type" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="bambu">Bambu Lab</SelectItem>
+                        <SelectItem value="prusa">Prusa</SelectItem>
+                        <SelectItem value="octoprint">OctoPrint</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  {formData.type === 'bambu' && (
                     <>
-                      <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                      Adding...
+                      <p className="text-sm text-muted-foreground">
+                        You can find the IP address and access code on the printer under Settings →
+                        LAN mode.
+                      </p>
+                      <div className="grid gap-2">
+                        <Label htmlFor="serial">Serial Number</Label>
+                        <Input
+                          id="serial"
+                          value={formData.serial_number}
+                          onChange={(e) =>
+                            setFormData({ ...formData, serial_number: e.target.value })
+                          }
+                          placeholder="Serial number"
+                        />
+                      </div>
+                      <div className="grid gap-2">
+                        <Label htmlFor="api_key">Access Code</Label>
+                        <div className="relative">
+                          <Input
+                            id="api_key"
+                            type={showAccessCode ? 'text' : 'password'}
+                            value={formData.api_key}
+                            onChange={(e) => setFormData({ ...formData, api_key: e.target.value })}
+                            placeholder="Access code from printer"
+                            className="pr-9"
+                          />
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon"
+                            className="absolute right-0 top-0 h-full px-3 py-2 hover:bg-transparent"
+                            onClick={() => setShowAccessCode((prev) => !prev)}
+                            aria-label={showAccessCode ? 'Hide access code' : 'Show access code'}
+                          >
+                            {showAccessCode ? (
+                              <EyeOff className="h-4 w-4 text-muted-foreground" />
+                            ) : (
+                              <Eye className="h-4 w-4 text-muted-foreground" />
+                            )}
+                          </Button>
+                        </div>
+                      </div>
                     </>
-                  ) : (
-                    'Add Printer'
                   )}
-                </Button>
-              </DialogFooter>
-            </form>
-          </DialogContent>
-        </Dialog>
+                  {(formData.type === 'prusa' || formData.type === 'octoprint') && (
+                    <div className="grid gap-2">
+                      <Label htmlFor="api_key">API Key</Label>
+                      <Input
+                        id="api_key"
+                        type="password"
+                        value={formData.api_key}
+                        onChange={(e) => setFormData({ ...formData, api_key: e.target.value })}
+                        placeholder="API key"
+                      />
+                    </div>
+                  )}
+                </div>
+                <DialogFooter>
+                  <Button type="submit" disabled={addPrinter.isPending}>
+                    {addPrinter.isPending ? (
+                      <>
+                        <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                        Adding...
+                      </>
+                    ) : (
+                      'Add Printer'
+                    )}
+                  </Button>
+                </DialogFooter>
+              </form>
+            </DialogContent>
+          </Dialog>
+        </div>
       </div>
+      <PrinterImportDialog open={importOpen} onOpenChange={setImportOpen} />
 
       <Card>
         <CardHeader>
@@ -261,52 +312,77 @@ function PrintersPage() {
                   <TableHead>IP Address</TableHead>
                   <TableHead>Type</TableHead>
                   <TableHead>Status</TableHead>
+                  <TableHead>Job</TableHead>
                   <TableHead>Progress</TableHead>
                   <TableHead className="text-right">Actions</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {printers.map((printer) => (
-                  <TableRow key={printer.name}>
-                    <TableCell className="font-medium">{printer.name}</TableCell>
-                    <TableCell>{printer.ip}</TableCell>
-                    <TableCell>
-                      <Badge variant="outline" className="capitalize">
-                        {printer.type}
-                      </Badge>
-                    </TableCell>
-                    <TableCell>
-                      <Badge className={statusColors[printer.status] || 'bg-gray-500'}>
-                        {printer.status}
-                      </Badge>
-                    </TableCell>
-                    <TableCell>
-                      {printer.status === 'PRINTING' && printer.progress !== undefined
-                        ? `${printer.progress}%`
-                        : '-'}
-                    </TableCell>
-                    <TableCell className="text-right">
-                      <div className="flex justify-end gap-2">
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => setEditingPrinter(printer)}
-                          aria-label="Edit printer"
-                        >
-                          <Settings className="h-4 w-4" />
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          className="text-destructive hover:text-destructive"
-                          onClick={() => handleDelete(printer.name)}
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </Button>
-                      </div>
-                    </TableCell>
-                  </TableRow>
-                ))}
+                {printers.map((printer) => {
+                  const jobId = getPrinterQueueJobId(printer)
+                  const job = jobId != null ? findQueueJobForPrinter(printer, queueJobs) : null
+                  return (
+                    <TableRow key={printer.name}>
+                      <TableCell className="font-medium">{printer.name}</TableCell>
+                      <TableCell>{printer.ip}</TableCell>
+                      <TableCell>
+                        <Badge variant="outline" className="capitalize">
+                          {printer.type}
+                        </Badge>
+                      </TableCell>
+                      <TableCell>
+                        <Badge className={statusColors[printer.status] || 'bg-gray-500'}>
+                          {printer.status}
+                        </Badge>
+                      </TableCell>
+                      <TableCell>
+                        {jobId != null ? (
+                          <button
+                            type="button"
+                            className="text-left text-sm hover:underline"
+                            onClick={() => setJobSheetPrinter(printer)}
+                          >
+                            <span className="font-medium block truncate max-w-[180px]">
+                              {job ? getQueueJobDisplayName(job) : 'Unknown job'}
+                            </span>
+                            {job && (
+                              <span className="text-xs text-muted-foreground">
+                                {formatQueueJobProgressSummary(job)}
+                              </span>
+                            )}
+                          </button>
+                        ) : (
+                          '-'
+                        )}
+                      </TableCell>
+                      <TableCell>
+                        {printer.status === 'PRINTING' && printer.progress !== undefined
+                          ? `${printer.progress}%`
+                          : '-'}
+                      </TableCell>
+                      <TableCell className="text-right">
+                        <div className="flex justify-end gap-2">
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => setEditingPrinter(printer)}
+                            aria-label="Edit printer"
+                          >
+                            <Settings className="h-4 w-4" />
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="text-destructive hover:text-destructive"
+                            onClick={() => handleDelete(printer.name)}
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </Button>
+                        </div>
+                      </TableCell>
+                    </TableRow>
+                  )
+                })}
               </TableBody>
             </Table>
           ) : (
@@ -323,6 +399,15 @@ function PrintersPage() {
         open={!!editingPrinter}
         onOpenChange={(open) => !open && setEditingPrinter(null)}
       />
+
+      {jobSheetPrinter && (
+        <QueueJobDetailSheet
+          open={!!jobSheetPrinter}
+          onOpenChange={(open) => !open && setJobSheetPrinter(null)}
+          printer={jobSheetPrinter}
+          job={sheetJob}
+        />
+      )}
     </div>
   )
 }

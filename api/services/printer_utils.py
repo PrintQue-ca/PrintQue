@@ -7,20 +7,40 @@ import re
 import time
 import asyncio
 import aiohttp
-import threading
 from contextlib import asynccontextmanager
 
 from services.state import (
-    PRINTERS_FILE, ORDERS_FILE,
+    PRINTERS_FILE, QUEUE_FILE,
     PRINTERS, ORDERS,
     save_data, logging, orders_lock, filament_lock, printers_rwlock,
     SafeLock, ReadLock, WriteLock,
     TOTAL_FILAMENT_CONSUMPTION
 )
 from utils.config import Config
+from utils.threading_compat import native_threading, spawn_os_daemon
+from utils.socketio_emit import emit_status_update
 
-# Thread-local storage for event loops
-thread_local = threading.local()
+# Thread-local storage for event loops (native — used from OS worker threads)
+thread_local = native_threading().local()
+
+
+def spawn_os_thread(target, *, daemon=True, name=None, args=(), kwargs=None):
+    """Start a background OS thread.
+
+    Eventlet monkey-patches ``threading.Thread`` to spawn greenlets in the hub
+    thread, which breaks ``asyncio`` workers that call ``run_until_complete``.
+    Use this for any thread that runs async I/O via ``run_async_in_thread``.
+    """
+    if daemon and not args and kwargs is None:
+        return spawn_os_daemon(target, name=name)
+    thread_kwargs = {'target': target, 'daemon': daemon, 'args': args}
+    if kwargs is not None:
+        thread_kwargs['kwargs'] = kwargs
+    if name is not None:
+        thread_kwargs['name'] = name
+    thread = native_threading().Thread(**thread_kwargs)
+    thread.start()
+    return thread
 
 # Global connection pool (deprecated - use get_session instead)
 CONNECTION_POOL = None
@@ -74,7 +94,7 @@ def deduplicate_orders():
         if duplicates_removed > 0:
             ORDERS.clear()
             ORDERS.extend(unique_orders)
-            save_data(ORDERS_FILE, ORDERS)
+            save_data(QUEUE_FILE, ORDERS)
             logging.warning(f"DEDUPLICATION: Removed {duplicates_removed} duplicate orders. Now have {len(ORDERS)} unique orders")
         else:
             logging.debug(f"DEDUPLICATION: No duplicates found. Have {len(ORDERS)} unique orders")
@@ -176,11 +196,25 @@ def extract_filament_from_file(filepath, is_bgcode=False):
 
 
 def get_event_loop_for_thread():
-    """Get or create an event loop for the current thread"""
-    if not hasattr(thread_local, 'loop') or thread_local.loop.is_closed():
-        thread_local.loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(thread_local.loop)
-    return thread_local.loop
+    """Get or create a dedicated event loop for the current thread (never a running loop)."""
+    try:
+        asyncio.get_running_loop()
+        has_running_loop = True
+    except RuntimeError:
+        has_running_loop = False
+
+    loop = getattr(thread_local, 'loop', None)
+    if loop is None or loop.is_closed() or loop.is_running() or has_running_loop:
+        loop = asyncio.new_event_loop()
+        thread_local.loop = loop
+        asyncio.set_event_loop(loop)
+    return loop
+
+
+def run_async_in_thread(coro):
+    """Run an async coroutine on this thread's dedicated event loop."""
+    loop = get_event_loop_for_thread()
+    return loop.run_until_complete(coro)
 
 
 def get_connection_pool():
@@ -257,7 +291,7 @@ def emergency_fix_stuck_printers():
     return fixed_count
 
 
-def mark_group_ready(group_name, socketio=None):
+def mark_group_ready(group_name, socketio=None, app=None):
     """Mark all FINISHED printers in a specific group as READY"""
     # Import here to avoid circular imports
     from services.status_poller import prepare_printer_data_for_broadcast
@@ -289,15 +323,14 @@ def mark_group_ready(group_name, socketio=None):
         if count > 0:
             logging.info(f"Marked {count} printers in group {group_name} as READY")
 
-            # Emit status update if socketio is available
-            if socketio:
+            if socketio and app:
                 with SafeLock(filament_lock):
                     total_filament = TOTAL_FILAMENT_CONSUMPTION / 1000
                 with SafeLock(orders_lock):
                     orders_data = ORDERS.copy()
                 printers_copy = prepare_printer_data_for_broadcast(PRINTERS)
 
-                socketio.emit('status_update', {
+                emit_status_update(socketio, app, {
                     'printers': printers_copy,
                     'total_filament': total_filament,
                     'orders': orders_data

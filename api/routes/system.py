@@ -2,8 +2,8 @@ from flask import render_template, request, redirect, url_for, flash, jsonify, m
 from services.state import (
     ReadLock, WriteLock, SafeLock, printers_rwlock, PRINTERS,
     orders_lock, ORDERS, filament_lock, TOTAL_FILAMENT_CONSUMPTION,
-    save_data, load_data, PRINTERS_FILE, ORDERS_FILE, TOTAL_FILAMENT_FILE,
-    sanitize_group_name
+    save_data, load_data, PRINTERS_FILE, QUEUE_FILE, TOTAL_FILAMENT_FILE,
+    sanitize_group_name, apply_ejection_fields_to_order,
 )
 from services.default_settings import load_default_settings
 import os
@@ -142,11 +142,11 @@ def register_misc_routes(app, socketio):
             # Clear in-memory data
             with WriteLock(printers_rwlock):
                 PRINTERS.clear()
-                save_data(PRINTERS_FILE, PRINTERS)
+                save_data(PRINTERS_FILE, PRINTERS, allow_empty_printers=True)
 
             with SafeLock(orders_lock, 'clear_all_data'):
                 ORDERS.clear()
-                save_data(ORDERS_FILE, ORDERS)
+                save_data(QUEUE_FILE, ORDERS)
 
             with SafeLock(filament_lock, 'clear_all_data'):
                 global TOTAL_FILAMENT_CONSUMPTION
@@ -562,7 +562,8 @@ def register_misc_routes(app, socketio):
 
                     # Process ejection settings
                     ejection_enabled = job.get('ejection_enabled', False)
-                    end_gcode = ''
+                    end_gcode = None
+                    default_settings = load_default_settings()
 
                     if ejection_enabled:
                         ejection_path = job.get('ejection_path')
@@ -572,10 +573,6 @@ def register_misc_routes(app, socketio):
                                     end_gcode = f.read()
                             except Exception:
                                 ejection_enabled = False
-                        else:
-                            # Use default if no custom ejection file
-                            default_settings = load_default_settings()
-                            end_gcode = default_settings.get('default_end_gcode', '')
 
                     # Extract extra data columns (up to 20 or more)
                     extra_data = job.get('extra_data', {})
@@ -609,13 +606,18 @@ def register_misc_routes(app, socketio):
                             'status': 'pending',
                             'filament_g': filament_g,
                             'groups': job.get('printer_groups', ['Default']),
-                            'ejection_enabled': ejection_enabled,
-                            'end_gcode': end_gcode,
                             'extra_data': extra_data,  # Store all extra columns
                             'source': 'csv_upload',
                             'created_at': datetime.now().isoformat(),
                             'from_new_orders': True
                         }
+                        apply_ejection_fields_to_order(
+                            order,
+                            ejection_enabled=ejection_enabled,
+                            end_gcode=end_gcode,
+                            name_hint=upload_filename,
+                            default_settings=default_settings,
+                        )
 
                         ORDERS.append(order)
                         successful_orders.append({
@@ -632,7 +634,7 @@ def register_misc_routes(app, socketio):
 
             # Save all orders
             with SafeLock(orders_lock):
-                save_data(ORDERS_FILE, ORDERS)
+                save_data(QUEUE_FILE, ORDERS)
 
             # Trigger distribution
             if successful_orders:
@@ -688,6 +690,7 @@ def create_bulk_print_job(job_data):
 
                 ejection_enabled = job_data.get('ejection_enabled', False)
                 ejection_gcode = job_data.get('ejection_gcode', '') if ejection_enabled else ''
+                default_settings = load_default_settings()
 
                 new_order = {
                     'id': order_id,
@@ -706,9 +709,14 @@ def create_bulk_print_job(job_data):
                     'filament_g': 0,
                     'deleted': False,
                     'order_index': job_data.get('order_index', 0),
-                    'ejection_enabled': ejection_enabled,
-                    'end_gcode': ejection_gcode
                 }
+                apply_ejection_fields_to_order(
+                    new_order,
+                    ejection_enabled=ejection_enabled,
+                    end_gcode=ejection_gcode or None,
+                    name_hint=job_data.get('filename', 'Custom'),
+                    default_settings=default_settings,
+                )
             else:  # API format
                 # Safe way to get the next order ID for API format
                 if not ORDERS:
@@ -740,7 +748,7 @@ def create_bulk_print_job(job_data):
                 }
 
             ORDERS.append(new_order)
-            save_data(ORDERS_FILE, ORDERS)
+            save_data(QUEUE_FILE, ORDERS)
 
             return True
     except Exception as e:

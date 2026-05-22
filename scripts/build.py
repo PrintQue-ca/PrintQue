@@ -318,7 +318,6 @@ for package in ['socketio', 'engineio', 'python_socketio', 'python_engineio']:
 
 # Other critical packages
 packages_to_collect = [
-    'eventlet', 'eventlet.green', 'eventlet.hubs',
     'dns', 'dns.resolver', 'cryptography',
     'aiohttp', 'aiofiles', 'requests', 'urllib3', 'certifi',
     'psutil', 'simple_websocket', 'bidict', 'greenlet',
@@ -335,7 +334,6 @@ for package in packages_to_collect:
 # Add specific imports that are often missed
 hiddenimports += [
     'engineio.async_drivers.threading',
-    'engineio.async_drivers.eventlet',
     'flask.json.provider',
     'werkzeug.routing',
     'werkzeug.serving',

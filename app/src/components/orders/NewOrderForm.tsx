@@ -33,17 +33,16 @@ import {
 } from '@/components/ui/select'
 import { Switch } from '@/components/ui/switch'
 import {
-  useCreateOrder,
+  useCreateLibraryItem,
   useDefaultEjectionSettings,
   useEjectionCodes,
   useGroups,
   useSaveDefaultEjectionSettings,
 } from '@/hooks'
 
-export function NewOrderForm() {
+export function AddToLibraryForm() {
   const [file, setFile] = useState<File | null>(null)
   const [orderName, setOrderName] = useState('')
-  const [quantity, setQuantity] = useState(0)
   const [selectedGroups, setSelectedGroups] = useState<number[]>([])
   const [ejectionEnabled, setEjectionEnabled] = useState(false)
   const [endGcode, setEndGcode] = useState('')
@@ -55,7 +54,7 @@ export function NewOrderForm() {
   const gcodeFileInputRef = useRef<HTMLInputElement>(null)
   const gcodeDialogFileInputRef = useRef<HTMLInputElement>(null)
 
-  const createOrder = useCreateOrder()
+  const createLibraryItem = useCreateLibraryItem()
   const { data: groups } = useGroups()
   const { data: defaultSettings } = useDefaultEjectionSettings()
   const saveDefaultSettings = useSaveDefaultEjectionSettings()
@@ -63,28 +62,32 @@ export function NewOrderForm() {
 
   // Load default settings when they change
   useEffect(() => {
-    if (defaultSettings) {
-      setEjectionEnabled(defaultSettings.ejection_enabled)
-      setEndGcode(defaultSettings.end_gcode)
+    if (!defaultSettings) return
+    setEjectionEnabled(defaultSettings.ejection_enabled)
+    if (defaultSettings.ejection_code_id) {
+      setSelectedEjectionCodeId('default')
+      const preset = ejectionCodes?.find((code) => code.id === defaultSettings.ejection_code_id)
+      if (preset) {
+        setEndGcode(preset.gcode)
+      }
     }
-  }, [defaultSettings])
+  }, [defaultSettings, ejectionCodes])
 
   // Handle ejection code selection
   const handleEjectionCodeSelect = (codeId: string) => {
     setSelectedEjectionCodeId(codeId)
 
     if (codeId === 'custom') {
-      // Keep custom/current gcode, just switch mode
       return
     }
 
     if (codeId === 'default') {
-      // Load default settings
-      setEndGcode(defaultSettings?.end_gcode || '')
+      const defaultId = defaultSettings?.ejection_code_id
+      const preset = defaultId ? ejectionCodes?.find((code) => code.id === defaultId) : undefined
+      setEndGcode(preset?.gcode || '')
       return
     }
 
-    // Find and load the selected ejection code
     const selectedCode = ejectionCodes?.find((code) => code.id === codeId)
     if (selectedCode) {
       setEndGcode(selectedCode.gcode)
@@ -160,10 +163,20 @@ export function NewOrderForm() {
 
   const handleSaveAsDefault = async () => {
     try {
-      await saveDefaultSettings.mutateAsync({
-        ejection_enabled: ejectionEnabled,
-        end_gcode: endGcode,
-      })
+      const payload: { ejection_enabled: boolean; ejection_code_id?: string; end_gcode?: string } =
+        {
+          ejection_enabled: ejectionEnabled,
+        }
+      if (selectedEjectionCodeId === 'custom') {
+        payload.end_gcode = endGcode
+      } else if (selectedEjectionCodeId === 'default' && defaultSettings?.ejection_code_id) {
+        payload.ejection_code_id = defaultSettings.ejection_code_id
+      } else if (selectedEjectionCodeId !== 'custom' && selectedEjectionCodeId !== 'default') {
+        payload.ejection_code_id = selectedEjectionCodeId
+      } else if (endGcode) {
+        payload.end_gcode = endGcode
+      }
+      await saveDefaultSettings.mutateAsync(payload)
       toast.success('Default ejection settings saved')
     } catch {
       toast.error('Failed to save default settings')
@@ -185,7 +198,6 @@ export function NewOrderForm() {
 
     const formData = new FormData()
     formData.append('file', file)
-    formData.append('quantity', quantity.toString())
     if (orderName.trim()) {
       formData.append('name', orderName.trim())
     }
@@ -193,22 +205,12 @@ export function NewOrderForm() {
       formData.append('groups', JSON.stringify(selectedGroups))
     }
     formData.append('ejection_enabled', ejectionEnabled.toString())
-    if (ejectionEnabled && endGcode) {
-      formData.append('end_gcode', endGcode)
-    }
-    // Save ejection code reference
-    if (ejectionEnabled && selectedEjectionCodeId && selectedEjectionCodeId !== 'custom') {
-      formData.append('ejection_code_id', selectedEjectionCodeId)
-      if (selectedEjectionCodeId === 'default') {
-        formData.append('ejection_code_name', 'Default')
-      } else {
-        const selectedCode = ejectionCodes?.find((code) => code.id === selectedEjectionCodeId)
-        if (selectedCode) {
-          formData.append('ejection_code_name', selectedCode.name)
-        }
+    if (ejectionEnabled) {
+      if (selectedEjectionCodeId && selectedEjectionCodeId !== 'custom') {
+        formData.append('ejection_code_id', selectedEjectionCodeId)
+      } else if (endGcode) {
+        formData.append('end_gcode', endGcode)
       }
-    } else if (ejectionEnabled) {
-      formData.append('ejection_code_name', 'Custom')
     }
 
     // Add cooldown temperature if set (for Bambu printers)
@@ -220,19 +222,17 @@ export function NewOrderForm() {
     }
 
     try {
-      await createOrder.mutateAsync(formData)
-      toast.success('Order added to library', { duration: 2000 })
-      // Reset form
+      await createLibraryItem.mutateAsync(formData)
+      toast.success('Added to library', { duration: 2000 })
       setFile(null)
       setOrderName('')
-      setQuantity(0)
       setSelectedGroups([])
       setCooldownTemp('')
       if (fileInputRef.current) {
         fileInputRef.current.value = ''
       }
     } catch {
-      toast.error('Failed to create order')
+      toast.error('Failed to add to library')
     }
   }
 
@@ -260,7 +260,7 @@ export function NewOrderForm() {
     <>
       <Card>
         <CardHeader>
-          <CardTitle className="text-lg">Add New Order</CardTitle>
+          <CardTitle className="text-lg">Add to Library</CardTitle>
         </CardHeader>
         <CardContent>
           <form onSubmit={handleSubmit} className="space-y-4">
@@ -297,50 +297,34 @@ export function NewOrderForm() {
                 onChange={(e) => setOrderName(e.target.value)}
               />
               <p className="text-xs text-muted-foreground">
-                Custom name to identify this order. If empty, filename is used.
+                Custom name for this library item. If empty, filename is used.
               </p>
             </div>
 
-            <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <Label htmlFor="quantity">Quantity</Label>
-                <Input
-                  id="quantity"
-                  type="number"
-                  min={0}
-                  value={quantity}
-                  onChange={(e) => setQuantity(Math.max(0, parseInt(e.target.value, 10) || 0))}
-                />
-                <p className="text-xs text-muted-foreground">
-                  Set to 0 to add to library only; set a quantity to start printing.
-                </p>
-              </div>
-
-              <div className="space-y-2">
-                <Label htmlFor="groups">Printer Group</Label>
-                <Select
-                  value={selectedGroups.length > 0 ? selectedGroups[0].toString() : 'all'}
-                  onValueChange={(value) => {
-                    if (value === 'all') {
-                      setSelectedGroups([])
-                    } else {
-                      setSelectedGroups([parseInt(value, 10)])
-                    }
-                  }}
-                >
-                  <SelectTrigger>
-                    <SelectValue placeholder="All printers" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="all">All printers</SelectItem>
-                    {groups?.map((group) => (
-                      <SelectItem key={group.id} value={group.id.toString()}>
-                        {group.name}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
+            <div className="space-y-2">
+              <Label htmlFor="groups">Printer Group</Label>
+              <Select
+                value={selectedGroups.length > 0 ? selectedGroups[0].toString() : 'all'}
+                onValueChange={(value) => {
+                  if (value === 'all') {
+                    setSelectedGroups([])
+                  } else {
+                    setSelectedGroups([parseInt(value, 10)])
+                  }
+                }}
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="All printers" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All printers</SelectItem>
+                  {groups?.map((group) => (
+                    <SelectItem key={group.id} value={group.id.toString()}>
+                      {group.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
 
             {/* Ejection Settings */}
@@ -498,9 +482,13 @@ export function NewOrderForm() {
               )}
             </div>
 
-            <Button type="submit" className="w-full" disabled={!file || createOrder.isPending}>
+            <Button
+              type="submit"
+              className="w-full"
+              disabled={!file || createLibraryItem.isPending}
+            >
               <Plus className="h-4 w-4 mr-2" />
-              {createOrder.isPending ? 'Adding...' : 'Add to Library'}
+              {createLibraryItem.isPending ? 'Adding...' : 'Add to Library'}
             </Button>
           </form>
         </CardContent>
@@ -557,4 +545,7 @@ export function NewOrderForm() {
   )
 }
 
-export default NewOrderForm
+/** @deprecated Use AddToLibraryForm */
+export const NewOrderForm = AddToLibraryForm
+
+export default AddToLibraryForm

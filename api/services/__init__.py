@@ -1,12 +1,12 @@
 # Services Package
 from .state import (
-    PRINTERS, ORDERS, TOTAL_FILAMENT_CONSUMPTION,
+    PRINTERS, ORDERS, QUEUE_JOBS, LIBRARY_ITEMS, TOTAL_FILAMENT_CONSUMPTION,
     initialize_state, save_data, load_data,
     encrypt_api_key, decrypt_api_key,
     orders_lock, filament_lock, printers_rwlock,
     SafeLock, ReadLock, WriteLock, get_order_lock,
-    PRINTERS_FILE, TOTAL_FILAMENT_FILE, ORDERS_FILE,
-    validate_gcode_file, increment_order_sent_count,
+    PRINTERS_FILE, TOTAL_FILAMENT_FILE, ORDERS_FILE, QUEUE_FILE, LIBRARY_FILE,
+    validate_gcode_file, increment_order_sent_count, increment_queue_sent_count,
     sanitize_group_name, get_ejection_paused, set_ejection_paused,
     register_task, update_task_progress, complete_task,
     logging
@@ -22,13 +22,13 @@ from .default_settings import load_default_settings, save_default_settings
 
 __all__ = [
     # State exports
-    "PRINTERS", "ORDERS", "TOTAL_FILAMENT_CONSUMPTION",
+    "PRINTERS", "ORDERS", "QUEUE_JOBS", "LIBRARY_ITEMS", "TOTAL_FILAMENT_CONSUMPTION",
     "initialize_state", "save_data", "load_data",
     "encrypt_api_key", "decrypt_api_key",
     "orders_lock", "filament_lock", "printers_rwlock",
     "SafeLock", "ReadLock", "WriteLock", "get_order_lock",
-    "PRINTERS_FILE", "TOTAL_FILAMENT_FILE", "ORDERS_FILE",
-    "validate_gcode_file", "increment_order_sent_count",
+    "PRINTERS_FILE", "TOTAL_FILAMENT_FILE", "ORDERS_FILE", "QUEUE_FILE", "LIBRARY_FILE",
+    "validate_gcode_file", "increment_order_sent_count", "increment_queue_sent_count",
     "sanitize_group_name", "get_ejection_paused", "set_ejection_paused",
     "register_task", "update_task_progress", "complete_task",
     "logging",

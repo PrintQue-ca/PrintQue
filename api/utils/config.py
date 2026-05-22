@@ -10,10 +10,8 @@ from __version__ import __version__
 
 def _get_data_dir() -> str:
     """Return the PrintQue data directory, creating it if needed."""
-    base = os.getenv('DATA_DIR', os.path.expanduser("~"))
-    data_dir = os.path.join(base, "PrintQueData")
-    os.makedirs(data_dir, exist_ok=True)
-    return data_dir
+    from utils.paths import get_data_dir
+    return get_data_dir()
 
 
 def _load_or_create_secret_key() -> str:
@@ -72,6 +70,7 @@ class Config:
     API_TIMEOUT = 15  # Reduced from 20 to 15 seconds
     UPLOAD_TIMEOUT = 45  # Reduced from 60 to 45 seconds
     STATUS_REFRESH_INTERVAL = 10  # Seconds
+    STARTUP_POLL_DELAY_SECONDS = 5  # One-time delay before first status poll (MQTT head start)
     CACHE_TTL = 10  # Seconds
 
     # LOCK TIMEOUTS: New configuration for lock management

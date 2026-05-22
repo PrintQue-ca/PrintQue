@@ -45,6 +45,23 @@ class TestDataPersistence:
             loaded = json.load(f)
         assert loaded == {'new': 'data'}
 
+    def test_save_data_refuses_empty_printers_overwrite(self, temp_data_dir):
+        """Accidental empty PRINTERS must not wipe a populated printers.json."""
+        from services.state import PRINTERS_FILE, save_data
+
+        printers = [{'name': 'test-printer', 'ip': '10.0.0.1'}]
+        save_data(PRINTERS_FILE, printers)
+
+        save_data(PRINTERS_FILE, [])
+
+        with open(PRINTERS_FILE, encoding='utf-8') as f:
+            assert json.load(f) == printers
+
+        save_data(PRINTERS_FILE, [], allow_empty_printers=True)
+
+        with open(PRINTERS_FILE, encoding='utf-8') as f:
+            assert json.load(f) == []
+
     def test_load_data_existing_file(self, temp_data_dir):
         """Test loading data from existing file."""
         from services.state import load_data
@@ -241,18 +258,19 @@ class TestEjectionState:
 
     def test_ejection_paused_state(self):
         """Test global ejection paused state."""
+        from unittest.mock import patch
         from services.state import get_ejection_paused, set_ejection_paused
 
         original = get_ejection_paused()
 
-        set_ejection_paused(True)
-        assert get_ejection_paused() is True
+        with patch('services.state.save_data'):
+            set_ejection_paused(True)
+            assert get_ejection_paused() is True
 
-        set_ejection_paused(False)
-        assert get_ejection_paused() is False
+            set_ejection_paused(False)
+            assert get_ejection_paused() is False
 
-        # Restore original state
-        set_ejection_paused(original)
+            set_ejection_paused(original)
 
 
 class TestGcodeValidation:

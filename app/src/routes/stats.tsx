@@ -2,6 +2,7 @@ import { createFileRoute } from '@tanstack/react-router'
 import { FileText, Layers, Library, Loader2, Printer, TrendingUp } from 'lucide-react'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { useFilamentUsage, useStats } from '@/hooks'
+import { formatFilamentKg } from '@/lib/format-filament'
 
 export const Route = createFileRoute('/stats')({ component: StatsPage })
 
@@ -15,13 +16,6 @@ function StatsPage() {
         <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
       </div>
     )
-  }
-
-  const formatFilament = (grams: number) => {
-    if (grams >= 1000) {
-      return `${(grams / 1000).toFixed(2)} kg`
-    }
-    return `${grams} g`
   }
 
   return (
@@ -67,12 +61,12 @@ function StatsPage() {
 
         <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">In Queue</CardTitle>
+            <CardTitle className="text-sm font-medium">Queued</CardTitle>
             <FileText className="h-4 w-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">{stats?.in_queue_count || 0}</div>
-            <p className="text-xs text-muted-foreground mt-1">Orders actively printing</p>
+            <div className="text-2xl font-bold">{stats?.queue_pending_count ?? 0}</div>
+            <p className="text-xs text-muted-foreground mt-1">Waiting to start</p>
           </CardContent>
         </Card>
 
@@ -101,7 +95,7 @@ function StatsPage() {
               </div>
               <div>
                 <div className="text-3xl font-bold">
-                  {formatFilament(stats?.total_filament || filamentData?.total || 0)}
+                  {formatFilamentKg(stats?.total_filament ?? filamentData?.total ?? 0)}
                 </div>
                 <p className="text-sm text-muted-foreground">Total filament used</p>
               </div>
@@ -112,7 +106,7 @@ function StatsPage() {
         <Card>
           <CardHeader>
             <CardTitle>Completed Today</CardTitle>
-            <CardDescription>Prints finished today</CardDescription>
+            <CardDescription>Queue jobs fully counted today</CardDescription>
           </CardHeader>
           <CardContent>
             <div className="flex items-center gap-4">
@@ -121,7 +115,9 @@ function StatsPage() {
               </div>
               <div>
                 <div className="text-3xl font-bold">{stats?.completed_today || 0}</div>
-                <p className="text-sm text-muted-foreground">Prints completed today</p>
+                <p className="text-sm text-muted-foreground">
+                  Jobs fulfilled today (counted when last copy starts)
+                </p>
               </div>
             </div>
           </CardContent>

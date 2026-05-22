@@ -1,24 +1,37 @@
 # API Routes Package
+import csv
+import io
 import os
+import shutil
 import logging
 import platform
 import json
-from flask import redirect, url_for, flash, jsonify, request, current_app
+from datetime import datetime
+from flask import redirect, url_for, flash, jsonify, request, current_app, make_response
 from werkzeug.utils import secure_filename
 from .printers import register_printer_routes
 from .orders import register_order_routes
 from .system import register_misc_routes
 from .history import register_history_routes
 from .ejection_codes import register_ejection_codes_routes
+from .library import register_library_routes
+from .queue import register_queue_routes
 from services.state import (
     get_ejection_paused, set_ejection_paused,
-    PRINTERS, ORDERS,
+    PRINTERS, ORDERS, QUEUE_JOBS, LIBRARY_ITEMS,
     printers_rwlock, orders_lock, filament_lock,
     ReadLock, WriteLock, SafeLock,
-    save_data, load_data, PRINTERS_FILE, ORDERS_FILE, TOTAL_FILAMENT_FILE,
-    encrypt_api_key, sanitize_group_name
+    save_data, load_data, PRINTERS_FILE, QUEUE_FILE, LIBRARY_FILE, TOTAL_FILAMENT_FILE,
+    encrypt_api_key, sanitize_group_name,
+    apply_ejection_fields_to_order, resolve_ejection_gcode,
+    resolve_order_ejection_code_id, auto_save_ejection_code,
 )
 from services.printer_manager import prepare_printer_data_for_broadcast, start_background_distribution, extract_filament_from_file
+from services.library_queue import (
+    normalize_library_item,
+    snapshot_queue_job_from_library,
+    _next_int_id,
+)
 from services.default_settings import load_default_settings, save_default_settings
 from utils.logger import debug_log
 
@@ -29,7 +42,34 @@ __all__ = [
     'register_misc_routes',
     'register_history_routes',
     'register_ejection_codes_routes',
+    'register_library_routes',
+    'register_queue_routes',
 ]
+
+
+def _parse_iso_date(value):
+    """Parse ISO timestamp string to date, or None on failure."""
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(str(value).replace('Z', '+00:00')).date()
+    except (ValueError, TypeError):
+        return None
+
+
+def _queue_job_counted_completed_today(job, today):
+    """True if a fulfilled queue job should count toward completed_today (read-only)."""
+    if job.get('sent', 0) < job.get('quantity', 1):
+        return False
+    completed_date = _parse_iso_date(job.get('completed_at'))
+    if completed_date is not None:
+        return completed_date == today
+    for field in ('updated_at', 'created_at'):
+        ts_date = _parse_iso_date(job.get(field))
+        if ts_date == today:
+            return True
+    return False
+
 
 def register_routes(app, socketio):
     register_printer_routes(app, socketio)
@@ -37,6 +77,8 @@ def register_routes(app, socketio):
     register_misc_routes(app, socketio)
     register_history_routes(app, socketio)
     register_ejection_codes_routes(app, socketio)
+    register_library_routes(app, socketio)
+    register_queue_routes(app, socketio)
 
     # Ejection control routes
     @app.route('/pause_ejection', methods=['POST'])
@@ -130,24 +172,23 @@ def register_routes(app, socketio):
                 idle_printers = len([p for p in PRINTERS if p['state'] == 'READY'])
 
             with SafeLock(orders_lock):
-                # Library count: total available files (non-deleted orders)
-                library_count = len([o for o in ORDERS if not o.get('deleted', False)])
-                # In queue: orders actively being printed (sent > 0 but not complete)
-                in_queue_count = len([
-                    o for o in ORDERS
-                    if not o.get('deleted', False)
-                    and o.get('sent', 0) > 0
-                    and o.get('sent', 0) < o.get('quantity', 1)
+                library_count = len([i for i in LIBRARY_ITEMS if not i.get('deleted', False)])
+                active_jobs = [
+                    j for j in QUEUE_JOBS if not j.get('deleted', False)
+                ]
+                queue_pending_count = len([
+                    j for j in active_jobs if j.get('sent', 0) == 0
                 ])
-                # Count orders completed today
-                from datetime import datetime
+                # Legacy: partial multi-copy jobs (0 < sent < quantity)
+                in_queue_count = len([
+                    j for j in active_jobs
+                    if j.get('sent', 0) > 0
+                    and j.get('sent', 0) < j.get('quantity', 1)
+                ])
                 today = datetime.now().date()
                 completed_today = len([
-                    o for o in ORDERS
-                    if o.get('sent', 0) >= o.get('quantity', 1)
-                    and not o.get('deleted', False)
-                    and o.get('completed_at')
-                    and datetime.fromisoformat(o.get('completed_at', '').replace('Z', '+00:00')).date() == today
+                    j for j in active_jobs
+                    if _queue_job_counted_completed_today(j, today)
                 ])
 
             # Return flat structure matching frontend Stats type
@@ -155,6 +196,7 @@ def register_routes(app, socketio):
                 'total_filament': total_filament_kg,
                 'printers_count': printers_count,
                 'library_count': library_count,
+                'queue_pending_count': queue_pending_count,
                 'in_queue_count': in_queue_count,
                 'active_prints': active_prints,
                 'idle_printers': idle_printers,
@@ -342,11 +384,10 @@ def register_routes(app, socketio):
     def api_get_logs_path():
         """API: Get log directory and file paths for debugging"""
         try:
-            log_dir = app.config.get('LOG_DIR', '')
-            if not log_dir:
-                log_dir = os.path.join(os.path.expanduser("~"), "PrintQueData")
-            app_log = os.path.join(log_dir, 'app.log')
-            logs_subdir = os.path.join(log_dir, 'logs')
+            from utils.paths import get_data_dir, get_log_file, get_logs_dir
+            log_dir = app.config.get('LOG_DIR') or get_data_dir()
+            app_log = get_log_file()
+            logs_subdir = get_logs_dir()
             return jsonify({
                 'log_dir': log_dir,
                 'app_log': app_log,
@@ -365,10 +406,8 @@ def register_routes(app, socketio):
             from utils.logger import get_recent_logs
 
             # Include main app log (PrintQueData/app.log) + logger's recent logs (PrintQueData/logs/*)
-            log_dir = app.config.get('LOG_DIR', '')
-            if not log_dir:
-                log_dir = os.path.join(os.path.expanduser("~"), "PrintQueData")
-            app_log = os.path.join(log_dir, 'app.log')
+            from utils.paths import get_log_file
+            app_log = get_log_file()
 
             parts = []
             if os.path.exists(app_log):
@@ -473,6 +512,126 @@ def register_routes(app, socketio):
             return jsonify({'success': True, 'message': f'Printer {name} added successfully'})
         except Exception as e:
             logging.error(f"Error in api_add_printer: {str(e)}")
+            return jsonify({'error': str(e)}), 500
+
+    @app.route('/api/v1/printers/export', methods=['GET'])
+    def api_export_printers():
+        """API: Export printers as JSON for re-import (includes encrypted credentials)."""
+        try:
+            export_fields = ['name', 'ip', 'type', 'group']
+            type_specific = {'prusa': ['api_key'], 'bambu': ['device_id', 'serial_number', 'access_code'], 'octoprint': ['api_key']}
+            with ReadLock(printers_rwlock):
+                out = []
+                for p in PRINTERS:
+                    rec = {k: p.get(k) for k in export_fields if p.get(k) is not None}
+                    rec['type'] = p.get('type', 'prusa')
+                    for key in type_specific.get(rec['type'], []):
+                        if p.get(key) is not None:
+                            rec[key] = p[key]
+                    out.append(rec)
+            body = json.dumps(out, indent=2)
+            response = make_response(body)
+            response.headers['Content-Type'] = 'application/json'
+            response.headers['Content-Disposition'] = (
+                f"attachment; filename=printers_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+            )
+            return response
+        except Exception as e:
+            logging.error(f"Error in api_export_printers: {str(e)}")
+            return jsonify({'error': str(e)}), 500
+
+    @app.route('/api/v1/printers/import', methods=['POST'])
+    def api_import_printers():
+        """API: Import printers from JSON (export format with encrypted credentials)."""
+        try:
+            file = request.files.get('file')
+            if not file or not file.filename or not file.filename.lower().endswith('.json'):
+                return jsonify({'error': 'A .json file is required'}), 400
+            try:
+                data = json.load(file)
+            except json.JSONDecodeError as e:
+                return jsonify({'error': f'Invalid JSON: {e}'}), 400
+            if not isinstance(data, list):
+                return jsonify({'error': 'JSON must be an array of printer configs'}), 400
+
+            success_count = 0
+            failures = []
+            default_printer = {
+                'state': 'OFFLINE',
+                'status': 'Offline',
+                'temps': {'nozzle': 0, 'bed': 0},
+                'progress': 0,
+                'time_remaining': 0,
+                'z_height': 0,
+                'file': None,
+                'filament_used_g': 0,
+                'service_mode': False,
+                'last_file': None,
+                'manually_set': False,
+            }
+
+            for idx, p in enumerate(data):
+                try:
+                    name = (p.get('name') or '').strip()
+                    ip = (p.get('ip') or '').strip()
+                    ptype = p.get('type', 'prusa')
+                    group = sanitize_group_name(p.get('group', 'Default'))
+                    if not name or not ip:
+                        failures.append({'row': idx + 1, 'error': 'Missing name or ip'})
+                        continue
+                    new_printer = {
+                        'name': name,
+                        'ip': ip,
+                        'type': ptype,
+                        'group': group,
+                        **default_printer,
+                    }
+                    if ptype == 'prusa' or ptype == 'octoprint':
+                        api_key = p.get('api_key')
+                        if not api_key:
+                            failures.append({'row': idx + 1, 'error': f'Printer {name}: API key required'})
+                            continue
+                        new_printer['api_key'] = api_key
+                    elif ptype == 'bambu':
+                        device_id = (p.get('device_id') or p.get('serial_number') or '').strip()
+                        access_code = p.get('access_code')
+                        if not device_id or not access_code:
+                            failures.append({'row': idx + 1, 'error': f'Printer {name}: device_id and access_code required'})
+                            continue
+                        new_printer['device_id'] = device_id
+                        new_printer['serial_number'] = device_id
+                        new_printer['access_code'] = access_code
+                    else:
+                        failures.append({'row': idx + 1, 'error': f'Unknown type: {ptype}'})
+                        continue
+
+                    with WriteLock(printers_rwlock):
+                        if any(pr['name'] == name for pr in PRINTERS):
+                            failures.append({'row': idx + 1, 'error': f'Printer name already exists: {name}'})
+                            continue
+                        PRINTERS.append(new_printer)
+                        success_count += 1
+                except Exception as e:
+                    failures.append({'row': idx + 1, 'error': str(e)})
+
+            if success_count > 0:
+                save_data(PRINTERS_FILE, PRINTERS)
+                for printer in PRINTERS:
+                    if printer.get('type') == 'bambu':
+                        try:
+                            from services.bambu_handler import connect_bambu_printer
+                            connect_bambu_printer(printer)
+                        except Exception as e:
+                            logging.warning(f"Bambu connect for {printer.get('name')}: {e}")
+
+            return jsonify({
+                'success': True,
+                'success_count': success_count,
+                'failed_count': len(failures),
+                'failures': failures,
+            })
+        except Exception as e:
+            logging.error(f"Error in api_import_printers: {str(e)}")
             return jsonify({'error': str(e)}), 500
 
     @app.route('/api/v1/printers/<printer_name>', methods=['GET'])
@@ -583,8 +742,17 @@ def register_routes(app, socketio):
 
     @app.route('/api/v1/printers/<printer_name>/stop', methods=['POST'])
     def api_stop_printer(printer_name):
-        """API: Stop a print on a printer"""
-        # This would need async implementation - for now return a simple response
+        """API: Stop or cancel a print on a printer (including PREPARING)."""
+        from services.print_jobs import schedule_stop_print_by_name
+
+        result = schedule_stop_print_by_name(printer_name, socketio, app)
+        if result is False:
+            return jsonify({'success': False, 'error': 'Printer not found'}), 404
+        if result is None:
+            return jsonify({
+                'success': False,
+                'error': 'Printer is not printing, paused, or preparing',
+            }), 400
         return jsonify({'success': True, 'message': 'Stop command sent'})
 
     @app.route('/api/v1/printers/<printer_name>/pause', methods=['POST'])
@@ -597,16 +765,256 @@ def register_routes(app, socketio):
         """API: Resume a print on a printer"""
         return jsonify({'success': True, 'message': 'Resume command sent'})
 
+    @app.route('/api/v1/printers/<printer_name>/clear-error', methods=['POST'])
+    def api_clear_printer_error(printer_name):
+        """API: Clear error state and mark printer ready."""
+        from routes.printers import clear_error
+
+        printer_index = None
+        with ReadLock(printers_rwlock):
+            for i, printer in enumerate(PRINTERS):
+                if printer['name'] == printer_name:
+                    printer_index = i
+                    break
+        if printer_index is None:
+            return jsonify({'success': False, 'message': 'Printer not found'}), 404
+        return clear_error(printer_index)
+
     # Order routes
     @app.route('/api/v1/orders', methods=['GET'])
     def api_get_orders():
         """API: Get all orders"""
         try:
             with SafeLock(orders_lock):
-                orders_data = [o for o in ORDERS if not o.get('deleted', False)]
+                orders_data = []
+                for o in ORDERS:
+                    if o.get('deleted', False):
+                        continue
+                    order_copy = o.copy()
+                    if order_copy.get('ejection_code_id'):
+                        _, code_name = resolve_ejection_gcode(order_copy['ejection_code_id'])
+                        if code_name:
+                            order_copy['ejection_code_name'] = code_name
+                    orders_data.append(order_copy)
             return jsonify(orders_data)
         except Exception as e:
             logging.error(f"Error in api_get_orders: {str(e)}")
+            return jsonify({'error': str(e)}), 500
+
+    @app.route('/api/v1/orders/export', methods=['GET'])
+    def api_export_orders():
+        """API: Export all active orders as JSON for re-import"""
+        try:
+            export_fields = [
+                'id', 'filename', 'filepath', 'name', 'quantity', 'groups',
+                'ejection_enabled', 'ejection_code_id',
+                'cooldown_temp', 'extra_data', 'filament_g'
+            ]
+            with SafeLock(orders_lock):
+                orders_data = []
+                for o in ORDERS:
+                    if o.get('deleted', False):
+                        continue
+                    export_order = {k: o.get(k) for k in export_fields if k in o}
+                    # Ensure required fields exist
+                    export_order.setdefault('filename', '')
+                    export_order.setdefault('filepath', '')
+                    export_order.setdefault('quantity', 1)
+                    export_order.setdefault('groups', ['Default'])
+                    # Include resolved G-code for portable exports
+                    if o.get('ejection_enabled') and o.get('ejection_code_id'):
+                        gcode, code_name = resolve_ejection_gcode(o['ejection_code_id'])
+                        if gcode:
+                            export_order['end_gcode'] = gcode
+                            export_order['ejection_code_name'] = code_name
+                    orders_data.append(export_order)
+            body = json.dumps(orders_data, indent=2)
+            response = make_response(body)
+            response.headers['Content-Type'] = 'application/json'
+            response.headers['Content-Disposition'] = (
+                f"attachment; filename=orders_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+            )
+            return response
+        except Exception as e:
+            logging.error(f"Error in api_export_orders: {str(e)}")
+            return jsonify({'error': str(e)}), 500
+
+    @app.route('/api/v1/orders/import', methods=['POST'])
+    def api_import_orders():
+        """API: Import orders from JSON (re-import from export) or CSV (bulk from file paths)"""
+        try:
+            file = request.files.get('file')
+            if not file or not file.filename:
+                return jsonify({'error': 'No file provided'}), 400
+
+            filename_lower = file.filename.lower()
+            success_count = 0
+            failures = []
+
+            if filename_lower.endswith('.json'):
+                # Re-import from export JSON
+                try:
+                    data = json.load(file)
+                except json.JSONDecodeError as e:
+                    return jsonify({'error': f'Invalid JSON: {e}'}), 400
+                if not isinstance(data, list):
+                    return jsonify({'error': 'JSON must be an array of orders'}), 400
+
+                default_settings = load_default_settings()
+                for idx, order_data in enumerate(data):
+                    try:
+                        filepath = order_data.get('filepath') or ''
+                        filename = order_data.get('filename') or ''
+                        if not filepath and filename:
+                            filepath = os.path.join(
+                                current_app.config.get('UPLOAD_FOLDER', 'uploads'),
+                                filename
+                            )
+                        if not filepath or not os.path.exists(filepath):
+                            failures.append({'row': idx + 1, 'error': f'File not found: {filepath}'})
+                            continue
+                        quantity = int(order_data.get('quantity', 1))
+                        groups = order_data.get('groups') or ['Default']
+                        groups = [sanitize_group_name(str(g)) for g in groups if g]
+                        if not groups:
+                            groups = ['Default']
+
+                        with SafeLock(orders_lock):
+                            existing_int_ids = []
+                            for o in ORDERS:
+                                try:
+                                    existing_int_ids.append(int(o['id']))
+                                except (ValueError, TypeError):
+                                    pass
+                            order_id = max(existing_int_ids, default=0) + 1
+
+                            new_order = {
+                                'id': order_id,
+                                'filename': filename or os.path.basename(filepath),
+                                'filepath': filepath,
+                                'name': order_data.get('name'),
+                                'quantity': quantity,
+                                'sent': 0,
+                                'status': 'pending',
+                                'filament_g': order_data.get('filament_g', 0),
+                                'groups': groups,
+                                'cooldown_temp': order_data.get('cooldown_temp'),
+                                'extra_data': order_data.get('extra_data') or {},
+                                'created_at': datetime.now().isoformat(),
+                                'from_new_orders': True,
+                            }
+                            apply_ejection_fields_to_order(
+                                new_order,
+                                ejection_enabled=bool(order_data.get('ejection_enabled', False)),
+                                ejection_code_id=order_data.get('ejection_code_id'),
+                                end_gcode=order_data.get('end_gcode'),
+                                name_hint=filename or os.path.basename(filepath),
+                                default_settings=default_settings,
+                            )
+                            ORDERS.append(new_order)
+                            success_count += 1
+                    except Exception as e:
+                        failures.append({'row': idx + 1, 'error': str(e)})
+
+                with SafeLock(orders_lock):
+                    save_data(QUEUE_FILE, QUEUE_JOBS)
+                if success_count > 0:
+                    start_background_distribution(socketio, app)
+
+            elif filename_lower.endswith('.csv'):
+                # CSV bulk import: folder_path, filename, quantity, printer_groups
+                stream = io.StringIO(file.read().decode('utf-8', errors='replace'))
+                reader = csv.DictReader(stream)
+                if not reader.fieldnames:
+                    return jsonify({'error': 'CSV has no headers'}), 400
+                fieldnames_normalized = {f.strip().lower().replace(' ', '_') for f in reader.fieldnames}
+                required = {'folder_path', 'filename', 'quantity', 'printer_groups'}
+                if required - fieldnames_normalized:
+                    return jsonify({
+                        'error': 'CSV must have columns: folder_path, filename, quantity, printer_groups'
+                    }), 400
+
+                default_settings = load_default_settings()
+                upload_folder = current_app.config.get('UPLOAD_FOLDER', 'uploads')
+                os.makedirs(upload_folder, exist_ok=True)
+
+                for row_index, row in enumerate(reader, start=2):
+                    try:
+                        row_clean = {k.strip().lower().replace(' ', '_'): (v or '').strip() for k, v in row.items()}
+                        folder_path = row_clean.get('folder_path', '')
+                        filename = row_clean.get('filename', '')
+                        quantity_str = row_clean.get('quantity', '1')
+                        quantity = int(quantity_str) if quantity_str.isdigit() else 1
+                        groups_str = row_clean.get('printer_groups', 'Default')
+                        printer_groups = [sanitize_group_name(g.strip()) for g in groups_str.split(',') if g.strip()]
+                        if not printer_groups:
+                            printer_groups = ['Default']
+
+                        if not folder_path or not filename:
+                            failures.append({'row': row_index, 'error': 'Missing folder_path or filename'})
+                            continue
+
+                        full_path = os.path.normpath(os.path.join(folder_path, filename))
+                        if not os.path.exists(full_path):
+                            failures.append({'row': row_index, 'error': f'File not found: {full_path}'})
+                            continue
+
+                        valid_ext = ['.gcode', '.bgcode', '.3mf', '.stl']
+                        if not any(filename.lower().endswith(ext) for ext in valid_ext):
+                            failures.append({'row': row_index, 'error': f'Invalid file type: {filename}'})
+                            continue
+
+                        upload_filename = secure_filename(filename)
+                        upload_path = os.path.join(upload_folder, upload_filename)
+                        shutil.copy2(full_path, upload_path)
+                        filament_g = extract_filament_from_file(upload_path)
+
+                        with SafeLock(orders_lock):
+                            existing_int_ids = []
+                            for o in ORDERS:
+                                try:
+                                    existing_int_ids.append(int(o['id']))
+                                except (ValueError, TypeError):
+                                    pass
+                            order_id = max(existing_int_ids, default=0) + 1
+                            new_order = {
+                                'id': order_id,
+                                'filename': upload_filename,
+                                'filepath': upload_path,
+                                'quantity': quantity,
+                                'sent': 0,
+                                'status': 'pending',
+                                'filament_g': filament_g,
+                                'groups': printer_groups,
+                                'created_at': datetime.now().isoformat(),
+                                'from_new_orders': True,
+                            }
+                            apply_ejection_fields_to_order(
+                                new_order,
+                                ejection_enabled=False,
+                                default_settings=default_settings,
+                            )
+                            ORDERS.append(new_order)
+                            success_count += 1
+                    except Exception as e:
+                        failures.append({'row': row_index, 'error': str(e)})
+
+                with SafeLock(orders_lock):
+                    save_data(QUEUE_FILE, QUEUE_JOBS)
+                if success_count > 0:
+                    start_background_distribution(socketio, app)
+
+            else:
+                return jsonify({'error': 'File must be .json or .csv'}), 400
+
+            return jsonify({
+                'success': True,
+                'success_count': success_count,
+                'failed_count': len(failures),
+                'failures': failures,
+            })
+        except Exception as e:
+            logging.error(f"Error in api_import_orders: {str(e)}")
             return jsonify({'error': str(e)}), 500
 
     @app.route('/api/v1/orders', methods=['POST'])
@@ -645,9 +1053,8 @@ def register_routes(app, socketio):
 
             # Handle ejection settings
             ejection_enabled = request.form.get('ejection_enabled', 'false').lower() == 'true'
-            end_gcode = request.form.get('end_gcode', '').strip()
+            end_gcode = request.form.get('end_gcode', '').strip() or None
             ejection_code_id = request.form.get('ejection_code_id', '').strip() or None
-            ejection_code_name = request.form.get('ejection_code_name', '').strip() or None
 
             # Handle cooldown temperature (Bambu printers only)
             cooldown_temp_str = request.form.get('cooldown_temp', '').strip()
@@ -664,10 +1071,6 @@ def register_routes(app, socketio):
                     debug_log('cooldown', f"Could not parse cooldown_temp '{cooldown_temp_str}'", 'warning')
                     cooldown_temp = None  # Invalid value
 
-            # Use default if ejection enabled but no custom gcode provided
-            if ejection_enabled and not end_gcode:
-                end_gcode = default_settings.get('default_end_gcode', '')
-
             # Save file
             upload_folder = current_app.config.get('UPLOAD_FOLDER', 'uploads')
             os.makedirs(upload_folder, exist_ok=True)
@@ -677,51 +1080,51 @@ def register_routes(app, socketio):
             # Extract filament usage
             filament_g = extract_filament_from_file(filepath)
 
+            now = datetime.now().isoformat()
+            queue_job_id = None
             with SafeLock(orders_lock):
-                # Find next available ID
-                existing_int_ids = []
-                for order in ORDERS:
-                    try:
-                        int_id = int(order['id'])
-                        existing_int_ids.append(int_id)
-                    except (ValueError, TypeError):
-                        pass
-
-                order_id = max(existing_int_ids, default=0) + 1
-
-                order = {
-                    'id': order_id,
+                library_id = _next_int_id(LIBRARY_ITEMS)
+                item = normalize_library_item({
+                    'id': library_id,
                     'filename': filename,
-                    'name': order_name if order_name else None,
+                    'name': order_name or None,
                     'filepath': filepath,
-                    'quantity': quantity,
-                    'sent': 0,
-                    'status': 'pending',
                     'filament_g': filament_g,
                     'groups': groups,
-                    'ejection_enabled': ejection_enabled,
-                    'ejection_code_id': ejection_code_id,
-                    'ejection_code_name': ejection_code_name,
-                    'end_gcode': end_gcode,
-                    'cooldown_temp': cooldown_temp,  # Bed temp to wait for before ejection (Bambu only)
-                    'from_new_orders': True
-                }
-                ORDERS.append(order)
-                save_data(ORDERS_FILE, ORDERS)
-                logging.info(f"Created order {order_id}: {order_name or filename}, qty={quantity}")
-                debug_log('cooldown', f"Order {order_id} created with cooldown_temp={cooldown_temp}")
+                    'cooldown_temp': cooldown_temp,
+                    'created_at': now,
+                    'updated_at': now,
+                })
+                apply_ejection_fields_to_order(
+                    item,
+                    ejection_enabled=ejection_enabled,
+                    ejection_code_id=ejection_code_id,
+                    end_gcode=end_gcode,
+                    name_hint=order_name or filename,
+                    default_settings=default_settings,
+                )
+                LIBRARY_ITEMS.append(item)
+                save_data(LIBRARY_FILE, LIBRARY_ITEMS)
 
-            # Trigger distribution
-            start_background_distribution(socketio, app)
+                if quantity > 0:
+                    queue_job_id = _next_int_id(QUEUE_JOBS)
+                    job = snapshot_queue_job_from_library(item, quantity, groups)
+                    job['id'] = queue_job_id
+                    QUEUE_JOBS.append(job)
+                    save_data(QUEUE_FILE, QUEUE_JOBS)
+
+            if quantity > 0:
+                start_background_distribution(socketio, app)
 
             message = (
-                'Order added to library (set quantity to start printing)' if quantity == 0
-                else f'Order created for {quantity} print(s) of {filename}'
+                'Added to library' if quantity == 0
+                else f'Enqueued {quantity} print(s) of {filename}'
             )
             return jsonify({
                 'success': True,
                 'message': message,
-                'order_id': order_id
+                'library_item_id': library_id,
+                'order_id': queue_job_id,
             })
 
         except Exception as e:
@@ -750,13 +1153,18 @@ def register_routes(app, socketio):
                 for order in ORDERS:
                     if order.get('id') == order_id:
                         if 'quantity' in data:
-                            order['quantity'] = int(data['quantity'])
+                            new_qty = int(data['quantity'])
+                            if new_qty < order.get('sent', 0):
+                                return jsonify({
+                                    'error': f'Quantity cannot be less than {order["sent"]} (already sent)',
+                                }), 400
+                            order['quantity'] = new_qty
                             quantity_updated = True
                         if 'groups' in data:
                             order['groups'] = data['groups']
                         if 'name' in data:
                             order['name'] = data['name'].strip() if data['name'] else None
-                        save_data(ORDERS_FILE, ORDERS)
+                        save_data(QUEUE_FILE, QUEUE_JOBS)
                         if quantity_updated and order.get('quantity', 0) > 0:
                             start_background_distribution(socketio, app)
                         return jsonify({'success': True})
@@ -772,10 +1180,32 @@ def register_routes(app, socketio):
                 for order in ORDERS:
                     if order.get('id') == order_id:
                         order['deleted'] = True
-                        save_data(ORDERS_FILE, ORDERS)
+                        save_data(QUEUE_FILE, QUEUE_JOBS)
                         return jsonify({'success': True, 'message': 'Order deleted'})
             return jsonify({'error': 'Order not found'}), 404
         except Exception as e:
+            return jsonify({'error': str(e)}), 500
+
+    @app.route('/api/v1/orders/bulk-delete', methods=['POST'])
+    def api_bulk_delete_orders():
+        """API: Soft-delete multiple orders by ID"""
+        try:
+            data = request.get_json()
+            ids = data.get('ids')
+            if not ids or not isinstance(ids, list):
+                return jsonify({'error': 'ids array is required'}), 400
+            id_set = set(int(x) for x in ids if isinstance(x, (int, float)) and not isinstance(x, bool))
+            deleted_count = 0
+            with SafeLock(orders_lock):
+                for order in ORDERS:
+                    if order.get('id') in id_set:
+                        order['deleted'] = True
+                        deleted_count += 1
+                if deleted_count > 0:
+                    save_data(QUEUE_FILE, QUEUE_JOBS)
+            return jsonify({'success': True, 'deleted_count': deleted_count})
+        except Exception as e:
+            logging.error(f"Error in api_bulk_delete_orders: {str(e)}")
             return jsonify({'error': str(e)}), 500
 
     @app.route('/api/v1/orders/<int:order_id>/ejection', methods=['PATCH'])
@@ -783,21 +1213,89 @@ def register_routes(app, socketio):
         """API: Update order ejection settings"""
         try:
             data = request.get_json()
+
+            cooldown_provided = 'cooldown_temp' in data
+            cooldown_value = None
+            if cooldown_provided and data['cooldown_temp'] is not None:
+                raw = data['cooldown_temp']
+                # bool is a subclass of int; reject it explicitly
+                if isinstance(raw, bool) or not isinstance(raw, (int, float)):
+                    return jsonify({'error': 'cooldown_temp must be an integer between 0 and 100, or null'}), 400
+                try:
+                    cooldown_value = int(raw)
+                except (TypeError, ValueError):
+                    return jsonify({'error': 'cooldown_temp must be an integer between 0 and 100, or null'}), 400
+                if cooldown_value < 0 or cooldown_value > 100:
+                    return jsonify({'error': 'cooldown_temp must be between 0 and 100'}), 400
+
+            updated_order = None
             with SafeLock(orders_lock):
                 for order in ORDERS:
                     if order.get('id') == order_id:
+                        ejection_enabled = order.get('ejection_enabled', False)
                         if 'ejection_enabled' in data:
-                            order['ejection_enabled'] = bool(data['ejection_enabled'])
-                        if 'ejection_code_id' in data:
-                            order['ejection_code_id'] = data['ejection_code_id']
-                        if 'ejection_code_name' in data:
-                            order['ejection_code_name'] = data['ejection_code_name']
-                        if 'end_gcode' in data:
-                            order['end_gcode'] = data['end_gcode']
-                        save_data(ORDERS_FILE, ORDERS)
-                        logging.info(f"Updated ejection settings for order {order_id}: enabled={order.get('ejection_enabled')}, code={order.get('ejection_code_name')}")
-                        return jsonify({'success': True, 'order': order})
-            return jsonify({'error': 'Order not found'}), 404
+                            ejection_enabled = bool(data['ejection_enabled'])
+
+                        ejection_code_id = data.get('ejection_code_id', order.get('ejection_code_id'))
+                        end_gcode = data.get('end_gcode') if 'end_gcode' in data else None
+
+                        if ejection_enabled:
+                            if end_gcode is not None and str(end_gcode).strip():
+                                ejection_code_id = auto_save_ejection_code(
+                                    str(end_gcode).strip(),
+                                    name_hint=order.get('filename') or order.get('name') or 'Custom',
+                                )['id']
+                            elif 'ejection_code_id' in data:
+                                resolved = resolve_order_ejection_code_id(
+                                    ejection_code_id=ejection_code_id,
+                                    name_hint=order.get('filename') or 'Custom',
+                                )
+                                if resolved:
+                                    ejection_code_id = resolved
+
+                        apply_ejection_fields_to_order(
+                            order,
+                            ejection_enabled=ejection_enabled,
+                            ejection_code_id=ejection_code_id if ejection_enabled else None,
+                            end_gcode=end_gcode if ejection_enabled and end_gcode else None,
+                            name_hint=order.get('filename') or order.get('name') or 'Custom',
+                        )
+
+                        if cooldown_provided:
+                            order['cooldown_temp'] = cooldown_value
+                        save_data(QUEUE_FILE, QUEUE_JOBS)
+                        _, code_name = resolve_ejection_gcode(order.get('ejection_code_id'))
+                        logging.info(
+                            f"Updated ejection settings for order {order_id}: "
+                            f"enabled={order.get('ejection_enabled')}, code={code_name}, "
+                            f"cooldown_temp={order.get('cooldown_temp')}"
+                        )
+                        updated_order = order.copy()
+                        break
+
+            if updated_order is None:
+                return jsonify({'error': 'Order not found'}), 404
+
+            _, resolved_name = resolve_ejection_gcode(updated_order.get('ejection_code_id'))
+            if resolved_name:
+                updated_order['ejection_code_name'] = resolved_name
+
+            # Sync any printer currently COOLING for this order so the new
+            # target takes effect immediately (otherwise users must wait for
+            # the next poll cycle to pick up the change).
+            if cooldown_provided:
+                with WriteLock(printers_rwlock):
+                    for printer in PRINTERS:
+                        if printer.get('state') == 'COOLING' and printer.get('cooldown_order_id') == order_id:
+                            if cooldown_value is None:
+                                printer['cooldown_target_temp'] = None
+                                printer['cooldown_order_id'] = None
+                            else:
+                                printer['cooldown_target_temp'] = cooldown_value
+                            save_data(PRINTERS_FILE, PRINTERS)
+                            logging.info(f"Synced cooldown target on printer {printer.get('name')} for order {order_id}: cooldown_temp={cooldown_value}")
+
+            return jsonify({'success': True, 'order': updated_order})
         except Exception as e:
             logging.error(f"Error updating order ejection: {str(e)}")
             return jsonify({'error': str(e)}), 500
@@ -825,7 +1323,7 @@ def register_routes(app, socketio):
                 elif direction == 'down' and order_index < len(ORDERS) - 1:
                     ORDERS[order_index], ORDERS[order_index + 1] = ORDERS[order_index + 1], ORDERS[order_index]
 
-                save_data(ORDERS_FILE, ORDERS)
+                save_data(QUEUE_FILE, QUEUE_JOBS)
 
             return jsonify({'success': True})
         except Exception as e:
@@ -880,7 +1378,7 @@ def register_routes(app, socketio):
                     new_real_index = active_indices_after[new_index]
 
                 ORDERS.insert(new_real_index, order)
-                save_data(ORDERS_FILE, ORDERS)
+                save_data(QUEUE_FILE, QUEUE_JOBS)
 
             return jsonify({'success': True})
         except Exception as e:
@@ -892,9 +1390,10 @@ def register_routes(app, socketio):
         """API: Get default ejection settings"""
         try:
             settings = load_default_settings()
+            code_id = settings.get('default_ejection_code_id')
             return jsonify({
                 'ejection_enabled': settings.get('default_ejection_enabled', False),
-                'end_gcode': settings.get('default_end_gcode', '')
+                'ejection_code_id': code_id,
             })
         except Exception as e:
             logging.error(f"Error getting default ejection settings: {str(e)}")
@@ -906,23 +1405,32 @@ def register_routes(app, socketio):
         try:
             data = request.get_json()
 
-            # Load current settings
             current_settings = load_default_settings()
 
-            # Update settings
             if 'ejection_enabled' in data:
                 current_settings['default_ejection_enabled'] = bool(data['ejection_enabled'])
-            if 'end_gcode' in data:
-                current_settings['default_end_gcode'] = data['end_gcode'].strip()
 
-            # Save settings
+            if 'ejection_code_id' in data:
+                code_id = data['ejection_code_id']
+                current_settings['default_ejection_code_id'] = code_id if code_id else None
+                current_settings.pop('default_end_gcode', None)
+            elif 'end_gcode' in data and str(data['end_gcode']).strip():
+                code = auto_save_ejection_code(str(data['end_gcode']).strip(), 'Default')
+                current_settings['default_ejection_code_id'] = code['id']
+                current_settings.pop('default_end_gcode', None)
+
             success = save_default_settings(current_settings)
 
             if success:
-                logging.info(f"API: Saved default ejection settings: enabled={current_settings.get('default_ejection_enabled')}")
+                logging.info(
+                    f"API: Saved default ejection settings: enabled="
+                    f"{current_settings.get('default_ejection_enabled')}, "
+                    f"code_id={current_settings.get('default_ejection_code_id')}"
+                )
                 return jsonify({
                     'success': True,
-                    'message': 'Default ejection settings saved'
+                    'message': 'Default ejection settings saved',
+                    'ejection_code_id': current_settings.get('default_ejection_code_id'),
                 })
             else:
                 return jsonify({'error': 'Failed to save settings'}), 500

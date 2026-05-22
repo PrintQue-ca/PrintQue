@@ -14,7 +14,8 @@ from werkzeug.utils import secure_filename
 from services.state import (
     EJECTION_CODES, EJECTION_CODES_FILE, PRINTERS,
     save_data, SafeLock, ReadLock, logging,
-    ejection_codes_lock, validate_ejection_file, printers_rwlock
+    ejection_codes_lock, validate_ejection_file, printers_rwlock,
+    count_orders_using_ejection_code,
 )
 
 ejection_codes_bp = Blueprint('ejection_codes', __name__)
@@ -243,6 +244,15 @@ def update_ejection_code(code_id):
 def delete_ejection_code(code_id):
     """Delete an ejection code"""
     try:
+        usage_count = count_orders_using_ejection_code(code_id)
+        if usage_count > 0:
+            return jsonify({
+                'success': False,
+                'error': (
+                    f'Cannot delete: {usage_count} active order(s) are using this ejection code.'
+                ),
+            }), 409
+
         with SafeLock(ejection_codes_lock):
             # Find and remove the code
             for i, code in enumerate(EJECTION_CODES):

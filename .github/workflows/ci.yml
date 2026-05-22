@@ -11,7 +11,7 @@ jobs:
     name: Lint
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
@@ -21,7 +21,7 @@ jobs:
       - name: Run Python linter
         run: ruff check api/ --output-format=github
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: '20'
           cache: 'npm'
@@ -35,7 +35,7 @@ jobs:
     name: Backend Tests
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
@@ -56,6 +56,7 @@ jobs:
         run: cd api && pytest --cov=. --cov-report=xml --cov-report=term-missing
         env:
           PYTHONDONTWRITEBYTECODE: 1
+          DATA_DIR: ${{ runner.temp }}/printque-ci
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v4
         with:
@@ -67,9 +68,9 @@ jobs:
     name: Frontend Tests
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: '20'
           cache: 'npm'
@@ -86,9 +87,9 @@ jobs:
     needs: [lint, test-backend, test-frontend]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: '20'
           cache: 'npm'

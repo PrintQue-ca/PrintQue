@@ -29,17 +29,26 @@ import {
   useResumePrint,
   useStopPrint,
 } from '@/hooks'
-import type { Printer } from '@/types'
+import {
+  findQueueJobForPrinter,
+  getPrinterQueueJobId,
+  isActiveJobPrinterStatus,
+} from '@/lib/printer-queue-job'
+import type { Printer, QueueJob } from '@/types'
 import { EditPrinterDialog } from './EditPrinterDialog'
+import { PrinterActiveJobButton } from './PrinterActiveJobButton'
+import { QueueJobDetailSheet } from './QueueJobDetailSheet'
 
 interface PrinterCardProps {
   printer: Printer
+  queueJobs?: QueueJob[]
 }
 
 const statusColors: Record<string, string> = {
   IDLE: 'bg-green-500',
   READY: 'bg-green-500',
   PRINTING: 'bg-blue-500',
+  PREPARING: 'bg-blue-400',
   FINISHED: 'bg-yellow-500',
   ERROR: 'bg-red-500',
   EJECTING: 'bg-purple-500',
@@ -52,6 +61,7 @@ const statusLabels: Record<string, string> = {
   IDLE: 'Idle',
   READY: 'Ready',
   PRINTING: 'Printing',
+  PREPARING: 'Preparing',
   FINISHED: 'Finished',
   ERROR: 'Error',
   EJECTING: 'Ejecting',
@@ -60,8 +70,9 @@ const statusLabels: Record<string, string> = {
   OFFLINE: 'Offline',
 }
 
-export function PrinterCard({ printer }: PrinterCardProps) {
+export function PrinterCard({ printer, queueJobs = [] }: PrinterCardProps) {
   const [editOpen, setEditOpen] = useState(false)
+  const [jobSheetOpen, setJobSheetOpen] = useState(false)
   const stopPrint = useStopPrint()
   const pausePrint = usePausePrint()
   const resumePrint = useResumePrint()
@@ -69,10 +80,26 @@ export function PrinterCard({ printer }: PrinterCardProps) {
   const clearError = useClearError()
   const deletePrinter = useDeletePrinter()
 
-  const handleStop = () => stopPrint.mutate(printer.name)
   const handlePause = () => pausePrint.mutate(printer.name)
   const handleResume = () => resumePrint.mutate(printer.name)
-  const handleMarkReady = () => markReady.mutate(printer.name)
+  const handleMarkReady = () => {
+    markReady.mutate(printer.name, {
+      onSuccess: () => {
+        toast.success(
+          printer.state === 'COOLING' || printer.status === 'COOLING'
+            ? 'Cooldown skipped'
+            : 'Printer marked ready'
+        )
+      },
+      onError: () => {
+        toast.error(
+          printer.state === 'COOLING' || printer.status === 'COOLING'
+            ? 'Failed to skip cooldown (API may be busy — try again)'
+            : 'Failed to mark printer ready'
+        )
+      },
+    })
+  }
   const handleClearError = () => clearError.mutate(printer.name)
   const handleDelete = async () => {
     if (confirm(`Are you sure you want to delete printer "${printer.name}"?`)) {
@@ -86,19 +113,42 @@ export function PrinterCard({ printer }: PrinterCardProps) {
   }
 
   const isPrinting = printer.status === 'PRINTING'
+  const isPreparing = printer.status === 'PREPARING'
   const isPaused = printer.status === 'PAUSED'
+
+  const handleStop = () => {
+    stopPrint.mutate(printer.name, {
+      onSuccess: () => {
+        toast.success(isPreparing ? 'Print cancelled' : 'Stop command sent')
+      },
+      onError: () => {
+        toast.error(isPreparing ? 'Failed to cancel print' : 'Failed to stop print')
+      },
+    })
+  }
   const isFinished = printer.status === 'FINISHED'
   const isOffline = printer.status === 'OFFLINE'
   const isError = printer.status === 'ERROR'
   const isCooling = printer.status === 'COOLING'
   const isEjecting = printer.status === 'EJECTING'
+  const isPlateActive = isPrinting || isPaused || isPreparing
 
-  // Normalize current_file (ensure string for display; backend may occasionally send wrong shape)
+  const queueJob = findQueueJobForPrinter(printer, queueJobs)
+  const showActiveJob =
+    isActiveJobPrinterStatus(printer.status) && getPrinterQueueJobId(printer) != null
+
   const currentFileName =
     typeof printer.current_file === 'string' ? printer.current_file : 'Unknown file'
 
-  // Show temperatures for all online printers
   const showTemps = !isOffline
+
+  const activeJobButton = showActiveJob ? (
+    <PrinterActiveJobButton
+      printer={printer}
+      job={queueJob}
+      onClick={() => setJobSheetOpen(true)}
+    />
+  ) : null
 
   return (
     <Card className="relative">
@@ -119,10 +169,17 @@ export function PrinterCard({ printer }: PrinterCardProps) {
         </div>
       </CardHeader>
       <CardContent>
-        {isPrinting || isPaused ? (
+        {isPlateActive ? (
           <div className="space-y-2">
+            {activeJobButton}
+            {!showActiveJob && (
+              <div className="flex items-center justify-between text-sm">
+                <span className="truncate max-w-[200px]">{currentFileName}</span>
+                <span className="font-medium">{printer.progress || 0}%</span>
+              </div>
+            )}
             <div className="flex items-center justify-between text-sm">
-              <span className="truncate max-w-[200px]">{currentFileName}</span>
+              <span className="text-muted-foreground">Plate progress</span>
               <span className="font-medium">{printer.progress || 0}%</span>
             </div>
             <Progress value={printer.progress || 0} className="h-2" />
@@ -144,6 +201,20 @@ export function PrinterCard({ printer }: PrinterCardProps) {
                   </Button>
                 </>
               )}
+              {isPreparing && (
+                <>
+                  <p className="text-sm text-muted-foreground">Preparing print...</p>
+                  <Button
+                    size="sm"
+                    variant="destructive"
+                    onClick={handleStop}
+                    disabled={stopPrint.isPending}
+                  >
+                    <Square className="h-4 w-4 mr-1" />
+                    {stopPrint.isPending ? 'Cancelling...' : 'Cancel'}
+                  </Button>
+                </>
+              )}
               {isPaused && (
                 <>
                   <Button size="sm" variant="outline" onClick={handleResume}>
@@ -160,7 +231,10 @@ export function PrinterCard({ printer }: PrinterCardProps) {
           </div>
         ) : isFinished ? (
           <div className="space-y-2">
-            <p className="text-sm text-muted-foreground">Print completed: {currentFileName}</p>
+            {activeJobButton}
+            {!showActiveJob && (
+              <p className="text-sm text-muted-foreground">Print completed: {currentFileName}</p>
+            )}
             <Button size="sm" onClick={handleMarkReady}>
               <CheckCircle className="h-4 w-4 mr-1" />
               Mark Ready
@@ -168,6 +242,7 @@ export function PrinterCard({ printer }: PrinterCardProps) {
           </div>
         ) : isCooling ? (
           <div className="space-y-3">
+            {activeJobButton}
             <div className="rounded-lg bg-gradient-to-r from-cyan-500/20 to-blue-500/20 border border-cyan-500/30 p-3">
               <div className="flex items-center gap-2 mb-2">
                 <Snowflake className="h-5 w-5 text-cyan-500 animate-pulse" />
@@ -178,7 +253,12 @@ export function PrinterCard({ printer }: PrinterCardProps) {
               </p>
               <div className="flex items-center gap-2 mt-2 text-sm">
                 <Thermometer className="h-4 w-4 text-cyan-500" />
-                <span>Bed: {(printer.bed_temp ?? 0).toFixed(1)}°C</span>
+                <span>
+                  Bed: {(printer.bed_temp ?? 0).toFixed(1)}°C
+                  {printer.cooldown_target_temp != null
+                    ? ` → target ${printer.cooldown_target_temp}°C`
+                    : ''}
+                </span>
               </div>
             </div>
             <Button size="sm" variant="outline" onClick={handleMarkReady}>
@@ -188,6 +268,7 @@ export function PrinterCard({ printer }: PrinterCardProps) {
           </div>
         ) : isEjecting ? (
           <div className="space-y-2">
+            {activeJobButton}
             <div className="rounded-lg bg-purple-500/20 border border-purple-500/30 p-3">
               <div className="flex items-center gap-2">
                 <div className="h-2 w-2 bg-purple-500 rounded-full animate-pulse" />
@@ -199,7 +280,6 @@ export function PrinterCard({ printer }: PrinterCardProps) {
           </div>
         ) : isError ? (
           <div className="space-y-3">
-            {/* Error Alert Box */}
             <div className="rounded-md bg-red-50 dark:bg-red-950/50 border border-red-200 dark:border-red-800 p-3">
               <div className="flex items-start gap-2">
                 <AlertTriangle className="h-5 w-5 text-red-500 shrink-0 mt-0.5" />
@@ -210,7 +290,6 @@ export function PrinterCard({ printer }: PrinterCardProps) {
                   <p className="text-sm text-red-700 dark:text-red-300 mt-1 break-all">
                     {printer.error_message || 'Unknown error - check printer display'}
                   </p>
-                  {/* Show HMS alerts if available (Bambu printers) */}
                   {printer.hms_alerts && printer.hms_alerts.length > 0 && (
                     <div className="mt-2 space-y-1">
                       <p className="text-xs font-medium text-red-600 dark:text-red-400">
@@ -229,7 +308,6 @@ export function PrinterCard({ printer }: PrinterCardProps) {
               </div>
             </div>
 
-            {/* Action Buttons */}
             <div className="flex gap-2">
               <Button
                 size="sm"
@@ -286,7 +364,15 @@ export function PrinterCard({ printer }: PrinterCardProps) {
 
         <EditPrinterDialog printer={printer} open={editOpen} onOpenChange={setEditOpen} />
 
-        {/* Temperature display */}
+        {showActiveJob && (
+          <QueueJobDetailSheet
+            open={jobSheetOpen}
+            onOpenChange={setJobSheetOpen}
+            printer={printer}
+            job={queueJob}
+          />
+        )}
+
         {showTemps && (
           <div className="flex items-center gap-4 mt-3 pt-3 border-t text-xs text-muted-foreground">
             <div className="flex items-center gap-1">

@@ -3,8 +3,12 @@ Print job control functions for starting, stopping, pausing, and resuming prints
 on both Prusa and Bambu printers.
 """
 import os
+import time
 import asyncio
 import threading
+import copy
+
+import aiohttp
 
 from services.state import (
     TOTAL_FILAMENT_FILE,
@@ -14,8 +18,12 @@ from services.state import (
 )
 from services.bambu_handler import (
     send_bambu_print_command,
-    stop_bambu_print, pause_bambu_print, resume_bambu_print
+    stop_bambu_print,
+    pause_bambu_print,
+    resume_bambu_print,
+    clear_bambu_print_assignment,
 )
+from services.library_queue import clear_queue_job_error
 from utils.retry_utils import retry_async
 from utils.logger import log_state_transition
 
@@ -100,24 +108,46 @@ async def verify_print_started(session, printer, filename, headers, max_attempts
     return False
 
 
+def apply_cancelled_print_state(printer):
+    """Reset printer to ready after stop/cancel."""
+    printer.update({
+        "state": "READY",
+        "status": "Ready",
+        "progress": 0,
+        "time_remaining": 0,
+        "file": None,
+        "job_id": None,
+        "order_id": None,
+        "from_queue": False,
+        "count_incremented_for_current_job": False,
+        "manually_set": True,
+        "manual_timeout": time.time() + 3600,
+        "ejection_processed": False,
+        "ejection_in_progress": False,
+        "ejection_start_time": None,
+        "finish_time": None,
+        "cooldown_target_temp": None,
+        "cooldown_order_id": None,
+    })
+
+
 async def stop_print(session, printer):
     """Stop a print on a printer"""
+    state = printer.get('state')
+    is_preparing = state == 'PREPARING'
+
     # Check if this is a Bambu printer
     if printer.get('type') == 'bambu':
-        success = stop_bambu_print(printer)
-        if success:
-            printer.update({
-                "state": "IDLE",
-                "status": "Idle",
-                "progress": 0,
-                "time_remaining": 0,
-                "file": None,
-                "job_id": None,
-                "order_id": None,
-                "from_queue": False,
-                "count_incremented_for_current_job": False
-            })
-        return success
+        clear_bambu_print_assignment(printer['name'])
+        hardware_ok = stop_bambu_print(printer)
+        if is_preparing or hardware_ok:
+            apply_cancelled_print_state(printer)
+            logging.info(
+                f"Cancelled print on Bambu printer {printer['name']} "
+                f"(preparing={is_preparing}, hardware_ok={hardware_ok})"
+            )
+            return True
+        return False
 
     # Prusa API - try both v1 and legacy endpoints
     headers = {"X-Api-Key": decrypt_api_key(printer['api_key'])}
@@ -131,17 +161,6 @@ async def stop_print(session, printer):
                                   json={"command": "cancel"}) as resp:
                 if resp.status == 200:
                     logging.debug(f"Successfully stopped print on {printer['name']} using v1 API")
-                    printer.update({
-                        "state": "IDLE",
-                        "status": "Idle",
-                        "progress": 0,
-                        "time_remaining": 0,
-                        "file": None,
-                        "job_id": None,
-                        "order_id": None,
-                        "from_queue": False,
-                        "count_incremented_for_current_job": False
-                    })
                     return True
                 elif resp.status == 405:
                     logging.debug(f"v1 API returned 405, trying legacy API for {printer['name']}")
@@ -155,20 +174,7 @@ async def stop_print(session, printer):
                                   headers=headers,
                                   json={"command": "cancel"}) as resp:
                 success = resp.status in [200, 204]
-                if success:
-                    logging.debug(f"Successfully stopped print on {printer['name']} using legacy API")
-                    printer.update({
-                        "state": "IDLE",
-                        "status": "Idle",
-                        "progress": 0,
-                        "time_remaining": 0,
-                        "file": None,
-                        "job_id": None,
-                        "order_id": None,
-                        "from_queue": False,
-                        "count_incremented_for_current_job": False
-                    })
-                else:
+                if not success:
                     logging.error(f"Failed to stop print on {printer['name']}: HTTP {resp.status}")
                 return success
         except Exception as e:
@@ -176,10 +182,15 @@ async def stop_print(session, printer):
             return False
 
     try:
-        return await retry_async(_stop, max_retries=2, initial_backoff=1)
+        hardware_ok = await retry_async(_stop, max_retries=2, initial_backoff=1)
     except Exception as e:
         logging.error(f"Error stopping print on {printer['name']} after retries: {str(e)}")
-        return False
+        hardware_ok = False
+
+    if is_preparing or hardware_ok:
+        apply_cancelled_print_state(printer)
+        return True
+    return False
 
 
 async def stop_print_async(session, printer):
@@ -354,9 +365,9 @@ async def send_print_to_printer(session, printer, filepath, filename, order_id=N
     """Send a print directly to a printer (for manual prints)"""
     if printer.get('type') == 'bambu':
         # For Bambu printers, use the MQTT command
-        success = send_bambu_print_command(printer, filename, filepath=filepath)
+        success, _err = send_bambu_print_command(printer, filename, filepath=filepath)
         if success:
-            printer['state'] = 'PRINTING'
+            printer['state'] = 'PREPARING'
             printer['file'] = filename
             printer['from_queue'] = False
             printer['order_id'] = order_id
@@ -397,13 +408,20 @@ async def send_print_to_printer(session, printer, filepath, filename, order_id=N
 
 
 async def check_and_start_print(session, printer, order, headers, batch_id, app):
-    """Check if print can start and initiate print job on printer"""
+    """Check if print can start and initiate print job on printer.
+
+    Returns (printer, order, success, batch_id, error_message).
+    """
     global TOTAL_FILAMENT_CONSUMPTION
 
     # Safety check: Accept both READY and IDLE printers
     if printer.get('state') not in ['READY', 'IDLE']:
-        logging.error(f"SAFETY: Attempted to start print on {printer['name']} in state {printer['state']} - ABORTING")
-        return printer, order, False, batch_id
+        msg = (
+            f"Cannot start print on {printer['name']}: printer state is "
+            f"{printer.get('state')} (expected READY or IDLE)"
+        )
+        logging.error(f"SAFETY: {msg} - ABORTING")
+        return printer, order, False, batch_id, msg
 
     # Reset the count increment flag for this new job
     printer['count_incremented_for_current_job'] = False
@@ -413,44 +431,30 @@ async def check_and_start_print(session, printer, order, headers, batch_id, app)
     if printer.get('type') == 'bambu':
         logging.debug(f"Starting Bambu print job for {printer['name']} with order {order['id']}")
 
-        # Bambu requires .3mf extension
-        filename = order['filename']
-        if not filename.endswith('.3mf'):
-            if filename.endswith('.gcode'):
-                filename = filename.replace('.gcode', '.gcode.3mf')
-            else:
-                filename = filename + '.gcode.3mf'
-
-        # Send print command with file upload
-        success = send_bambu_print_command(printer, filename, filepath=order['filepath'])
+        # Send print command with file upload (prepare_gcode_for_bambu handles extensions)
+        success, error_message = send_bambu_print_command(
+            printer, order['filename'], filepath=order['filepath']
+        )
 
         if success:
             old_state = printer.get('state', 'UNKNOWN')
-            printer['state'] = 'PRINTING'
+            printer['state'] = 'PREPARING'
             printer['file'] = order['filename']
             printer['from_queue'] = True
-            logging.info(f"Printer {printer['name']} started printing: {old_state} -> PRINTING (file: {order['filename']})")
-
-            # Increment count when print starts
-            success_increment, updated_order = increment_order_sent_count(order['id'])
-            if success_increment:
-                logging.info(f"Incremented sent count for Bambu order {order['id']} to {updated_order['sent']}")
-                # Increment filament immediately when print starts
-                with SafeLock(filament_lock):
-                    old_total = TOTAL_FILAMENT_CONSUMPTION
-                    TOTAL_FILAMENT_CONSUMPTION += order['filament_g']
-                    save_data(TOTAL_FILAMENT_FILE, {"total_filament_used_g": TOTAL_FILAMENT_CONSUMPTION})
-                    logging.warning(f"[FILAMENT TRACKING] Print started on Bambu {printer['name']} - added {order['filament_g']}g ({old_total}g -> {TOTAL_FILAMENT_CONSUMPTION}g)")
-                printer['order_id'] = order['id']
-                printer['from_queue'] = True
-                printer['finish_time'] = None
-                printer['count_incremented_for_current_job'] = True
-
+            printer['order_id'] = order['id']
+            printer['filament_used_g'] = order.get('filament_g', 0)
+            printer['finish_time'] = None
+            printer['count_incremented_for_current_job'] = False
             printer['manually_set'] = False
             printer['ejection_processed'] = False
             printer['ejection_in_progress'] = False
+            logging.info(
+                f"Printer {printer['name']} print requested: {old_state} -> PREPARING "
+                f"(file: {order['filename']}, waiting for MQTT RUNNING)"
+            )
+            return printer, order, True, batch_id, None
 
-        return printer, order, success, batch_id
+        return printer, order, False, batch_id, error_message or 'Bambu print command failed'
 
     # Original Prusa code continues below
     file_path = f"/usb/{order['filename']}"
@@ -463,8 +467,9 @@ async def check_and_start_print(session, printer, order, headers, batch_id, app)
         with open(order['filepath'], "rb") as f:
             file_data = f.read()
     except Exception as e:
-        logging.error(f"Error loading file {order['filepath']}: {str(e)}")
-        return printer, order, False, batch_id
+        msg = f"Cannot read print file {order['filepath']}: {e}"
+        logging.error(msg)
+        return printer, order, False, batch_id, msg
 
     try:
         logging.debug(f"Batch {batch_id}: Pre-emptively deleting file {order['filename']} from {printer['name']} to avoid conflicts")
@@ -477,32 +482,7 @@ async def check_and_start_print(session, printer, order, headers, batch_id, app)
         except Exception as e:
             logging.debug(f"Error during pre-emptive delete: {str(e)}")
 
-        success = False
-        logging.debug(f"Batch {batch_id}: File {order['filename']} exists on {printer['name']}, starting print...")
-
-        async def _start_print():
-            try:
-                async with session.post(file_url, headers=headers) as start_resp:
-                    if start_resp.status == 204:
-                        logging.debug(f"Successfully started print on {printer['name']}")
-                        return True
-                    elif start_resp.status == 409:
-                        logging.error(f"Batch {batch_id}: Start print returned 409 conflict")
-                        await asyncio.sleep(3)
-                        async with session.get(f"http://{printer['ip']}/api/v1/status", headers=headers) as status_resp:
-                            if status_resp.status == 200:
-                                status_data = await status_resp.json()
-                                if status_data['printer']['state'] in ['PRINTING', 'BUSY']:
-                                    logging.debug(f"Printer {printer['name']} is in printing state despite 409 - considering SUCCESS")
-                                    return True
-                        logging.error(f"Batch {batch_id}: Start print failed with 409 and printer is not printing")
-                        return False
-                    else:
-                        logging.error(f"Batch {batch_id}: Start print failed: {start_resp.status}")
-                        return False
-            except Exception as e:
-                logging.error(f"Error starting print: {str(e)}")
-                return False
+        upload_error = {'message': 'Prusa upload failed'}
 
         logging.debug(f"Batch {batch_id}: File {order['filename']} not found, uploading...")
 
@@ -538,13 +518,18 @@ async def check_and_start_print(session, printer, order, headers, batch_id, app)
                             if retry_resp.status == 201:
                                 logging.debug(f"Upload successful on retry for {printer['name']}")
                                 return True
-                            logging.error(f"Batch {batch_id}: Upload failed on retry: {retry_resp.status}")
+                            upload_error['message'] = (
+                                f"Upload failed on retry: HTTP {retry_resp.status}"
+                            )
+                            logging.error(f"Batch {batch_id}: {upload_error['message']}")
                             return False
                     else:
-                        logging.error(f"Batch {batch_id}: Upload failed: {upload_resp.status}")
+                        upload_error['message'] = f"Upload failed: HTTP {upload_resp.status}"
+                        logging.error(f"Batch {batch_id}: {upload_error['message']}")
                         return False
             except Exception as e:
-                logging.error(f"Error uploading file: {str(e)}")
+                upload_error['message'] = f"Error uploading file: {e}"
+                logging.error(upload_error['message'])
                 return False
 
         success = await retry_async(_upload_file, max_retries=2, initial_backoff=2)
@@ -559,6 +544,7 @@ async def check_and_start_print(session, printer, order, headers, batch_id, app)
             # Increment count when print starts
             success_increment, updated_order = increment_order_sent_count(order['id'])
             if success_increment:
+                clear_queue_job_error(order['id'])
                 logging.info(f"Incremented sent count for Prusa order {order['id']} to {updated_order['sent']}")
                 # Increment filament immediately
                 with SafeLock(filament_lock):
@@ -593,12 +579,14 @@ async def check_and_start_print(session, printer, order, headers, batch_id, app)
             printer['finish_time'] = None
             logging.debug(f"Batch {batch_id}: Sent {order['filename']} to {printer['name']}, filament: {order['filament_g']}, order_id: {order['id']}")
             logging.debug(f"Successfully configured {printer['name']} to print order {order['id']} in thread {threading.current_thread().name} ({threading.get_ident()})")
+            return printer, order, True, batch_id, None
 
-        return printer, order, success, batch_id
+        return printer, order, False, batch_id, upload_error['message']
 
     except Exception as e:
-        logging.error(f"Batch {batch_id}: Error processing {printer['name']}: {str(e)}")
-        return printer, order, False, batch_id
+        msg = f"Error processing print on {printer['name']}: {e}"
+        logging.error(f"Batch {batch_id}: {msg}")
+        return printer, order, False, batch_id, msg
 
 
 # Bambu printer helper functions
@@ -615,3 +603,171 @@ def resume_bambu_print_wrapper(printer):
 def is_bambu_printer(printer):
     """Check if printer is Bambu type"""
     return printer.get('type') == 'bambu'
+
+
+def _emit_printer_status_after_stop(socketio, app):
+    """Broadcast printer/order state after stop or cancel."""
+    from services.state import (
+        PRINTERS,
+        ORDERS,
+        printers_rwlock,
+        orders_lock,
+        filament_lock,
+        TOTAL_FILAMENT_CONSUMPTION,
+        ReadLock,
+        SafeLock,
+    )
+    from services.printer_manager import (
+        prepare_printer_data_for_broadcast,
+        start_background_distribution,
+    )
+    from utils.socketio_emit import emit_status_update
+
+    with SafeLock(filament_lock):
+        total_filament = TOTAL_FILAMENT_CONSUMPTION / 1000
+    with SafeLock(orders_lock):
+        orders_data = copy.deepcopy(ORDERS)
+    with ReadLock(printers_rwlock):
+        printers_data = prepare_printer_data_for_broadcast(PRINTERS)
+
+    emit_status_update(socketio, app, {
+        'printers': printers_data,
+        'total_filament': total_filament,
+        'orders': orders_data,
+    })
+    start_background_distribution(socketio, app)
+
+
+_BAMBU_ACTIVE_MQTT_STATES = frozenset({
+    'PREPARING', 'PREPARE', 'PRINTING', 'PAUSED', 'RUNNING',
+})
+
+
+def _bambu_mqtt_shows_active_job(printer_name: str) -> bool:
+    """True when Bambu MQTT cache still reports an in-flight job."""
+    from services.bambu_handler import BAMBU_PRINTER_STATES, bambu_states_lock
+
+    with bambu_states_lock:
+        mqtt_state = BAMBU_PRINTER_STATES.get(printer_name, {}).get('state')
+    return mqtt_state in _BAMBU_ACTIVE_MQTT_STATES
+
+
+def is_printer_stoppable(printer: dict) -> bool:
+    """Whether stop/cancel should be accepted for this printer snapshot."""
+    state = printer.get('state')
+    if state in ('PRINTING', 'PAUSED', 'PREPARING'):
+        return True
+    # Stuck assignment after spurious FINISHED or failed prep
+    if printer.get('order_id') and state in ('READY', 'FINISHED', 'ERROR'):
+        return True
+    if printer.get('type') == 'bambu' and _bambu_mqtt_shows_active_job(printer['name']):
+        return True
+    return False
+
+
+def _needs_sync_cancel(printer: dict) -> bool:
+    """Jobs that should be cleared under the printers write lock (no background thread)."""
+    state = printer.get('state')
+    if state == 'PREPARING':
+        return True
+    if printer.get('order_id') and state in ('READY', 'FINISHED', 'ERROR'):
+        return True
+    if printer.get('type') == 'bambu' and _bambu_mqtt_shows_active_job(printer['name']):
+        return state not in ('PRINTING', 'PAUSED')
+    return False
+
+
+def _cancel_print_sync_locked(printer: dict, printer_name: str) -> None:
+    """Reset printer job state. Caller must hold WriteLock(printers_rwlock)."""
+    from services.state import PRINTERS, PRINTERS_FILE, save_data
+
+    if printer.get('type') == 'bambu':
+        clear_bambu_print_assignment(printer_name)
+        stop_bambu_print(printer)
+    apply_cancelled_print_state(printer)
+    save_data(PRINTERS_FILE, PRINTERS)
+    logging.info(f"Synchronously cancelled print on {printer_name}")
+
+
+def cancel_preparing_print_sync(printer_name, socketio, app):
+    """Cancel a stuck PREPARING job immediately (no background thread)."""
+    from services.state import PRINTERS, printers_rwlock, WriteLock
+
+    cancelled = False
+    with WriteLock(printers_rwlock):
+        for printer in PRINTERS:
+            if printer['name'] != printer_name:
+                continue
+            if not is_printer_stoppable(printer):
+                return None
+            _cancel_print_sync_locked(printer, printer_name)
+            cancelled = True
+            break
+    if cancelled:
+        _emit_printer_status_after_stop(socketio, app)
+        return True
+    return False
+
+
+def schedule_stop_print_by_name(printer_name, socketio, app):
+    """Run stop/cancel; returns False if printer not found, None if not stoppable."""
+    from services.state import (
+        PRINTERS,
+        printers_rwlock,
+        WriteLock,
+        save_data,
+        PRINTERS_FILE,
+    )
+    from utils.threading_compat import spawn_os_daemon
+
+    printer_copy = None
+    printer_idx = None
+    sync_cancelled = False
+
+    with WriteLock(printers_rwlock):
+        for i, printer in enumerate(PRINTERS):
+            if printer['name'] != printer_name:
+                continue
+            if not is_printer_stoppable(printer):
+                return None
+            if _needs_sync_cancel(printer):
+                _cancel_print_sync_locked(printer, printer_name)
+                sync_cancelled = True
+                break
+            printer_copy = copy.deepcopy(printer)
+            printer_idx = i
+            break
+
+    if sync_cancelled:
+        _emit_printer_status_after_stop(socketio, app)
+        return True
+
+    if printer_copy is None or printer_idx is None:
+        return False
+
+    def background_stop_task():
+        try:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+
+            async def execute_stop():
+                async with aiohttp.ClientSession(
+                    connector=aiohttp.TCPConnector(limit=10, ttl_dns_cache=300),
+                    timeout=aiohttp.ClientTimeout(total=30),
+                ) as session:
+                    return await stop_print(session, printer_copy)
+
+            success = loop.run_until_complete(execute_stop())
+            loop.close()
+
+            if success:
+                with WriteLock(printers_rwlock):
+                    if 0 <= printer_idx < len(PRINTERS):
+                        apply_cancelled_print_state(PRINTERS[printer_idx])
+                        save_data(PRINTERS_FILE, PRINTERS)
+                _emit_printer_status_after_stop(socketio, app)
+        except Exception as e:
+            logging.error(f"Error stopping print on {printer_name}: {e}")
+
+    spawn_os_daemon(background_stop_task, name=f"stop-print-{printer_name}")
+    return True

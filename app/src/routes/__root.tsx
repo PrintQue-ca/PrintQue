@@ -12,6 +12,7 @@ import {
 import { TanStackRouterDevtoolsPanel } from '@tanstack/react-router-devtools'
 import { useEffect } from 'react'
 import { Toaster } from 'sonner'
+import { ConnectionBanner } from '@/components/layout/ConnectionBanner'
 import { Button } from '@/components/ui/button'
 import { useTheme } from '@/hooks'
 import { initSocket } from '@/lib/socket'
@@ -166,7 +167,10 @@ function Navigation() {
               </Link>
             </div>
           </div>
-          <ThemeToggle />
+          <div className="flex items-center gap-3">
+            <ConnectionBanner />
+            <ThemeToggle />
+          </div>
         </div>
       </div>
     </nav>

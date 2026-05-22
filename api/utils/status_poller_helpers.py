@@ -15,9 +15,27 @@ from services.bambu_handler import BAMBU_PRINTER_STATES, bambu_states_lock
 state_map = {
     'IDLE': 'Ready', 'PRINTING': 'Printing', 'PAUSED': 'Paused', 'ERROR': 'Error',
     'FINISHED': 'Finished', 'READY': 'Ready', 'STOPPED': 'Stopped', 'ATTENTION': 'Attention',
-    'EJECTING': 'Ejecting', 'PREPARE': 'Preparing', 'OFFLINE': 'Offline',
-    'COOLING': 'Cooling'
+    'EJECTING': 'Ejecting', 'PREPARE': 'Preparing', 'PREPARING': 'Preparing',
+    'OFFLINE': 'Offline', 'COOLING': 'Cooling',
 }
+
+# Bed sensors often read slightly above an integer target (e.g. 40.4°C vs 40°C).
+COOLDOWN_TEMP_TOLERANCE_C = 1.0
+
+
+def bed_temp_reached_cooldown_target(bed_temp, target_temp) -> bool:
+    """True when bed is at or below target within tolerance (ready for ejection)."""
+    try:
+        target = float(target_temp)
+        bed = float(bed_temp if bed_temp is not None else 0)
+    except (TypeError, ValueError):
+        return False
+    return bed <= target + COOLDOWN_TEMP_TOLERANCE_C
+
+
+def bed_temp_needs_cooling(bed_temp, target_temp) -> bool:
+    """True when bed must still cool before ejection."""
+    return not bed_temp_reached_cooldown_target(bed_temp, target_temp)
 
 
 def get_minutes_since_finished(printer):
@@ -129,6 +147,8 @@ def prepare_printer_data_for_broadcast(printers):
         printer['finish_time'] = printer.get('finish_time')
         printer['ejection_start_time'] = printer.get('ejection_start_time')
 
+        printer['queue_job_id'] = printer.get('order_id') or printer.get('cooldown_order_id')
+
     return printers_copy
 
 
@@ -165,7 +185,7 @@ def _offline_update():
         "temps": {"nozzle": 0, "bed": 0},
         "progress": 0, "time_remaining": 0, "file": "None", "job_id": None,
         "manually_set": False, "ejection_in_progress": False,
-        "finish_time": None, "count_incremented_for_current_job": False,
+        "finish_time": None,
     }
 
 

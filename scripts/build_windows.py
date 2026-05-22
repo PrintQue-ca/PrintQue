@@ -98,10 +98,6 @@ a = Analysis(
     hiddenimports=[
         'engineio.async_drivers.threading',
         'flask_socketio',
-        'eventlet',
-        'eventlet.hubs.epolls',
-        'eventlet.hubs.kqueue',
-        'eventlet.hubs.selects',
         'dns',
         'dns.resolver',
         'dns.asyncresolver',

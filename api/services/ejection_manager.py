@@ -3,22 +3,24 @@ Ejection management for 3D printers - handles ejection locks, monitoring,
 and GCODE sending for both Prusa and Bambu printers.
 """
 import time
-import threading
 import requests
-from threading import Lock
 
 from services.state import (
     PRINTERS_FILE, PRINTERS, ORDERS, save_data, decrypt_api_key,
     logging, orders_lock, printers_rwlock,
     SafeLock, ReadLock, WriteLock,
     get_ejection_paused, set_printer_ejection_state,
-    get_printer_ejection_state, clear_printer_ejection_state
+    get_printer_ejection_state, clear_printer_ejection_state,
+    resolve_ejection_gcode, DEFAULT_EJECTION_GCODE,
 )
 from services.bambu_handler import (
     send_bambu_ejection_gcode, BAMBU_PRINTER_STATES, bambu_states_lock
 )
 from utils.retry_utils import retry_async
 from utils.logger import debug_log
+from utils.threading_compat import native_threading
+
+Lock = native_threading().Lock
 
 # Ejection lock system to prevent multiple simultaneous ejections
 EJECTION_LOCKS = {}  # Track which printers are currently ejecting
@@ -167,6 +169,27 @@ def handle_finished_state_ejection(printer, printer_name, current_file, current_
         })
         return
 
+    if not printer.get('count_incremented_for_current_job', False):
+        logging.warning(
+            f"FINISHED->READY: {printer_name} skipping ejection — job never reached RUNNING"
+        )
+        updates.update({
+            "state": 'READY',
+            "status": 'Ready',
+            "progress": 0,
+            "time_remaining": 0,
+            "file": None,
+            "order_id": None,
+            "manually_set": True,
+            "manual_timeout": time.time() + 3600,
+            "ejection_processed": False,
+            "ejection_in_progress": False,
+            "ejection_start_time": None,
+            "finish_time": None,
+            "count_incremented_for_current_job": False,
+        })
+        return
+
     # Check if we have an order with ejection enabled
     with SafeLock(orders_lock):
         order = next((o for o in ORDERS if o['id'] == current_order_id), None)
@@ -230,10 +253,20 @@ def handle_finished_state_ejection(printer, printer_name, current_file, current_
         except Exception as e:
             logging.warning(f"Could not get bed temp for {printer_name}: {e}")
 
-        debug_log('cooldown', f"{printer_name}: bed={current_bed_temp}°C vs target={cooldown_temp}°C, needs_cooling={current_bed_temp > cooldown_temp}")
+        from utils.status_poller_helpers import bed_temp_needs_cooling
 
-        if current_bed_temp > cooldown_temp:
-            logging.info(f"FINISHED->COOLING: {printer_name} (bed temp {current_bed_temp}°C > target {cooldown_temp}°C)")
+        needs_cooling = bed_temp_needs_cooling(current_bed_temp, cooldown_temp)
+        debug_log(
+            'cooldown',
+            f"{printer_name}: bed={current_bed_temp}°C vs target={cooldown_temp}°C, "
+            f"needs_cooling={needs_cooling}",
+        )
+
+        if needs_cooling:
+            logging.info(
+                f"FINISHED->COOLING: {printer_name} "
+                f"(bed temp {current_bed_temp}°C above target {cooldown_temp}°C)"
+            )
             updates.update({
                 "state": 'COOLING',
                 "status": f'Cooling ({current_bed_temp}°C → {cooldown_temp}°C)',
@@ -270,10 +303,12 @@ def handle_finished_state_ejection(printer, printer_name, current_file, current_
     try:
         set_printer_ejection_state(printer_name, 'in_progress')
 
-        # Execute ejection based on printer type
-        gcode_content = order.get('end_gcode', '').strip()
+        # Execute ejection based on printer type (resolve preset by ID)
+        gcode_content, _ = resolve_ejection_gcode(order.get('ejection_code_id'))
+        if gcode_content:
+            gcode_content = gcode_content.strip()
         if not gcode_content:
-            gcode_content = "G28 X Y\nM84"  # Default ejection
+            gcode_content = DEFAULT_EJECTION_GCODE
 
         if printer.get('type') == 'bambu':
             # Bambu ejection
@@ -509,7 +544,8 @@ def enhanced_prusa_ejection_monitoring():
                                     except Exception as e:
                                         logging.error(f"Error triggering distribution after ejection: {e}")
 
-                                threading.Timer(2.0, trigger_distribution).start()
+                                from utils.threading_compat import os_timer
+                                os_timer(2.0, trigger_distribution)
 
             else:
                 logging.warning(f"Failed to check ejection status for {printer_info['name']}: HTTP {response.status_code}")
@@ -520,6 +556,8 @@ def enhanced_prusa_ejection_monitoring():
 
 def start_prusa_ejection_monitor():
     """Start background thread for enhanced Prusa ejection monitoring"""
+    from services.printer_utils import spawn_os_thread
+
     def monitor_loop():
         while True:
             try:
@@ -529,8 +567,7 @@ def start_prusa_ejection_monitor():
                 logging.error(f"Error in Prusa ejection monitor: {e}")
                 time.sleep(15)
 
-    monitor_thread = threading.Thread(target=monitor_loop, daemon=True, name="PrusaEjectionMonitor")
-    monitor_thread.start()
+    spawn_os_thread(monitor_loop, daemon=True, name='PrusaEjectionMonitor')
     logging.info("Started enhanced Prusa ejection monitoring thread")
 
 
@@ -589,7 +626,8 @@ def trigger_mass_ejection_for_finished_printers(socketio, app):
         save_data(PRINTERS_FILE, PRINTERS)
 
     # Trigger status update to process the queued ejections
-    threading.Timer(1.0, lambda: start_background_distribution(socketio, app)).start()
+    from utils.threading_compat import os_timer
+    os_timer(1.0, lambda: start_background_distribution(socketio, app))
 
     logging.info(f"=== MASS EJECTION: {ejection_count} printers queued ===")
     return ejection_count

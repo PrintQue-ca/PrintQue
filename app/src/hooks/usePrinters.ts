@@ -1,13 +1,15 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useAdaptiveRefetchInterval } from '@/hooks/useApiConnection'
 import { api } from '@/lib/api'
 import type { ApiResponse, Printer, PrinterFormData } from '@/types'
 
 export function usePrinters() {
+  const refetchInterval = useAdaptiveRefetchInterval()
   return useQuery({
     queryKey: ['printers'],
     queryFn: () => api.get<Printer[]>('/printers'),
     staleTime: 5000,
-    refetchInterval: 10000, // Refetch every 10 seconds as backup to socket updates
+    refetchInterval,
   })
 }
 
@@ -81,9 +83,11 @@ export function useSendPrint() {
 export function useStopPrint() {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: (printerName: string) => api.post<ApiResponse>(`/printers/${printerName}/stop`),
+    mutationFn: (printerName: string) =>
+      api.post<ApiResponse>(`/printers/${encodeURIComponent(printerName)}/stop`),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['printers'] })
+      queryClient.invalidateQueries({ queryKey: ['queue'] })
     },
   })
 }
@@ -122,7 +126,28 @@ export function useClearError() {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: (printerName: string) =>
-      api.post<ApiResponse>(`/clear_error_by_name`, { printer_name: printerName }),
+      api.post<ApiResponse>(`/printers/${encodeURIComponent(printerName)}/clear-error`),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['printers'] })
+    },
+  })
+}
+
+export interface ImportPrintersResult {
+  success: boolean
+  success_count: number
+  failed_count: number
+  failures: Array<{ row: number; error: string }>
+}
+
+export function useImportPrinters() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: async (file: File): Promise<ImportPrintersResult> => {
+      const formData = new FormData()
+      formData.append('file', file)
+      return api.upload<ImportPrintersResult>('/printers/import', formData)
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['printers'] })
     },

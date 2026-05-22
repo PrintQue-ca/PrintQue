@@ -46,12 +46,6 @@ for package in ['socketio', 'engineio', 'python_socketio', 'python_engineio']:
 
 # Other critical packages
 packages_to_collect = [
-    'eventlet',
-    'eventlet.green',
-    'eventlet.green.subprocess',
-    'eventlet.green.ssl',
-    'eventlet.green.threading',
-    'eventlet.hubs',
     'dns',
     'dns.resolver',
     'cryptography',
@@ -76,15 +70,12 @@ for package in packages_to_collect:
 # Add specific imports that are often missed
 hiddenimports += [
     'engineio.async_drivers.threading',
-    'engineio.async_drivers.eventlet',
     'flask.json.provider',
     'flask.json.tag',
     'flask.logging',
     'flask.templating',
     'flask.signals',
     'flask_socketio',
-    'eventlet.wsgi',
-    'eventlet.websocket',
     'werkzeug.routing',
     'werkzeug.serving',
     'jinja2.ext',
@@ -181,7 +172,7 @@ def build_exe():
     print("\nBuilding PrintQue.exe with all dependencies...")
     
     packages = [
-        'flask', 'flask-socketio', 'eventlet', 'python-socketio',
+        'flask', 'flask-socketio', 'python-socketio',
         'python-engineio', 'werkzeug', 'jinja2', 'cryptography',
         'aiohttp', 'requests', 'psutil',
         'simple-websocket', 'dnspython', 'paho-mqtt'

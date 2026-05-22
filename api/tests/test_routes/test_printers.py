@@ -241,11 +241,33 @@ class TestPrinterActions:
 
     def test_stop_printer(self, client, mock_printers):
         """Test stopping a printer."""
-        response = client.post('/api/v1/printers/Test%20Printer%202/stop')
+        with patch('routes.PRINTERS', mock_printers), \
+             patch('services.print_jobs.schedule_stop_print_by_name', return_value=True):
+            response = client.post('/api/v1/printers/Test%20Printer%202/stop')
 
         assert response.status_code == 200
         data = response.get_json()
         assert data['success'] is True
+
+    def test_stop_printer_preparing(self, client, mock_printers):
+        """Test cancelling a printer stuck in PREPARING."""
+        printers = [p.copy() for p in mock_printers]
+        printers[1]['state'] = 'PREPARING'
+        printers[1]['status'] = 'Preparing'
+
+        with patch('services.state.PRINTERS', printers), \
+             patch('services.print_jobs.threading.Thread'):
+            response = client.post('/api/v1/printers/Test%20Printer%202/stop')
+
+        assert response.status_code == 200
+        assert response.get_json()['success'] is True
+
+    def test_stop_printer_when_idle_returns_400(self, client, mock_printers):
+        """Test stop is rejected when printer is not active."""
+        with patch('services.state.PRINTERS', mock_printers):
+            response = client.post('/api/v1/printers/Test%20Printer%201/stop')
+
+        assert response.status_code == 400
 
     def test_pause_printer(self, client, mock_printers):
         """Test pausing a printer."""
@@ -258,3 +280,32 @@ class TestPrinterActions:
         response = client.post('/api/v1/printers/Test%20Printer%202/resume')
 
         assert response.status_code == 200
+
+    def test_clear_printer_error(self, client, mock_printers):
+        """Test clearing error state via REST API."""
+        printers = [p.copy() for p in mock_printers]
+        printers[0]['state'] = 'ERROR'
+        printers[0]['status'] = 'Error'
+        printers[0]['error'] = 'Filament runout'
+
+        with patch('routes.PRINTERS', printers), \
+             patch('routes.printers.PRINTERS', printers), \
+             patch('routes.printers.save_data'), \
+             patch('routes.printers.emit_status_update'), \
+             patch('routes.printers.start_background_distribution'):
+            response = client.post('/api/v1/printers/Test%20Printer%201/clear-error')
+
+        assert response.status_code == 200
+        data = response.get_json()
+        assert data['success'] is True
+        assert printers[0]['state'] == 'READY'
+        assert printers[0]['status'] == 'Ready'
+        assert printers[0]['error'] is None
+
+    def test_clear_printer_error_not_found(self, client, mock_printers):
+        """Test clear-error returns 404 for unknown printer."""
+        with patch('routes.PRINTERS', mock_printers), \
+             patch('routes.printers.PRINTERS', mock_printers):
+            response = client.post('/api/v1/printers/NonExistent/clear-error')
+
+        assert response.status_code == 404

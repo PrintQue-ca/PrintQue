@@ -1,8 +1,9 @@
 import sys
-import threading
 from datetime import datetime, timedelta
 from collections import deque
 import logging
+
+from utils.threading_compat import native_threading
 
 class ConsoleCapture:
     """
@@ -13,7 +14,7 @@ class ConsoleCapture:
         self.max_lines = max_lines
         self.max_age_minutes = max_age_minutes
         self.buffer = deque()
-        self.lock = threading.Lock()
+        self.lock = native_threading().Lock()
         self.original_stdout = sys.stdout
         self.original_stderr = sys.stderr
         self.tee_stdout = None

@@ -11,8 +11,7 @@ ignore = ["E501"]
 
 # Per-file ignores
 [lint.per-file-ignores]
-# app.py requires eventlet.monkey_patch() before all other imports
-# This is a fundamental requirement of eventlet and cannot be restructured
+# app.py configures logging before other imports
 "app.py" = ["E402"]
 # printer_manager.py has a late import to avoid circular dependency
 "services/printer_manager.py" = ["E402"]

@@ -1,7 +1,9 @@
 """
 Order distribution logic - handles assigning orders to available printers.
 """
+import os
 import re
+import time
 import uuid
 import asyncio
 import aiohttp
@@ -9,23 +11,106 @@ import threading
 from datetime import datetime
 
 from services.state import (
-    PRINTERS_FILE, TOTAL_FILAMENT_FILE, PRINTERS, ORDERS, save_data, load_data, decrypt_api_key,
+    PRINTERS_FILE, TOTAL_FILAMENT_FILE, PRINTERS, QUEUE_JOBS, save_data, load_data, decrypt_api_key,
     logging, orders_lock, filament_lock, printers_rwlock,
     SafeLock, ReadLock, WriteLock
 )
 from services.print_jobs import check_and_start_print
+from services.library_queue import record_queue_job_error
+from services.printer_utils import run_async_in_thread, spawn_os_thread
 from services.status_poller import prepare_printer_data_for_broadcast
 from utils.config import Config
 from utils.logger import log_distribution_event, log_job_lifecycle
+from utils.threading_compat import native_threading
+from utils.socketio_emit import emit_status_update
+from services.bambu_handler import (
+    BAMBU_PRINTER_STATES,
+    bambu_states_lock,
+    clear_stale_bambu_error_if_idle,
+)
 
-# Semaphore to prevent concurrent distribution runs
-distribution_semaphore = threading.Semaphore(1)
+# Semaphore to prevent concurrent distribution runs (native — acquired from OS threads)
+distribution_semaphore = native_threading().Semaphore(1)
+
+
+def _printer_available_for_distribution(printer: dict) -> bool:
+    """True if printer can accept a new queue job (not mid-ejection)."""
+    if printer.get('state') not in ('READY', 'IDLE'):
+        return False
+    if printer.get('ejection_in_progress'):
+        return False
+    if printer.get('state') == 'EJECTING':
+        return False
+    if printer.get('type') == 'bambu':
+        name = printer.get('name')
+        with bambu_states_lock:
+            bambu = BAMBU_PRINTER_STATES.get(name, {})
+        if bambu.get('state') == 'EJECTING':
+            return False
+        if bambu.get('waiting_for_m400') or bambu.get('ejection_m400_pending', 0) > 0:
+            return False
+        if bambu.get('state') == 'ERROR':
+            if not clear_stale_bambu_error_if_idle(name):
+                return False
+            with bambu_states_lock:
+                bambu = BAMBU_PRINTER_STATES.get(name, {})
+    return True
+
+
+def has_pending_queue_copies() -> bool:
+    """True if any queue job still needs more copies (same filter as distribute_orders_async)."""
+    with SafeLock(orders_lock):
+        for job in QUEUE_JOBS:
+            if (
+                not job.get('deleted', False)
+                and job.get('status') != 'completed'
+                and job.get('sent', 0) < job.get('quantity', 1)
+            ):
+                return True
+    return False
+
+
+def count_distributable_printers() -> int:
+    """Count non-service printers that can accept a new queue job."""
+    with ReadLock(printers_rwlock):
+        return sum(
+            1
+            for p in PRINTERS
+            if not p.get('service_mode', False) and _printer_available_for_distribution(p)
+        )
+
+
+def pending_distribution_needed() -> bool:
+    """True when pending copies exist and at least one printer can take a job."""
+    return has_pending_queue_copies() and count_distributable_printers() > 0
+
+
+def periodic_pending_distribution_check(socketio, app):
+    """Periodically trigger distribution when partial jobs and ready printers coexist."""
+    interval = Config.DISTRIBUTION_INTERVAL
+    while True:
+        try:
+            time.sleep(interval)
+            if pending_distribution_needed():
+                logging.debug(
+                    "Periodic check: pending queue copies and distributable printers — "
+                    "starting distribution"
+                )
+                start_background_distribution(socketio, app)
+        except Exception as e:
+            logging.error(f"Error in periodic pending distribution check: {e}")
+            time.sleep(interval)
 
 
 def start_background_distribution(socketio, app, batch_size=10):
     """Start order distribution in a background thread"""
-    if not distribution_semaphore.acquire(blocking=True, timeout=0.5):
-        logging.debug(f"Distribution semaphore acquisition failed - already running. Thread: {threading.current_thread().name}, ID: {threading.get_ident()}")
+    # Non-blocking acquire only — avoid blocking the caller when distribution is busy.
+    if not distribution_semaphore.acquire(blocking=False):
+        logging.debug(
+            "Distribution already running (thread=%s id=%s)",
+            threading.current_thread().name,
+            threading.get_ident(),
+        )
         return None
 
     # Check if this is happening at night
@@ -51,22 +136,14 @@ def start_background_distribution(socketio, app, batch_size=10):
             logging.debug(f"Releasing distribution semaphore for {task_id}")
             distribution_semaphore.release()
 
-    thread = threading.Thread(target=run_with_semaphore)
-    thread.daemon = True
-    thread.start()
+    spawn_os_thread(run_with_semaphore, daemon=True, name=f'Distribution-{task_id[:8]}')
     return task_id
 
 
 def run_background_distribution(socketio, app, task_id, batch_size=10):
     """Run the async distribution in a synchronous context"""
     try:
-        try:
-            loop = asyncio.get_event_loop()
-        except RuntimeError:
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-
-        loop.run_until_complete(distribute_orders_async(socketio, app, task_id, batch_size))
+        run_async_in_thread(distribute_orders_async(socketio, app, task_id, batch_size))
     except Exception as e:
         logging.error(f"Error in background distribution: {str(e)}")
 
@@ -101,7 +178,7 @@ async def distribute_orders_async(socketio, app, task_id=None, batch_size=10):
 
     active_orders = []
     with SafeLock(orders_lock):
-        active_orders = [o.copy() for o in ORDERS
+        active_orders = [o.copy() for o in QUEUE_JOBS
                         if not o.get('deleted', False)
                         and o['status'] != 'completed'
                         and o['sent'] < o['quantity']]
@@ -115,7 +192,7 @@ async def distribute_orders_async(socketio, app, task_id=None, batch_size=10):
     with ReadLock(printers_rwlock):
         all_printers = [p.copy() for p in PRINTERS if not p.get('service_mode', False)]
         # Include both READY and IDLE printers for job distribution
-        ready_printers = [p for p in all_printers if p['state'] in ['READY', 'IDLE']]
+        ready_printers = [p for p in all_printers if _printer_available_for_distribution(p)]
 
         printer_states = {}
         for p in all_printers:
@@ -187,6 +264,17 @@ async def distribute_orders_async(socketio, app, task_id=None, batch_size=10):
 
             logging.debug(f"Found {len(eligible_printers)} available printers for order {order['id']}, need to distribute {copies_needed} copies")
 
+            filepath = order.get('filepath') or ''
+            if not filepath or not os.path.exists(filepath):
+                record_queue_job_error(
+                    order['id'],
+                    f"Print file not found: {filepath or '(empty path)'}",
+                    phase='file_missing',
+                    batch_id=batch_id,
+                    task_id=task_id,
+                )
+                continue
+
             for i in range(copies_needed):
                 if i >= len(eligible_printers):
                     break
@@ -225,18 +313,42 @@ async def distribute_orders_async(socketio, app, task_id=None, batch_size=10):
 
             batch_results = await asyncio.gather(*batch_tasks, return_exceptions=True)
 
-            for result in batch_results:
+            for job, result in zip(batch_jobs, batch_results):
                 total_processed += 1
+                order = job['order']
+                printer = job['printer']
 
                 if isinstance(result, Exception):
-                    logging.error(f"Error in print job: {str(result)}")
+                    err_msg = str(result)
+                    logging.error(f"Error in print job for order {order['id']}: {err_msg}")
+                    phase = 'bambu_start' if printer.get('type') == 'bambu' else 'prusa_upload'
+                    record_queue_job_error(
+                        order['id'],
+                        err_msg,
+                        printer_name=printer['name'],
+                        phase=phase,
+                        batch_id=batch_id,
+                        task_id=task_id,
+                    )
                     continue
 
-                if not isinstance(result, tuple) or len(result) < 3:
+                if not isinstance(result, tuple) or len(result) < 4:
                     logging.error(f"Unexpected result format: {result}")
+                    record_queue_job_error(
+                        order['id'],
+                        f"Unexpected print start result: {result!r}",
+                        printer_name=printer['name'],
+                        phase='unknown',
+                        batch_id=batch_id,
+                        task_id=task_id,
+                    )
                     continue
 
-                printer, order, success, _ = result
+                result_printer, result_order, success = result[0], result[1], result[2]
+                error_message = result[4] if len(result) > 4 else None
+                printer = result_printer
+                order = result_order
+
                 if success:
                     total_successful += 1
                     updated_printers[printer['name']] = printer
@@ -252,6 +364,16 @@ async def distribute_orders_async(socketio, app, task_id=None, batch_size=10):
                             'task_id': task_id
                         }
                     )
+                else:
+                    phase = 'bambu_start' if printer.get('type') == 'bambu' else 'prusa_upload'
+                    record_queue_job_error(
+                        order['id'],
+                        error_message or 'Print start failed',
+                        printer_name=printer['name'],
+                        phase=phase,
+                        batch_id=batch_id,
+                        task_id=task_id,
+                    )
 
             if i + MAX_CONCURRENT_JOBS < len(all_jobs):
                 await asyncio.sleep(1)
@@ -264,14 +386,13 @@ async def distribute_orders_async(socketio, app, task_id=None, batch_size=10):
                     if p['name'] in updated_printers:
                         for key, value in updated_printers[p['name']].items():
                             PRINTERS[i][key] = value
-
-                save_data(PRINTERS_FILE, PRINTERS)
+            save_data(PRINTERS_FILE, PRINTERS)
 
     with SafeLock(filament_lock):
         total_filament = TOTAL_FILAMENT_CONSUMPTION / 1000
 
     with SafeLock(orders_lock):
-        orders_data = ORDERS.copy()
+        orders_data = QUEUE_JOBS.copy()
         logging.debug(f"Post-distribution orders: {[(o['id'], o['sent'], o['quantity']) for o in orders_data if o['status'] != 'completed']}")
 
     with ReadLock(printers_rwlock):
@@ -279,8 +400,8 @@ async def distribute_orders_async(socketio, app, task_id=None, batch_size=10):
 
     logging.debug(f"Final summary: {total_processed} jobs processed, {total_successful} successful, {total_processed - total_successful} failed")
 
-    socketio.emit('status_update', {
+    emit_status_update(socketio, app, {
         'printers': printers_copy,
         'total_filament': total_filament,
-        'orders': orders_data
+        'queue': orders_data,
     })

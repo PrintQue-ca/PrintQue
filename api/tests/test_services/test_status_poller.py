@@ -129,6 +129,23 @@ class TestPreparePrinterDataForBroadcast:
         # status is overwritten to match state (raw value)
         assert result[0]['status'] == 'PRINTING'
 
+    @patch('utils.status_poller_helpers.BAMBU_PRINTER_STATES', {})
+    def test_preserves_order_id_and_queue_job_id(self):
+        from services.status_poller import prepare_printer_data_for_broadcast
+        result = prepare_printer_data_for_broadcast(
+            [make_printer(state='PRINTING', order_id=42)]
+        )[0]
+        assert result['order_id'] == 42
+        assert result['queue_job_id'] == 42
+
+    @patch('utils.status_poller_helpers.BAMBU_PRINTER_STATES', {})
+    def test_queue_job_id_from_cooldown_order_id(self):
+        from services.status_poller import prepare_printer_data_for_broadcast
+        result = prepare_printer_data_for_broadcast(
+            [make_printer(state='COOLING', order_id=None, cooldown_order_id=7)]
+        )[0]
+        assert result['queue_job_id'] == 7
+
     # -- print_stage / stage_detail for every state --
 
     @patch('utils.status_poller_helpers.BAMBU_PRINTER_STATES', {})
@@ -359,6 +376,40 @@ class TestUpdateBambuPrinterStates:
         assert printers[0]['state'] == 'READY'
         assert printers[0]['nozzle_temp'] == 30   # temps still updated
 
+    def test_manual_ready_clears_stale_bambu_error(self):
+        printers = [make_printer(name='B1', type='bambu', state='READY', manually_set=True)]
+        bambu = {
+            'B1': {
+                'state': 'ERROR',
+                'gcode_state': 'IDLE',
+                'error': 'Old rejection',
+                'nozzle_temp': 30,
+                'bed_temp': 25,
+            },
+        }
+        with patch('services.status_poller.PRINTERS', printers), \
+             patch('services.status_poller.BAMBU_PRINTER_STATES', bambu), \
+             patch('services.bambu_handler.BAMBU_PRINTER_STATES', bambu), \
+             patch('services.status_poller.save_data'), \
+             patch('services.status_poller.PRINTERS_FILE', '/tmp/test.json'):
+            from services.status_poller import update_bambu_printer_states
+            update_bambu_printer_states()
+        assert printers[0]['state'] == 'READY'
+        assert bambu['B1']['state'] == 'READY'
+        assert bambu['B1']['error'] is None
+
+    def test_manual_ready_syncs_real_bambu_error(self):
+        printers = [make_printer(name='B1', type='bambu', state='READY', manually_set=True)]
+        bambu = {
+            'B1': {
+                'state': 'ERROR',
+                'gcode_state': 'RUNNING',
+                'error': 'Heater fault',
+            },
+        }
+        self._run(printers, bambu)
+        assert printers[0]['state'] == 'ERROR'
+
     def test_manual_ready_allows_printing(self):
         printers = [make_printer(name='B1', type='bambu', state='READY', manually_set=True)]
         self._run(printers, {'B1': {'state': 'PRINTING', 'nozzle_temp': 220, 'bed_temp': 60,
@@ -373,7 +424,14 @@ class TestUpdateBambuPrinterStates:
         mock_save.assert_not_called()
 
     def test_sets_finish_time_on_transition(self):
-        printers = [make_printer(name='B1', type='bambu', state='PRINTING')]
+        printers = [
+            make_printer(
+                name='B1',
+                type='bambu',
+                state='PRINTING',
+                count_incremented_for_current_job=True,
+            )
+        ]
         before = time.time()
         self._run(printers, {'B1': {'state': 'FINISHED', 'nozzle_temp': 200, 'bed_temp': 55}})
         after = time.time()
@@ -397,6 +455,100 @@ class TestUpdateBambuPrinterStates:
         printers = [make_printer(name='B1', type='bambu', state='READY')]
         self._run(printers, {'B1': {'state': 'PRINTING', 'file': 'fallback.3mf'}})
         assert printers[0]['file'] == 'fallback.3mf'
+
+    def test_offline_reconnect_does_not_double_increment_sent(self):
+        """MQTT reconnect after brief OFFLINE must not count the same copy twice."""
+        printers = [make_printer(
+            name='B1',
+            type='bambu',
+            state='OFFLINE',
+            from_queue=True,
+            order_id=39,
+            count_incremented_for_current_job=True,
+        )]
+        bambu = {
+            'B1': {
+                'state': 'PRINTING',
+                'nozzle_temp': 220,
+                'bed_temp': 60,
+                'progress': 40,
+                'time_remaining': 1800,
+                'current_file': 'test.3mf',
+            }
+        }
+        with patch('services.status_poller.PRINTERS', printers), \
+             patch('services.status_poller.BAMBU_PRINTER_STATES', bambu), \
+             patch('services.status_poller.save_data'), \
+             patch('services.status_poller.PRINTERS_FILE', '/tmp/test.json'), \
+             patch('services.status_poller.increment_queue_sent_count') as mock_inc:
+            from services.status_poller import update_bambu_printer_states
+            update_bambu_printer_states()
+            mock_inc.assert_not_called()
+        assert printers[0]['state'] == 'PRINTING'
+        assert printers[0]['count_incremented_for_current_job'] is True
+
+    def test_error_resume_does_not_double_increment_sent(self):
+        """Recovering from ERROR mid-print must not count the same copy again."""
+        printers = [make_printer(
+            name='B1',
+            type='bambu',
+            state='ERROR',
+            from_queue=True,
+            order_id=39,
+            count_incremented_for_current_job=False,
+        )]
+        bambu = {'B1': {'state': 'PRINTING', 'progress': 55, 'time_remaining': 900}}
+        with patch('services.status_poller.PRINTERS', printers), \
+             patch('services.status_poller.BAMBU_PRINTER_STATES', bambu), \
+             patch('services.status_poller.save_data'), \
+             patch('services.status_poller.PRINTERS_FILE', '/tmp/test.json'), \
+             patch('services.status_poller.increment_queue_sent_count') as mock_inc:
+            from services.status_poller import update_bambu_printer_states
+            update_bambu_printer_states()
+            mock_inc.assert_not_called()
+
+    def test_prepare_to_printing_increments_sent(self):
+        """A newly distributed copy increments sent on PREPARING -> PRINTING."""
+        printers = [make_printer(
+            name='B1',
+            type='bambu',
+            state='PREPARING',
+            from_queue=True,
+            order_id=39,
+            count_incremented_for_current_job=False,
+        )]
+        bambu = {'B1': {'state': 'PRINTING', 'progress': 1, 'time_remaining': 3600}}
+        with patch('services.status_poller.PRINTERS', printers), \
+             patch('services.status_poller.BAMBU_PRINTER_STATES', bambu), \
+             patch('services.status_poller.save_data') as mock_save, \
+             patch('services.status_poller.PRINTERS_FILE', '/tmp/test.json'), \
+             patch('services.status_poller.increment_queue_sent_count', return_value=(True, {'sent': 1})) as mock_inc:
+            from services.status_poller import update_bambu_printer_states
+            update_bambu_printer_states()
+            mock_inc.assert_called_once_with(39)
+        assert printers[0]['count_incremented_for_current_job'] is True
+        assert mock_save.call_count >= 1
+
+    def test_offline_update_preserves_count_incremented_flag(self):
+        """Transient OFFLINE must not reset per-copy sent tracking."""
+        from utils.status_poller_helpers import _offline_update
+        from services.status_poller import _apply_printer_updates
+
+        printers = [make_printer(
+            name='B1',
+            type='bambu',
+            state='PRINTING',
+            from_queue=True,
+            order_id=39,
+            count_incremented_for_current_job=True,
+        )]
+        with patch('services.status_poller.PRINTERS', printers), \
+             patch('services.status_poller.WriteLock'):
+            _apply_printer_updates([{'index': 0, 'updates': _offline_update()}])
+
+        assert printers[0]['state'] == 'OFFLINE'
+        assert printers[0]['count_incremented_for_current_job'] is True
+        assert printers[0]['order_id'] == 39
 
 
 # ===========================================================================
@@ -479,7 +631,7 @@ class TestStateTransitions:
              patch('services.status_poller.log_state_transition'), \
              patch('aiohttp.ClientSession',
                    return_value=self._make_session_mock(job_response)), \
-             patch('threading.Timer', return_value=MagicMock()):
+             patch('utils.threading_compat.os_timer', return_value=MagicMock()):
             await get_printer_status_async(
                 mock_socketio, mock_app, batch_index=0, batch_size=10
             )
@@ -490,16 +642,54 @@ class TestStateTransitions:
 
     @pytest.mark.asyncio
     async def test_offline_when_api_returns_none(self):
+        from services.status_poller import PRUSA_LIVE_STATUS_SEEN
+
         printers = [make_printer()]
+        PRUSA_LIVE_STATUS_SEEN.add('Printer1')
         result, _ = await self._run_poll(printers, {'Printer1': None})
         assert result[0]['state'] == 'OFFLINE'
 
     @pytest.mark.asyncio
+    async def test_prusa_preserves_state_before_live_status(self):
+        from services.status_poller import PRUSA_LIVE_STATUS_SEEN, PRUSA_OFFLINE_POLL_FAILURES
+
+        PRUSA_LIVE_STATUS_SEEN.clear()
+        PRUSA_OFFLINE_POLL_FAILURES.clear()
+        printers = [make_printer(state='READY')]
+        result, _ = await self._run_poll(printers, {'Printer1': None})
+        assert result[0]['state'] == 'READY'
+
+    @pytest.mark.asyncio
+    async def test_bambu_preserves_printing_on_offline_api_before_live(self):
+        from services.bambu_handler import BAMBU_LIVE_STATUS_SEEN
+
+        BAMBU_LIVE_STATUS_SEEN.clear()
+        printers = [make_printer(
+            name='B1',
+            type='bambu',
+            state='PRINTING',
+            device_id='sn',
+            serial_number='sn',
+            access_code='enc',
+        )]
+        offline = {
+            'printer': {
+                'state': 'OFFLINE',
+                'temp_nozzle': 0,
+                'temp_bed': 0,
+                'axis_z': 0,
+            }
+        }
+        result, _ = await self._run_poll(printers, {'B1': offline})
+        assert result[0]['state'] == 'PRINTING'
+
+    @pytest.mark.asyncio
     async def test_offline_on_fetch_exception(self):
         """fetch_status raising maps to OFFLINE."""
-        from services.status_poller import get_printer_status_async
+        from services.status_poller import get_printer_status_async, PRUSA_LIVE_STATUS_SEEN
 
         printers = [make_printer()]
+        PRUSA_LIVE_STATUS_SEEN.add('Printer1')
         mock_sio = MagicMock()
 
         async def _boom(session, printer):
@@ -527,7 +717,7 @@ class TestStateTransitions:
              patch('services.status_poller.log_state_transition'), \
              patch('aiohttp.ClientSession',
                    return_value=self._make_session_mock()), \
-             patch('threading.Timer', return_value=MagicMock()):
+             patch('utils.threading_compat.os_timer', return_value=MagicMock()):
             await get_printer_status_async(mock_sio, MagicMock(), batch_index=0, batch_size=10)
 
         assert printers[0]['state'] == 'OFFLINE'
@@ -601,6 +791,65 @@ class TestStateTransitions:
         )
         assert result[0]['state'] == 'COOLING'
 
+    @pytest.mark.asyncio
+    async def test_cooling_triggers_when_slightly_above_integer_target(self):
+        """40.4°C bed with 40°C target should eject (sensor tolerance)."""
+        orders = [{
+            'id': 1,
+            'ejection_enabled': True,
+            'ejection_code_id': None,
+            'status': 'pending',
+            'quantity': 1,
+            'sent': 0,
+        }]
+        printers = [make_printer(
+            name='Printer1', type='bambu', state='COOLING',
+            cooldown_target_temp=40, cooldown_order_id=1,
+            finish_time=time.time() - 60,
+        )]
+        bambu = {'Printer1': {'bed_temp': 40.4, 'nozzle_temp': 45, 'state': 'IDLE'}}
+        with patch(
+            'services.status_poller.send_bambu_ejection_gcode', return_value=True
+        ) as mock_send:
+            result, _ = await self._run_poll(
+                printers,
+                {'Printer1': make_api_response(state='IDLE', temp_bed=40.4)},
+                bambu_states=bambu,
+                orders=orders,
+            )
+        assert result[0]['state'] == 'EJECTING'
+        mock_send.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_cooling_triggers_bambu_ejection_at_target(self):
+        """COOLING transitions to EJECTING and sends G-code when bed <= target."""
+        orders = [{
+            'id': 1,
+            'ejection_enabled': True,
+            'ejection_code_id': None,
+            'status': 'pending',
+            'quantity': 1,
+            'sent': 0,
+        }]
+        printers = [make_printer(
+            name='Printer1', type='bambu', state='COOLING',
+            cooldown_target_temp=40, cooldown_order_id=1,
+            finish_time=time.time() - 60,
+        )]
+        bambu = {'Printer1': {'bed_temp': 25, 'nozzle_temp': 25, 'state': 'IDLE'}}
+        with patch(
+            'services.status_poller.send_bambu_ejection_gcode', return_value=True
+        ) as mock_send:
+            result, _ = await self._run_poll(
+                printers,
+                {'Printer1': make_api_response(state='IDLE', temp_bed=25)},
+                bambu_states=bambu,
+                orders=orders,
+            )
+        assert result[0]['state'] == 'EJECTING'
+        assert result[0]['ejection_in_progress'] is True
+        mock_send.assert_called_once()
+
     # -- stored FINISHED + API IDLE -> READY --
 
     @pytest.mark.asyncio
@@ -636,7 +885,9 @@ class TestStateTransitions:
         assert event == 'status_update'
         assert 'printers' in payload
         assert 'total_filament' in payload
-        assert 'orders' in payload
+        # Poller broadcasts printer/filament only; queue updates use other emit paths.
+        assert 'orders' not in payload
+        assert 'queue' not in payload
 
     # -- normal PRINTING updates --
 
