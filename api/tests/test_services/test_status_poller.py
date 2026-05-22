@@ -885,7 +885,9 @@ class TestStateTransitions:
         assert event == 'status_update'
         assert 'printers' in payload
         assert 'total_filament' in payload
-        assert 'orders' in payload
+        # Poller broadcasts printer/filament only; queue updates use other emit paths.
+        assert 'orders' not in payload
+        assert 'queue' not in payload
 
     # -- normal PRINTING updates --
 
