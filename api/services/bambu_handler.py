@@ -564,6 +564,38 @@ def on_message(client, userdata, msg):
                         BAMBU_PRINTER_STATES[printer_name]['error'] = None
                     elif gcode_state == 'FINISH':
                         pq_state = BAMBU_PRINTER_STATES[printer_name].get('state')
+                        # #region agent log
+                        try:
+                            _dbg_path = os.path.normpath(
+                                os.path.join(os.path.dirname(__file__), '..', '..', 'debug-e398f0.log')
+                            )
+                            with open(_dbg_path, 'a', encoding='utf-8') as _dbg_f:
+                                _dbg_f.write(json.dumps({
+                                    'sessionId': 'e398f0',
+                                    'location': 'bambu_handler.py:finish',
+                                    'message': 'MQTT FINISH gcode_state received',
+                                    'data': {
+                                        'printer': printer_name,
+                                        'pq_state': pq_state,
+                                        'gcode_state': gcode_state,
+                                        'job_reached_running': BAMBU_PRINTER_STATES[printer_name].get(
+                                            'job_reached_running'
+                                        ),
+                                        'progress': BAMBU_PRINTER_STATES[printer_name].get('progress'),
+                                        'mc_percent': print_data.get('mc_percent'),
+                                        'spurious': (
+                                            pq_state in ('PREPARING',)
+                                            and not BAMBU_PRINTER_STATES[printer_name].get(
+                                                'job_reached_running'
+                                            )
+                                        ),
+                                    },
+                                    'hypothesisId': 'H3',
+                                    'timestamp': int(time.time() * 1000),
+                                }) + '\n')
+                        except Exception:
+                            pass
+                        # #endregion
                         if (
                             pq_state in ('PREPARING',)
                             and not BAMBU_PRINTER_STATES[printer_name].get('job_reached_running')
@@ -585,6 +617,28 @@ def on_message(client, userdata, msg):
                     else:
                         if gcode_state in ('RUNNING', 'PREPARE') and current_state != 'EJECTING':
                             BAMBU_PRINTER_STATES[printer_name]['job_reached_running'] = True
+                            # #region agent log
+                            try:
+                                _dbg_path = os.path.normpath(
+                                    os.path.join(os.path.dirname(__file__), '..', '..', 'debug-e398f0.log')
+                                )
+                                with open(_dbg_path, 'a', encoding='utf-8') as _dbg_f:
+                                    _dbg_f.write(json.dumps({
+                                        'sessionId': 'e398f0',
+                                        'location': 'bambu_handler.py:job_reached_running',
+                                        'message': 'MQTT reported RUNNING/PREPARE — job_reached_running set',
+                                        'data': {
+                                            'printer': printer_name,
+                                            'gcode_state': gcode_state,
+                                            'pq_state_before': current_state,
+                                            'progress': print_data.get('mc_percent'),
+                                        },
+                                        'hypothesisId': 'H1',
+                                        'timestamp': int(time.time() * 1000),
+                                    }) + '\n')
+                            except Exception:
+                                pass
+                            # #endregion
                         mapped_state = BAMBU_STATE_MAP.get(gcode_state, 'OFFLINE')
                         BAMBU_PRINTER_STATES[printer_name]['state'] = mapped_state
                         if gcode_state in ('RUNNING', 'PREPARE'):

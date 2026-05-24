@@ -679,9 +679,6 @@ def validate_ejection_file(file):
     return False, "Invalid file format. Please use .gcode, .txt, .gc, .nc, or .bgcode files"
 
 
-DEFAULT_EJECTION_GCODE = "G28 X Y\nM84"
-
-
 def _normalize_gcode_for_compare(gcode):
     """Normalize G-code for deduplication (strip comments/whitespace)."""
     if not gcode:
@@ -864,6 +861,58 @@ def count_orders_using_ejection_code(ejection_code_id):
             if order.get('ejection_code_id') == ejection_code_id:
                 count += 1
     return count
+
+
+def _join_natural(items):
+    """Join strings for human-readable error messages (a, b, and c)."""
+    if not items:
+        return ''
+    if len(items) == 1:
+        return items[0]
+    if len(items) == 2:
+        return f'{items[0]} and {items[1]}'
+    return ', '.join(items[:-1]) + f', and {items[-1]}'
+
+
+def describe_ejection_code_delete_blockers(ejection_code_id):
+    """Return reasons why an ejection preset cannot be deleted (empty if deletable)."""
+    blockers = []
+    library_count = 0
+    queue_count = 0
+    with SafeLock(orders_lock):
+        for item in LIBRARY_ITEMS:
+            if item.get('deleted'):
+                continue
+            if item.get('ejection_code_id') == ejection_code_id:
+                library_count += 1
+        for job in QUEUE_JOBS:
+            if job.get('deleted'):
+                continue
+            if job.get('ejection_code_id') == ejection_code_id:
+                queue_count += 1
+
+    if library_count:
+        noun = 'item' if library_count == 1 else 'items'
+        blockers.append(f'{library_count} library {noun}')
+    if queue_count:
+        noun = 'job' if queue_count == 1 else 'jobs'
+        blockers.append(f'{queue_count} queue {noun}')
+
+    from services.default_settings import load_default_settings
+
+    settings = load_default_settings()
+    if settings.get('default_ejection_code_id') == ejection_code_id:
+        blockers.append('the default ejection setting')
+
+    return blockers
+
+
+def format_ejection_code_delete_error(ejection_code_id):
+    """User-facing message when delete is blocked, or None if allowed."""
+    blockers = describe_ejection_code_delete_blockers(ejection_code_id)
+    if not blockers:
+        return None
+    return f'Cannot delete: this preset is used by {_join_natural(blockers)}.'
 
 
 def get_order_lock(order_id):

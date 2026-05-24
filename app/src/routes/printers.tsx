@@ -1,11 +1,11 @@
 import { createFileRoute } from '@tanstack/react-router'
-import { Download, Eye, EyeOff, Loader2, Plus, Settings, Trash2, Upload } from 'lucide-react'
+import { Download, Eye, EyeOff, Loader2, Plus, Upload } from 'lucide-react'
 import { useState } from 'react'
 import { toast } from 'sonner'
 import { EditPrinterDialog } from '@/components/printers/EditPrinterDialog'
 import { PrinterImportDialog } from '@/components/printers/PrinterImportDialog'
+import { PrintersTable } from '@/components/printers/PrintersTable'
 import { QueueJobDetailSheet } from '@/components/printers/QueueJobDetailSheet'
-import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import {
@@ -26,22 +26,9 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '@/components/ui/table'
 import { useAddPrinter, useDeletePrinter, usePrinters, useQueue } from '@/hooks'
 import { api } from '@/lib/api'
-import {
-  findQueueJobForPrinter,
-  formatQueueJobProgressSummary,
-  getPrinterQueueJobId,
-  getQueueJobDisplayName,
-} from '@/lib/printer-queue-job'
+import { findQueueJobForPrinter } from '@/lib/printer-queue-job'
 import type { Printer, PrinterFormData, PrinterType } from '@/types'
 
 export const Route = createFileRoute('/printers')({ component: PrintersPage })
@@ -127,18 +114,6 @@ function PrintersPage() {
     } finally {
       setExporting(false)
     }
-  }
-
-  const statusColors: Record<string, string> = {
-    IDLE: 'bg-green-500',
-    PRINTING: 'bg-blue-500',
-    PREPARING: 'bg-blue-400',
-    FINISHED: 'bg-yellow-500',
-    ERROR: 'bg-red-500',
-    EJECTING: 'bg-purple-500',
-    COOLING: 'bg-cyan-500',
-    PAUSED: 'bg-orange-500',
-    OFFLINE: 'bg-gray-500',
   }
 
   const sheetJob = jobSheetPrinter ? findQueueJobForPrinter(jobSheetPrinter, queueJobs) : null
@@ -305,86 +280,15 @@ function PrintersPage() {
               <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
             </div>
           ) : printers && printers.length > 0 ? (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Name</TableHead>
-                  <TableHead>IP Address</TableHead>
-                  <TableHead>Type</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead>Job</TableHead>
-                  <TableHead>Progress</TableHead>
-                  <TableHead className="text-right">Actions</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {printers.map((printer) => {
-                  const jobId = getPrinterQueueJobId(printer)
-                  const job = jobId != null ? findQueueJobForPrinter(printer, queueJobs) : null
-                  return (
-                    <TableRow key={printer.name}>
-                      <TableCell className="font-medium">{printer.name}</TableCell>
-                      <TableCell>{printer.ip}</TableCell>
-                      <TableCell>
-                        <Badge variant="outline" className="capitalize">
-                          {printer.type}
-                        </Badge>
-                      </TableCell>
-                      <TableCell>
-                        <Badge className={statusColors[printer.status] || 'bg-gray-500'}>
-                          {printer.status}
-                        </Badge>
-                      </TableCell>
-                      <TableCell>
-                        {jobId != null ? (
-                          <button
-                            type="button"
-                            className="text-left text-sm hover:underline"
-                            onClick={() => setJobSheetPrinter(printer)}
-                          >
-                            <span className="font-medium block truncate max-w-[180px]">
-                              {job ? getQueueJobDisplayName(job) : 'Unknown job'}
-                            </span>
-                            {job && (
-                              <span className="text-xs text-muted-foreground">
-                                {formatQueueJobProgressSummary(job)}
-                              </span>
-                            )}
-                          </button>
-                        ) : (
-                          '-'
-                        )}
-                      </TableCell>
-                      <TableCell>
-                        {printer.status === 'PRINTING' && printer.progress !== undefined
-                          ? `${printer.progress}%`
-                          : '-'}
-                      </TableCell>
-                      <TableCell className="text-right">
-                        <div className="flex justify-end gap-2">
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => setEditingPrinter(printer)}
-                            aria-label="Edit printer"
-                          >
-                            <Settings className="h-4 w-4" />
-                          </Button>
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            className="text-destructive hover:text-destructive"
-                            onClick={() => handleDelete(printer.name)}
-                          >
-                            <Trash2 className="h-4 w-4" />
-                          </Button>
-                        </div>
-                      </TableCell>
-                    </TableRow>
-                  )
-                })}
-              </TableBody>
-            </Table>
+            <div className="rounded-md border">
+              <PrintersTable
+                printers={printers}
+                queueJobs={queueJobs}
+                onEdit={setEditingPrinter}
+                onDelete={handleDelete}
+                onJobClick={setJobSheetPrinter}
+              />
+            </div>
           ) : (
             <div className="text-center py-8 text-muted-foreground">
               <p>No printers connected yet.</p>
@@ -406,6 +310,7 @@ function PrintersPage() {
           onOpenChange={(open) => !open && setJobSheetPrinter(null)}
           printer={jobSheetPrinter}
           job={sheetJob}
+          printers={printers ?? []}
         />
       )}
     </div>

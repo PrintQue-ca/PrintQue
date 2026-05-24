@@ -1,7 +1,13 @@
 import { AlertTriangle, ChevronLeft, ChevronRight, Pause, Play, RotateCcw } from 'lucide-react'
 import { useCallback, useMemo, useState } from 'react'
 import { useGcodePlayback } from '@/hooks/useGcodePlayback'
-import { BED_PRESETS, DEFAULT_PRESET_ID, getPresetById } from '@/lib/bed-presets'
+import {
+  BED_PRESETS,
+  DEFAULT_PRESET_ID,
+  getPresetById,
+  getViewFrame,
+  type ViewFrame,
+} from '@/lib/bed-presets'
 import type { BedSize, Point3, SimulationResult } from '@/lib/gcode-simulator'
 import { simulateGcode } from '@/lib/gcode-simulator'
 import {
@@ -34,17 +40,22 @@ const MARKER_COLORS: Record<string, string> = {
 
 const SPEED_OPTIONS = [0.5, 1, 2, 4]
 
-function createProjectors(bedSize: BedSize, svgW: number, svgH: number, projection: 'xy' | 'xz') {
-  const scaleX = (svgW - SVG_PADDING * 2) / bedSize.x
-  const scaleAxis2 =
-    projection === 'xy'
-      ? (svgH - SVG_PADDING * 2) / bedSize.y
-      : (svgH - SVG_PADDING * 2) / bedSize.z
+function createProjectors(
+  viewFrame: ViewFrame,
+  svgW: number,
+  svgH: number,
+  projection: 'xy' | 'xz'
+) {
+  const spanX = viewFrame.maxX - viewFrame.minX
+  const spanAxis2 =
+    projection === 'xy' ? viewFrame.maxY - viewFrame.minY : viewFrame.maxZ - viewFrame.minZ
+  const scaleX = (svgW - SVG_PADDING * 2) / spanX
+  const scaleAxis2 = (svgH - SVG_PADDING * 2) / spanAxis2
 
-  const tx = (p: Point3) => SVG_PADDING + p.x * scaleX
+  const tx = (p: Point3) => SVG_PADDING + (p.x - viewFrame.minX) * scaleX
   const ty = (p: Point3) => {
     const val = projection === 'xy' ? p.y : p.z
-    const maxVal = projection === 'xy' ? bedSize.y : bedSize.z
+    const maxVal = projection === 'xy' ? viewFrame.maxY : viewFrame.maxZ
     return SVG_PADDING + (maxVal - val) * scaleAxis2
   }
 
@@ -64,14 +75,14 @@ interface ColoredSegmentLine {
 
 function buildColoredSegmentLines(
   segments: SimulationResult['segments'],
-  bedSize: BedSize,
+  viewFrame: ViewFrame,
   svgW: number,
   svgH: number,
   projection: 'xy' | 'xz',
   speedRange: SpeedRange,
   options?: { upToIndex?: number; progressOnLast?: number }
 ): ColoredSegmentLine[] {
-  const { segmentPath } = createProjectors(bedSize, svgW, svgH, projection)
+  const { segmentPath } = createProjectors(viewFrame, svgW, svgH, projection)
   const limit =
     options?.upToIndex != null
       ? Math.min(options.upToIndex, segments.length - 1)
@@ -108,21 +119,21 @@ function buildColoredSegmentLines(
 
 function toSvgCoords(
   p: Point3,
-  bedSize: BedSize,
+  viewFrame: ViewFrame,
   svgW: number,
   svgH: number,
   projection: 'xy' | 'xz'
 ): { cx: number; cy: number } {
-  const scaleX = (svgW - SVG_PADDING * 2) / bedSize.x
-  const scaleAxis2 =
-    projection === 'xy'
-      ? (svgH - SVG_PADDING * 2) / bedSize.y
-      : (svgH - SVG_PADDING * 2) / bedSize.z
+  const spanX = viewFrame.maxX - viewFrame.minX
+  const spanAxis2 =
+    projection === 'xy' ? viewFrame.maxY - viewFrame.minY : viewFrame.maxZ - viewFrame.minZ
+  const scaleX = (svgW - SVG_PADDING * 2) / spanX
+  const scaleAxis2 = (svgH - SVG_PADDING * 2) / spanAxis2
   const val = projection === 'xy' ? p.y : p.z
-  const maxVal = projection === 'xy' ? bedSize.y : bedSize.z
+  const maxVal = projection === 'xy' ? viewFrame.maxY : viewFrame.maxZ
 
   return {
-    cx: SVG_PADDING + p.x * scaleX,
+    cx: SVG_PADDING + (p.x - viewFrame.minX) * scaleX,
     cy: SVG_PADDING + (maxVal - val) * scaleAxis2,
   }
 }
@@ -130,6 +141,7 @@ function toSvgCoords(
 function SvgPanel({
   simulation,
   bedSize,
+  viewFrame,
   projection,
   hoveredLine,
   onLineHover,
@@ -140,6 +152,7 @@ function SvgPanel({
 }: {
   simulation: SimulationResult
   bedSize: BedSize
+  viewFrame: ViewFrame
   projection: 'xy' | 'xz'
   hoveredLine: number | null
   onLineHover: (line: number | null) => void
@@ -157,15 +170,15 @@ function SvgPanel({
 
   const coloredSegments = useMemo(
     () =>
-      buildColoredSegmentLines(simulation.segments, bedSize, svgW, svgH, projection, speedRange),
-    [simulation.segments, bedSize, svgH, projection, speedRange]
+      buildColoredSegmentLines(simulation.segments, viewFrame, svgW, svgH, projection, speedRange),
+    [simulation.segments, viewFrame, svgH, projection, speedRange]
   )
 
   const animatedSegments = useMemo(() => {
     if (!animating || activeSegmentIndex < 0) return null
     return buildColoredSegmentLines(
       simulation.segments,
-      bedSize,
+      viewFrame,
       svgW,
       svgH,
       projection,
@@ -177,7 +190,7 @@ function SvgPanel({
     activeSegmentIndex,
     activeProgress,
     simulation.segments,
-    bedSize,
+    viewFrame,
     svgH,
     projection,
     speedRange,
@@ -186,25 +199,25 @@ function SvgPanel({
   const markerCoords = useMemo(
     () =>
       simulation.markers.map((m) => ({
-        ...toSvgCoords(m.position, bedSize, svgW, svgH, projection),
+        ...toSvgCoords(m.position, viewFrame, svgW, svgH, projection),
         marker: m,
       })),
-    [simulation.markers, bedSize, svgH, projection]
+    [simulation.markers, viewFrame, svgH, projection]
   )
 
-  const headCoords = toSvgCoords(toolheadPos, bedSize, svgW, svgH, projection)
+  const headCoords = toSvgCoords(toolheadPos, viewFrame, svgW, svgH, projection)
 
   const highlightedSegs = useMemo(() => {
     if (hoveredLine == null) return ''
     return simulation.segments
       .filter((s) => s.lineNumber === hoveredLine)
       .map((s) => {
-        const f = toSvgCoords(s.from, bedSize, svgW, svgH, projection)
-        const t = toSvgCoords(s.to, bedSize, svgW, svgH, projection)
+        const f = toSvgCoords(s.from, viewFrame, svgW, svgH, projection)
+        const t = toSvgCoords(s.to, viewFrame, svgW, svgH, projection)
         return `M${f.cx.toFixed(1)},${f.cy.toFixed(1)} L${t.cx.toFixed(1)},${t.cy.toFixed(1)} `
       })
       .join('')
-  }, [hoveredLine, simulation.segments, bedSize, svgH, projection])
+  }, [hoveredLine, simulation.segments, viewFrame, svgH, projection])
 
   return (
     <div className="flex flex-col">
@@ -234,7 +247,7 @@ function SvgPanel({
           textAnchor="middle"
           className="fill-muted-foreground text-[9px]"
         >
-          X ({bedSize.x}mm)
+          X ({viewFrame.minX === 0 ? `${bedSize.x}mm` : `${viewFrame.minX}..${viewFrame.maxX}`})
         </text>
         <text
           x={5}
@@ -243,7 +256,15 @@ function SvgPanel({
           className="fill-muted-foreground text-[9px]"
           transform={`rotate(-90 5 ${svgH / 2})`}
         >
-          {axisLabel2} ({projection === 'xy' ? bedSize.y : bedSize.z}mm)
+          {axisLabel2} (
+          {projection === 'xy'
+            ? viewFrame.minY === 0
+              ? `${bedSize.y}mm`
+              : `${viewFrame.minY}..${viewFrame.maxY}`
+            : viewFrame.minZ === 0
+              ? `${bedSize.z}mm`
+              : `${viewFrame.minZ}..${viewFrame.maxZ}`}
+          )
         </text>
 
         {/* Full path colored by feedrate (ghost when animating) */}
@@ -287,8 +308,8 @@ function SvgPanel({
 
         {/* Hit areas for hover */}
         {simulation.segments.map((seg, idx) => {
-          const f = toSvgCoords(seg.from, bedSize, svgW, svgH, projection)
-          const t = toSvgCoords(seg.to, bedSize, svgW, svgH, projection)
+          const f = toSvgCoords(seg.from, viewFrame, svgW, svgH, projection)
+          const t = toSvgCoords(seg.to, viewFrame, svgW, svgH, projection)
           const feedrate = getSegmentFeedrate(seg)
           return (
             <line
@@ -333,7 +354,13 @@ function SvgPanel({
         {/* Start / end (distinct from speed gradient) */}
         {simulation.segments.length > 0 &&
           (() => {
-            const start = toSvgCoords(simulation.segments[0].from, bedSize, svgW, svgH, projection)
+            const start = toSvgCoords(
+              simulation.segments[0].from,
+              viewFrame,
+              svgW,
+              svgH,
+              projection
+            )
             return (
               <circle
                 cx={start.cx}
@@ -350,7 +377,7 @@ function SvgPanel({
           (() => {
             const end = toSvgCoords(
               simulation.segments[simulation.segments.length - 1].to,
-              bedSize,
+              viewFrame,
               svgW,
               svgH,
               projection
@@ -397,10 +424,25 @@ export function GcodePathPreview({
     return preset?.size ?? { x: 256, y: 256, z: 256 }
   }, [presetId])
 
+  const viewFrame = useMemo(() => {
+    const preset = getPresetById(presetId)
+    return preset
+      ? getViewFrame(preset)
+      : getViewFrame({ id: 'fallback', label: '', size: bedSize })
+  }, [presetId, bedSize])
+
+  const simulationOptions = useMemo(() => {
+    const preset = getPresetById(presetId)
+    return {
+      appendM400,
+      homePosition: preset?.simulationStart,
+    }
+  }, [presetId, appendM400])
+
   const simulation = useMemo(() => {
     if (!gcode.trim()) return null
-    return simulateGcode(gcode, { appendM400 })
-  }, [gcode, appendM400])
+    return simulateGcode(gcode, simulationOptions)
+  }, [gcode, simulationOptions])
 
   const playback = useGcodePlayback(simulation?.steps ?? [])
 
@@ -540,6 +582,7 @@ export function GcodePathPreview({
         <SvgPanel
           simulation={simulation}
           bedSize={bedSize}
+          viewFrame={viewFrame}
           projection="xy"
           hoveredLine={hoveredLine}
           onLineHover={handleLineHover}
@@ -551,6 +594,7 @@ export function GcodePathPreview({
         <SvgPanel
           simulation={simulation}
           bedSize={bedSize}
+          viewFrame={viewFrame}
           projection="xz"
           hoveredLine={hoveredLine}
           onLineHover={handleLineHover}

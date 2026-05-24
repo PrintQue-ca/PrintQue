@@ -31,6 +31,36 @@ export function getQueueJobDisplayName(job: QueueJob): string {
   return name || job.filename
 }
 
+export interface QueueJobActivity {
+  total: number
+  sent: number
+  inProgress: number
+  completed: number
+  pending: number
+}
+
+export function countPrintersInProgressForJob(jobId: number, printers: Printer[]): number {
+  return printers.filter((printer) => {
+    const id = getPrinterQueueJobId(printer)
+    return id === jobId && isActiveJobPrinterStatus(printer.status)
+  }).length
+}
+
+export function getQueueJobActivity(job: QueueJob, printers: Printer[]): QueueJobActivity {
+  const total = job.quantity ?? 0
+  const sent = job.sent ?? 0
+  const inProgress = countPrintersInProgressForJob(job.id, printers)
+  const completed = Math.max(0, sent - inProgress)
+  const pending = Math.max(0, total - sent)
+  return { total, sent, inProgress, completed, pending }
+}
+
+export function formatQueueJobActivitySummary(activity: QueueJobActivity): string {
+  const { completed, inProgress, pending, total } = activity
+  return `${completed} completed · ${inProgress} in progress · ${pending} pending (${total} total)`
+}
+
+/** @deprecated Prefer getQueueJobActivity for multi-printer farms */
 export function getQueueJobProgress(job: QueueJob) {
   const total = job.quantity
   const started = job.sent
@@ -38,9 +68,8 @@ export function getQueueJobProgress(job: QueueJob) {
   return { total, started, remaining }
 }
 
-export function formatQueueJobProgressSummary(job: QueueJob): string {
-  const { started, total, remaining } = getQueueJobProgress(job)
-  return `${started} / ${total} started · ${remaining} remaining`
+export function formatQueueJobProgressSummary(job: QueueJob, printers: Printer[] = []): string {
+  return formatQueueJobActivitySummary(getQueueJobActivity(job, printers))
 }
 
 export function getCurrentCopyLabel(job: QueueJob, printerStatus: PrinterStatus): string | null {

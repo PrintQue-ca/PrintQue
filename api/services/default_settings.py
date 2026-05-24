@@ -6,6 +6,19 @@ from utils.paths import LazyPath, get_data_dir, get_default_settings_file
 
 DEFAULT_SETTINGS_FILE = LazyPath(get_default_settings_file)
 
+DEFAULT_EJECTION_GCODE = """\
+; A1 Mini — G90 absolute machine coords (center ≈ X180 Y180). Sent verbatim via MQTT.
+; Bed cooldown via PrintQue job settings. M211 allows moves past soft limits (e.g. X60, Y-4).
+; Park left with X60 (X50 may leave printable area). Tune back Y if sweep is too short.
+G90
+M211 X0 Y0 Z0
+G1 X60 Z1 F6000
+G1 Y300 F6000
+G1 Y-4 F300
+M400
+M211 S1
+"""
+
 
 def _default_settings_dict():
     return {

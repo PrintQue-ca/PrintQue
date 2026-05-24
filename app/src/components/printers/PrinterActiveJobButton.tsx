@@ -10,6 +10,7 @@ import type { Printer, QueueJob } from '@/types'
 interface PrinterActiveJobButtonProps {
   printer: Printer
   job: QueueJob | null
+  printers?: Printer[]
   onClick: () => void
   className?: string
 }
@@ -17,6 +18,7 @@ interface PrinterActiveJobButtonProps {
 export function PrinterActiveJobButton({
   printer,
   job,
+  printers = [],
   onClick,
   className,
 }: PrinterActiveJobButtonProps) {
@@ -29,7 +31,7 @@ export function PrinterActiveJobButton({
   }
 
   const title = job ? getQueueJobDisplayName(job) : 'Unknown queue job'
-  const subtitle = job ? formatQueueJobProgressSummary(job) : currentFileName
+  const subtitle = job ? formatQueueJobProgressSummary(job, printers) : currentFileName
 
   return (
     <button

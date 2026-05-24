@@ -11,8 +11,9 @@ from services.state import (
     SafeLock, ReadLock, WriteLock,
     get_ejection_paused, set_printer_ejection_state,
     get_printer_ejection_state, clear_printer_ejection_state,
-    resolve_ejection_gcode, DEFAULT_EJECTION_GCODE,
+    resolve_ejection_gcode,
 )
+from services.default_settings import DEFAULT_EJECTION_GCODE
 from services.bambu_handler import (
     send_bambu_ejection_gcode, BAMBU_PRINTER_STATES, bambu_states_lock
 )

@@ -76,6 +76,12 @@ describe('simulateGcode', () => {
     expect(result.steps[0].durationMs).toBe(3000)
   })
 
+  it('handles G21 millimeter units without unsupported warning', () => {
+    const result = simulateGcode('G21\nG0 X10')
+    expect(result.warnings).toHaveLength(0)
+    expect(result.segments[0].to.x).toBe(10)
+  })
+
   it('handles M400 sync marker', () => {
     const result = simulateGcode('G0 X10\nM400')
     expect(result.markers).toHaveLength(1)

@@ -20,31 +20,13 @@ import {
   getCoreRowModel,
   useReactTable,
 } from '@tanstack/react-table'
-import {
-  AlertCircle,
-  GripVertical,
-  Minus,
-  Plus,
-  Thermometer,
-  Trash2,
-  Zap,
-  ZapOff,
-} from 'lucide-react'
-import { useEffect, useRef, useState } from 'react'
+import { GripVertical, Minus, Plus, Thermometer, Trash2, Zap, ZapOff } from 'lucide-react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Checkbox } from '@/components/ui/checkbox'
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from '@/components/ui/dialog'
-import { GcodeEditor } from '@/components/ui/gcode-editor'
 import { Input } from '@/components/ui/input'
+import { ResizableTable, ResizableTableHeadCell } from '@/components/ui/resizable-table'
 import {
   Select,
   SelectContent,
@@ -52,28 +34,19 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
+import { TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
+import { TruncatedText } from '@/components/ui/truncated-text'
 import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '@/components/ui/table'
-import {
-  useBulkDeleteOrders,
   useDebouncedQueueQuantity,
   useDeleteOrder,
   useEjectionCodes,
   useReorderOrder,
   useUpdateOrder,
-  useUpdateOrderEjection,
+  useUpdateQueueEjection,
 } from '@/hooks'
-import type { Order } from '@/types'
-
-interface OrdersTableProps {
-  orders: Order[]
-}
+import { getQueueJobActivity } from '@/lib/printer-queue-job'
+import { resizableTableDefaultColumn, useFitTableColumns } from '@/lib/resizable-table'
+import type { Order, Printer } from '@/types'
 
 const columnHelper = createColumnHelper<Order>()
 
@@ -168,20 +141,21 @@ function CooldownTempInput({
 function SortableRow({
   row,
   children,
+  dragDisabled,
 }: {
   row: { id: string; original: Order }
   children: React.ReactNode
+  dragDisabled?: boolean
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: row.original.id,
+    disabled: dragDisabled,
   })
 
   const style = {
     transform: CSS.Transform.toString(transform),
-    // Smooth transitions while dragging for other items to shift
     transition,
     opacity: isDragging ? 0.5 : 1,
-    // Lift dragged item above others
     zIndex: isDragging ? 1 : 0,
     position: 'relative' as const,
   }
@@ -189,115 +163,123 @@ function SortableRow({
   return (
     <TableRow ref={setNodeRef} style={style} className={isDragging ? 'bg-muted' : ''}>
       <TableCell className="w-10">
-        <div
-          {...attributes}
-          {...listeners}
-          className="cursor-grab active:cursor-grabbing p-1 hover:bg-muted rounded"
-        >
-          <GripVertical className="h-4 w-4 text-muted-foreground" />
-        </div>
+        {!dragDisabled && (
+          <div
+            {...attributes}
+            {...listeners}
+            className="cursor-grab active:cursor-grabbing p-1 hover:bg-muted rounded"
+          >
+            <GripVertical className="h-4 w-4 text-muted-foreground" />
+          </div>
+        )}
       </TableCell>
       {children}
     </TableRow>
   )
 }
 
-export function OrdersTable({ orders }: OrdersTableProps) {
+interface OrdersTableProps {
+  orders: Order[]
+  /** Canonical API queue order for drag-reorder mutations */
+  allOrders?: Order[]
+  /** Newest-first list for # column (full filtered set when paginated) */
+  displayOrders?: Order[]
+  printers?: Printer[]
+  previewMode?: boolean
+  emptyMessage?: string
+}
+
+export function OrdersTable({
+  orders: displayedOrders,
+  allOrders,
+  displayOrders,
+  printers = [],
+  previewMode = false,
+  emptyMessage = 'No items in queue.',
+}: OrdersTableProps) {
   const deleteOrder = useDeleteOrder()
-  const bulkDeleteOrders = useBulkDeleteOrders()
   const reorderOrder = useReorderOrder()
   const { bumpQuantity, setQuantity, flushQuantity } = useDebouncedQueueQuantity()
   const updateOrder = useUpdateOrder()
-  const updateOrderEjection = useUpdateOrderEjection()
+  const updateQueueEjection = useUpdateQueueEjection()
   const { data: ejectionCodes } = useEjectionCodes()
   const [editingQuantity, setEditingQuantity] = useState<number | null>(null)
   const [quantityValue, setQuantityValue] = useState<number>(0)
   const [editingNameId, setEditingNameId] = useState<number | null>(null)
   const [nameValue, setNameValue] = useState<string>('')
-  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set())
-  const [customGcodeOrder, setCustomGcodeOrder] = useState<Order | null>(null)
-  const [customGcodeValue, setCustomGcodeValue] = useState('')
-  const [errorDetailOrder, setErrorDetailOrder] = useState<Order | null>(null)
+  const containerRef = useRef<HTMLDivElement>(null)
 
-  // Local state for immediate UI updates during drag
-  const [localOrders, setLocalOrders] = useState(orders)
+  const canonicalOrders = allOrders ?? displayedOrders
+  const rankOrders = displayOrders ?? displayedOrders
 
-  // Sync with prop changes (from server/other sources)
+  // Local state for immediate UI updates during drag (canonical queue order)
+  const [localOrders, setLocalOrders] = useState(canonicalOrders)
+
   useEffect(() => {
-    setLocalOrders(orders)
-  }, [orders])
+    setLocalOrders(canonicalOrders)
+  }, [canonicalOrders])
 
-  const resolveOrderGcode = (order: Order): string => {
-    if (!order.ejection_code_id) return ''
-    return ejectionCodes?.find((code) => code.id === order.ejection_code_id)?.gcode || ''
-  }
+  const queuePosition = useCallback(
+    (orderId: number) => rankOrders.findIndex((o) => o.id === orderId) + 1,
+    [rankOrders]
+  )
 
-  const getEjectionDisplayName = (order: Order): string => {
-    if (!order.ejection_enabled) return 'Off'
-    if (order.ejection_code_id) {
-      const preset = ejectionCodes?.find((code) => code.id === order.ejection_code_id)
-      if (preset) return preset.name
-    }
-    return order.ejection_code_name || 'Custom'
-  }
+  const handleEjectionChange = useCallback(
+    async (orderId: number, codeId: string, currentOrder: Order) => {
+      try {
+        let ejectionEnabled = true
+        let ejectionCodeId: string | undefined
+        let ejectionCodeName: string | undefined
+        let endGcode: string | undefined
 
-  const handleEjectionChange = async (orderId: number, codeId: string, currentOrder: Order) => {
-    if (codeId === 'custom') {
-      setCustomGcodeOrder(currentOrder)
-      setCustomGcodeValue(resolveOrderGcode(currentOrder))
-      return
-    }
+        if (codeId === 'none') {
+          ejectionEnabled = false
+          ejectionCodeName = undefined
+          endGcode = ''
+        } else if (codeId === 'custom') {
+          // Keep current gcode, just mark as custom
+          ejectionCodeName = 'Custom'
+          endGcode = currentOrder.end_gcode
+        } else {
+          // Find the selected ejection code
+          const selectedCode = ejectionCodes?.find((code) => code.id === codeId)
+          if (selectedCode) {
+            ejectionCodeId = selectedCode.id
+            ejectionCodeName = selectedCode.name
+            endGcode = selectedCode.gcode
+          }
+        }
 
-    try {
-      if (codeId === 'none') {
-        await updateOrderEjection.mutateAsync({
+        await updateQueueEjection.mutateAsync({
           id: orderId,
-          ejectionEnabled: false,
-          ejectionCodeId: null,
+          ejectionEnabled,
+          ejectionCodeId,
+          endGcode,
         })
-        toast.success('Ejection disabled')
-        return
+
+        toast.success(
+          ejectionEnabled ? `Ejection set to "${ejectionCodeName}"` : 'Ejection disabled'
+        )
+      } catch {
+        toast.error('Failed to update ejection settings')
       }
+    },
+    [ejectionCodes, updateQueueEjection]
+  )
 
-      await updateOrderEjection.mutateAsync({
-        id: orderId,
-        ejectionEnabled: true,
-        ejectionCodeId: codeId,
-      })
-
-      const presetName = ejectionCodes?.find((code) => code.id === codeId)?.name
-      toast.success(`Ejection set to "${presetName || 'preset'}"`)
-    } catch {
-      toast.error('Failed to update ejection settings')
-    }
-  }
-
-  const handleSaveCustomGcode = async () => {
-    if (!customGcodeOrder) return
-    try {
-      await updateOrderEjection.mutateAsync({
-        id: customGcodeOrder.id,
-        ejectionEnabled: true,
-        endGcode: customGcodeValue,
-      })
-      toast.success('Custom ejection G-code saved')
-      setCustomGcodeOrder(null)
-      setCustomGcodeValue('')
-    } catch {
-      toast.error('Failed to save custom ejection G-code')
-    }
-  }
-
-  const handleCooldownTempChange = async (orderId: number, cooldownTemp: number | null) => {
-    try {
-      await updateOrderEjection.mutateAsync({ id: orderId, cooldownTemp })
-      toast.success(
-        cooldownTemp === null ? 'Cooldown removed' : `Cooldown set to ${cooldownTemp}°C`
-      )
-    } catch {
-      toast.error('Failed to update cooldown temperature')
-    }
-  }
+  const handleCooldownTempChange = useCallback(
+    async (orderId: number, cooldownTemp: number | null) => {
+      try {
+        await updateQueueEjection.mutateAsync({ id: orderId, cooldownTemp })
+        toast.success(
+          cooldownTemp === null ? 'Cooldown removed' : `Cooldown set to ${cooldownTemp}°C`
+        )
+      } catch {
+        toast.error('Failed to update cooldown temperature')
+      }
+    },
+    [updateQueueEjection]
+  )
 
   const sensors = useSensors(
     useSensor(PointerSensor, {
@@ -310,53 +292,68 @@ export function OrdersTable({ orders }: OrdersTableProps) {
     })
   )
 
-  const handleDelete = (id: number) => {
-    if (confirm('Are you sure you want to delete this order?')) {
-      deleteOrder.mutate(id)
-    }
-  }
+  const handleDelete = useCallback(
+    (id: number) => {
+      if (confirm('Are you sure you want to delete this order?')) {
+        deleteOrder.mutate(id)
+      }
+    },
+    [deleteOrder]
+  )
 
-  const handleQuantityChange = (id: number, currentQuantity: number) => {
+  const handleQuantityChange = useCallback((id: number, currentQuantity: number) => {
     setEditingQuantity(id)
     setQuantityValue(currentQuantity)
-  }
+  }, [])
 
-  const handleQuantitySubmit = (id: number) => {
-    if (quantityValue >= 0) {
-      setQuantity(id, quantityValue)
-      flushQuantity(id)
-    }
-    setEditingQuantity(null)
-  }
+  const handleQuantitySubmit = useCallback(
+    (id: number) => {
+      if (quantityValue >= 0) {
+        setQuantity(id, quantityValue)
+        flushQuantity(id)
+      }
+      setEditingQuantity(null)
+    },
+    [quantityValue, setQuantity, flushQuantity]
+  )
 
-  const handleQuantityIncrement = (id: number) => {
-    bumpQuantity(id, 1)
-  }
+  const handleQuantityIncrement = useCallback(
+    (id: number) => {
+      bumpQuantity(id, 1)
+    },
+    [bumpQuantity]
+  )
 
-  const handleQuantityDecrement = (id: number) => {
-    bumpQuantity(id, -1)
-  }
+  const handleQuantityDecrement = useCallback(
+    (id: number) => {
+      bumpQuantity(id, -1)
+    },
+    [bumpQuantity]
+  )
 
-  const handleNameChange = (order: Order) => {
+  const handleNameChange = useCallback((order: Order) => {
     setEditingNameId(order.id)
     setNameValue(order.name ?? order.filename)
-  }
+  }, [])
 
-  const handleNameSubmit = (id: number) => {
-    const trimmed = nameValue.trim()
-    updateOrder.mutate(
-      { id, data: { name: trimmed || '' } },
-      {
-        onSuccess: () => {
-          toast.success(trimmed ? 'Name updated' : 'Name cleared')
-        },
-        onError: () => {
-          toast.error('Failed to update name')
-        },
-      }
-    )
-    setEditingNameId(null)
-  }
+  const handleNameSubmit = useCallback(
+    (id: number) => {
+      const trimmed = nameValue.trim()
+      updateOrder.mutate(
+        { id, data: { name: trimmed || '' } },
+        {
+          onSuccess: () => {
+            toast.success(trimmed ? 'Name updated' : 'Name cleared')
+          },
+          onError: () => {
+            toast.error('Failed to update name')
+          },
+        }
+      )
+      setEditingNameId(null)
+    },
+    [nameValue, updateOrder]
+  )
 
   const handleDragEnd = (event: DragEndEvent) => {
     const { active, over } = event
@@ -366,473 +363,417 @@ export function OrdersTable({ orders }: OrdersTableProps) {
       const newIndex = localOrders.findIndex((order) => order.id === over.id)
 
       if (oldIndex !== -1 && newIndex !== -1) {
-        // Update local state immediately (synchronous - no flicker)
         setLocalOrders(arrayMove(localOrders, oldIndex, newIndex))
-        // Then persist to server
         reorderOrder.mutate({ id: active.id as number, newIndex })
       }
     }
   }
 
-  const toggleSelect = (id: number) => {
-    setSelectedIds((prev) => {
-      const next = new Set(prev)
-      if (next.has(id)) next.delete(id)
-      else next.add(id)
-      return next
-    })
-  }
+  const columns = useMemo(
+    () => [
+      columnHelper.display({
+        id: 'priority',
+        header: '#',
+        size: 48,
+        minSize: 40,
+        maxSize: 64,
+        enableResizing: false,
+        cell: (info) => (
+          <span className="font-medium text-muted-foreground">
+            {queuePosition(info.row.original.id)}
+          </span>
+        ),
+      }),
+      columnHelper.accessor('filename', {
+        header: 'Name',
+        size: 220,
+        minSize: 120,
+        cell: (info) => {
+          const order = info.row.original
+          const name = order.name
+          const filename = info.getValue()
+          const displayName = name || filename
+          const id = order.id
 
-  const toggleSelectAll = () => {
-    if (selectedIds.size === localOrders.length) {
-      setSelectedIds(new Set())
-    } else {
-      setSelectedIds(new Set(localOrders.map((o) => o.id)))
-    }
-  }
-
-  const handleBulkDelete = () => {
-    if (selectedIds.size === 0) return
-    if (!confirm(`Delete ${selectedIds.size} selected order(s)?`)) return
-    const ids = Array.from(selectedIds)
-    const count = ids.length
-    setSelectedIds(new Set())
-    bulkDeleteOrders.mutate(ids, {
-      onSuccess: (data) => {
-        toast.success(`${data?.deleted_count ?? count} order(s) deleted`)
-      },
-    })
-  }
-
-  const columns = [
-    columnHelper.display({
-      id: 'select',
-      header: () => (
-        <Checkbox
-          checked={localOrders.length > 0 && selectedIds.size === localOrders.length}
-          onCheckedChange={toggleSelectAll}
-          aria-label="Select all"
-        />
-      ),
-      cell: (info) => (
-        <Checkbox
-          checked={selectedIds.has(info.row.original.id)}
-          onCheckedChange={() => toggleSelect(info.row.original.id)}
-          aria-label={`Select order ${info.row.original.id}`}
-        />
-      ),
-    }),
-    columnHelper.accessor('priority', {
-      header: '#',
-      cell: (info) => (
-        <span className="font-medium text-muted-foreground">{info.row.index + 1}</span>
-      ),
-    }),
-    columnHelper.accessor('filename', {
-      header: 'Name',
-      cell: (info) => {
-        const order = info.row.original
-        const name = order.name
-        const filename = info.getValue()
-        const displayName = name || filename
-        const id = order.id
-
-        if (editingNameId === id) {
-          return (
-            <Input
-              value={nameValue}
-              onChange={(e) => setNameValue(e.target.value)}
-              onBlur={() => handleNameSubmit(id)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') handleNameSubmit(id)
-                if (e.key === 'Escape') {
-                  setNameValue(name ?? filename)
-                  setEditingNameId(null)
-                }
-              }}
-              className="max-w-[200px] h-8"
-              autoFocus
-            />
-          )
-        }
-
-        return (
-          <button
-            type="button"
-            onClick={() => handleNameChange(order)}
-            className="flex flex-col text-left hover:bg-muted rounded px-1 -mx-1 py-0.5 -my-0.5 min-w-0"
-          >
-            <span className="truncate max-w-[200px] block" title={displayName}>
-              {displayName}
-            </span>
-            {name && (
-              <span
-                className="text-xs text-muted-foreground truncate max-w-[200px] block"
-                title={filename}
-              >
-                {filename}
-              </span>
-            )}
-          </button>
-        )
-      },
-    }),
-    columnHelper.accessor('quantity', {
-      header: 'Qty',
-      cell: (info) => {
-        const id = info.row.original.id
-        const currentQty = info.getValue()
-
-        if (editingQuantity === id) {
-          return (
-            <Input
-              type="number"
-              min={0}
-              value={quantityValue}
-              onChange={(e) => setQuantityValue(Math.max(0, parseInt(e.target.value, 10) || 0))}
-              onBlur={() => handleQuantitySubmit(id)}
-              onKeyDown={(e) => e.key === 'Enter' && handleQuantitySubmit(id)}
-              className="w-16 h-8"
-              autoFocus
-            />
-          )
-        }
-
-        return (
-          <div className="flex items-center gap-1">
-            <Button
-              variant="ghost"
-              size="sm"
-              className="h-6 w-6 p-0"
-              onClick={() => handleQuantityDecrement(id)}
-            >
-              <Minus className="h-3 w-3" />
-            </Button>
-            <span
-              className="cursor-pointer min-w-[2rem] text-center"
-              onClick={() => handleQuantityChange(id, currentQty)}
-            >
-              {currentQty}
-            </span>
-            <Button
-              variant="ghost"
-              size="sm"
-              className="h-6 w-6 p-0"
-              onClick={() => handleQuantityIncrement(id)}
-            >
-              <Plus className="h-3 w-3" />
-            </Button>
-          </div>
-        )
-      },
-    }),
-    columnHelper.accessor('sent', {
-      header: 'Sent',
-      cell: (info) => {
-        const order = info.row.original
-        const sent = info.getValue()
-        const total = order.quantity
-        const lastError = order.last_error
-        const tooltipParts = [
-          lastError,
-          order.last_error_printer ? `Printer: ${order.last_error_printer}` : null,
-          order.last_error_at ? new Date(order.last_error_at).toLocaleString() : null,
-        ].filter(Boolean)
-        return (
-          <div className="flex items-center gap-1.5">
-            <span className={sent >= total ? 'text-green-600 font-medium' : ''}>
-              {sent}/{total}
-            </span>
-            {lastError ? (
-              <button
-                type="button"
-                className="inline-flex text-amber-600 hover:text-amber-700"
-                title={tooltipParts.join(' — ')}
-                aria-label="View start error details"
-                onClick={() => setErrorDetailOrder(order)}
-              >
-                <AlertCircle className="h-4 w-4 shrink-0" />
-              </button>
-            ) : null}
-          </div>
-        )
-      },
-    }),
-    columnHelper.accessor('groups', {
-      header: 'Groups',
-      cell: (info) => {
-        const groups = info.getValue()
-        if (!groups || groups.length === 0)
-          return <span className="text-muted-foreground">All</span>
-        return (
-          <div className="flex gap-1 flex-wrap">
-            {groups.map((g) => (
-              <Badge key={g} variant="secondary" className="text-xs">
-                {g}
-              </Badge>
-            ))}
-          </div>
-        )
-      },
-    }),
-    columnHelper.display({
-      id: 'ejection',
-      header: 'Ejection',
-      cell: (info) => {
-        const order = info.row.original
-        const isEnabled = order.ejection_enabled
-        const codeName = getEjectionDisplayName(order)
-        const codeId = order.ejection_code_id
-        const cooldownTemp = order.cooldown_temp
-
-        let currentValue = 'none'
-        if (isEnabled) {
-          if (codeId && ejectionCodes?.find((c) => c.id === codeId)) {
-            currentValue = codeId
-          } else {
-            currentValue = 'custom'
-          }
-        }
-
-        return (
-          <div className="flex items-center gap-1">
-            <Select
-              value={currentValue}
-              onValueChange={(value) => handleEjectionChange(order.id, value, order)}
-            >
-              <SelectTrigger className="w-[130px] h-8 text-xs">
-                <SelectValue>
-                  <span className="flex items-center gap-1">
-                    {isEnabled ? (
-                      <>
-                        <Zap className="h-3 w-3 text-yellow-500" />
-                        <span className="truncate">{codeName}</span>
-                      </>
-                    ) : (
-                      <>
-                        <ZapOff className="h-3 w-3 text-muted-foreground" />
-                        <span>Off</span>
-                      </>
-                    )}
-                  </span>
-                </SelectValue>
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="none">
-                  <span className="flex items-center gap-2">
-                    <ZapOff className="h-3 w-3" />
-                    Off
-                  </span>
-                </SelectItem>
-                <SelectItem value="custom">
-                  <span className="flex items-center gap-2">
-                    <Zap className="h-3 w-3" />
-                    Custom
-                  </span>
-                </SelectItem>
-                {ejectionCodes && ejectionCodes.length > 0 && (
-                  <>
-                    <div className="px-2 py-1 text-xs font-semibold text-muted-foreground border-t mt-1">
-                      Saved Codes
-                    </div>
-                    {ejectionCodes.map((code) => (
-                      <SelectItem key={code.id} value={code.id}>
-                        <span className="flex items-center gap-2">
-                          <Zap className="h-3 w-3" />
-                          {code.name}
-                        </span>
-                      </SelectItem>
-                    ))}
-                  </>
-                )}
-              </SelectContent>
-            </Select>
-            {/* Inline editor for cooldown target temperature (only meaningful when ejection enabled) */}
-            {isEnabled && (
-              <CooldownTempInput
-                orderId={order.id}
-                initialValue={cooldownTemp}
-                onSave={handleCooldownTempChange}
+          if (editingNameId === id) {
+            return (
+              <Input
+                value={nameValue}
+                onChange={(e) => setNameValue(e.target.value)}
+                onBlur={() => handleNameSubmit(id)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') handleNameSubmit(id)
+                  if (e.key === 'Escape') {
+                    setNameValue(name ?? filename)
+                    setEditingNameId(null)
+                  }
+                }}
+                className="max-w-[200px] h-8"
+                autoFocus
               />
-            )}
-          </div>
-        )
-      },
-    }),
-    columnHelper.display({
-      id: 'actions',
-      header: '',
-      cell: (info) => (
-        <Button
-          variant="ghost"
-          size="sm"
-          className="h-8 w-8 p-0 text-destructive hover:text-destructive"
-          onClick={() => handleDelete(info.row.original.id)}
-        >
-          <Trash2 className="h-4 w-4" />
-        </Button>
-      ),
-    }),
-  ]
+            )
+          }
+
+          return (
+            <button
+              type="button"
+              onClick={() => handleNameChange(order)}
+              className="block w-full min-w-0 text-left hover:bg-muted rounded px-1 -mx-1 py-0.5 -my-0.5"
+            >
+              <TruncatedText
+                text={displayName}
+                secondary={name ? filename : undefined}
+                className="font-medium"
+              />
+            </button>
+          )
+        },
+      }),
+      columnHelper.accessor('quantity', {
+        header: 'Total',
+        size: 110,
+        minSize: 90,
+        enableResizing: true,
+        cell: (info) => {
+          const id = info.row.original.id
+          const currentQty = info.getValue()
+
+          if (previewMode) {
+            return <span className="tabular-nums">{currentQty}</span>
+          }
+
+          if (editingQuantity === id) {
+            return (
+              <Input
+                type="number"
+                min={0}
+                value={quantityValue}
+                onChange={(e) => setQuantityValue(Math.max(0, parseInt(e.target.value, 10) || 0))}
+                onBlur={() => handleQuantitySubmit(id)}
+                onKeyDown={(e) => e.key === 'Enter' && handleQuantitySubmit(id)}
+                className="w-16 h-8"
+                autoFocus
+              />
+            )
+          }
+
+          return (
+            <div className="flex items-center gap-1">
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-6 w-6 p-0"
+                onClick={() => handleQuantityDecrement(id)}
+              >
+                <Minus className="h-3 w-3" />
+              </Button>
+              <span
+                className="cursor-pointer min-w-[2rem] text-center tabular-nums"
+                onClick={() => handleQuantityChange(id, currentQty)}
+              >
+                {currentQty}
+              </span>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-6 w-6 p-0"
+                onClick={() => handleQuantityIncrement(id)}
+              >
+                <Plus className="h-3 w-3" />
+              </Button>
+            </div>
+          )
+        },
+      }),
+      columnHelper.display({
+        id: 'completed',
+        header: 'Completed',
+        size: 80,
+        minSize: 64,
+        cell: (info) => {
+          const activity = getQueueJobActivity(info.row.original, printers)
+          const done = activity.completed + activity.inProgress >= activity.total
+          return (
+            <span
+              className={`tabular-nums ${done ? 'text-green-600 font-medium' : ''}`}
+              title={`${activity.completed} of ${activity.total} total · ${activity.pending} pending`}
+            >
+              {activity.completed}
+            </span>
+          )
+        },
+      }),
+      columnHelper.display({
+        id: 'inProgress',
+        header: 'In progress',
+        size: 88,
+        minSize: 72,
+        cell: (info) => {
+          const activity = getQueueJobActivity(info.row.original, printers)
+          return (
+            <span
+              className={`tabular-nums ${activity.inProgress > 0 ? 'text-blue-600 font-medium' : ''}`}
+            >
+              {activity.inProgress}
+            </span>
+          )
+        },
+      }),
+      columnHelper.accessor('groups', {
+        header: 'Groups',
+        size: 120,
+        minSize: 72,
+        cell: (info) => {
+          const groups = info.getValue()
+          if (!groups || groups.length === 0)
+            return <span className="text-muted-foreground">All</span>
+          return (
+            <div className="flex gap-1 flex-wrap">
+              {groups.map((g) => (
+                <Badge key={g} variant="secondary" className="text-xs">
+                  {g}
+                </Badge>
+              ))}
+            </div>
+          )
+        },
+      }),
+      columnHelper.display({
+        id: 'ejection',
+        header: 'Ejection',
+        size: 160,
+        minSize: 120,
+        cell: (info) => {
+          const order = info.row.original
+          const isEnabled = order.ejection_enabled
+          const codeName = order.ejection_code_name
+          const codeId = order.ejection_code_id
+          const cooldownTemp = order.cooldown_temp
+
+          // Determine current value for select
+          let currentValue = 'none'
+          if (isEnabled) {
+            if (codeId && ejectionCodes?.find((c) => c.id === codeId)) {
+              currentValue = codeId
+            } else if (codeName === 'Custom' || (!codeId && order.end_gcode)) {
+              currentValue = 'custom'
+            } else {
+              currentValue = 'custom'
+            }
+          }
+
+          return (
+            <div className="flex items-center gap-1">
+              <Select
+                value={currentValue}
+                onValueChange={(value) => handleEjectionChange(order.id, value, order)}
+              >
+                <SelectTrigger className="w-full max-w-full min-w-0 h-8 text-xs">
+                  <SelectValue>
+                    <span className="flex items-center gap-1">
+                      {isEnabled ? (
+                        <>
+                          <Zap className="h-3 w-3 text-yellow-500" />
+                          <span className="truncate">{codeName || 'Custom'}</span>
+                        </>
+                      ) : (
+                        <>
+                          <ZapOff className="h-3 w-3 text-muted-foreground" />
+                          <span>Off</span>
+                        </>
+                      )}
+                    </span>
+                  </SelectValue>
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="none">
+                    <span className="flex items-center gap-2">
+                      <ZapOff className="h-3 w-3" />
+                      Off
+                    </span>
+                  </SelectItem>
+                  <SelectItem value="custom">
+                    <span className="flex items-center gap-2">
+                      <Zap className="h-3 w-3" />
+                      Custom
+                    </span>
+                  </SelectItem>
+                  {ejectionCodes && ejectionCodes.length > 0 && (
+                    <>
+                      <div className="px-2 py-1 text-xs font-semibold text-muted-foreground border-t mt-1">
+                        Saved Codes
+                      </div>
+                      {ejectionCodes.map((code) => (
+                        <SelectItem key={code.id} value={code.id}>
+                          <span className="flex items-center gap-2">
+                            <Zap className="h-3 w-3" />
+                            {code.name}
+                          </span>
+                        </SelectItem>
+                      ))}
+                    </>
+                  )}
+                </SelectContent>
+              </Select>
+              {/* Inline editor for cooldown target temperature (only meaningful when ejection enabled) */}
+              {isEnabled && (
+                <CooldownTempInput
+                  orderId={order.id}
+                  initialValue={cooldownTemp}
+                  onSave={handleCooldownTempChange}
+                />
+              )}
+            </div>
+          )
+        },
+      }),
+      columnHelper.display({
+        id: 'actions',
+        header: '',
+        size: 48,
+        minSize: 48,
+        maxSize: 48,
+        enableResizing: false,
+        cell: (info) => (
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-8 w-8 p-0 text-destructive hover:text-destructive"
+            onClick={() => handleDelete(info.row.original.id)}
+          >
+            <Trash2 className="h-4 w-4" />
+          </Button>
+        ),
+      }),
+    ],
+    [
+      editingNameId,
+      nameValue,
+      editingQuantity,
+      quantityValue,
+      ejectionCodes,
+      printers,
+      previewMode,
+      handleCooldownTempChange,
+      handleDelete,
+      handleEjectionChange,
+      handleNameChange,
+      handleNameSubmit,
+      handleQuantityChange,
+      handleQuantityDecrement,
+      handleQuantityIncrement,
+      handleQuantitySubmit,
+      queuePosition,
+    ]
+  )
 
   const table = useReactTable({
-    data: localOrders,
+    data: displayedOrders,
     columns,
+    defaultColumn: resizableTableDefaultColumn,
+    columnResizeMode: 'onChange',
+    enableColumnResizing: true,
     getCoreRowModel: getCoreRowModel(),
     getRowId: (row) => String(row.id),
   })
 
-  return (
-    <div className="space-y-2">
-      {selectedIds.size > 0 && (
-        <div className="flex items-center gap-3 rounded-md border bg-muted/50 px-3 py-2">
-          <span className="text-sm font-medium">{selectedIds.size} selected</span>
-          <Button
-            variant="destructive"
-            size="sm"
-            onClick={handleBulkDelete}
-            disabled={bulkDeleteOrders.isPending}
+  useFitTableColumns(table, containerRef, {
+    priority: 0.4,
+    filename: 3,
+    quantity: 1,
+    completed: 0.6,
+    inProgress: 0.6,
+    groups: 1,
+    ejection: 1.5,
+    actions: 0.4,
+  })
+
+  const colSpan = columns.length + (previewMode ? 0 : 1)
+  const dragDisabled = previewMode
+
+  const tableBody = (
+    <TableBody>
+      {table.getRowModel().rows?.length ? (
+        previewMode ? (
+          table.getRowModel().rows.map((row) => (
+            <TableRow key={row.id}>
+              {row.getVisibleCells().map((cell) => (
+                <TableCell
+                  key={cell.id}
+                  style={{ width: cell.column.getSize() }}
+                  className="max-w-0 overflow-hidden"
+                >
+                  {flexRender(cell.column.columnDef.cell, cell.getContext())}
+                </TableCell>
+              ))}
+            </TableRow>
+          ))
+        ) : (
+          <SortableContext
+            items={displayedOrders.map((o) => o.id)}
+            strategy={verticalListSortingStrategy}
           >
-            <Trash2 className="h-4 w-4 mr-1" />
-            Delete selected
-          </Button>
-          <Button variant="ghost" size="sm" onClick={() => setSelectedIds(new Set())}>
-            Clear selection
-          </Button>
-        </div>
-      )}
-      <div className="rounded-md border">
-        <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
-          <Table>
-            <TableHeader>
-              {table.getHeaderGroups().map((headerGroup) => (
-                <TableRow key={headerGroup.id}>
-                  <TableHead className="w-10"></TableHead>
-                  {headerGroup.headers.map((header) => (
-                    <TableHead key={header.id}>
-                      {header.isPlaceholder
-                        ? null
-                        : flexRender(header.column.columnDef.header, header.getContext())}
-                    </TableHead>
-                  ))}
-                </TableRow>
-              ))}
-            </TableHeader>
-            <TableBody>
-              {table.getRowModel().rows?.length ? (
-                <SortableContext
-                  items={localOrders.map((o) => o.id)}
-                  strategy={verticalListSortingStrategy}
-                >
-                  {table.getRowModel().rows.map((row) => (
-                    <SortableRow key={row.id} row={row}>
-                      {row.getVisibleCells().map((cell) => (
-                        <TableCell key={cell.id}>
-                          {flexRender(cell.column.columnDef.cell, cell.getContext())}
-                        </TableCell>
-                      ))}
-                    </SortableRow>
-                  ))}
-                </SortableContext>
-              ) : (
-                <TableRow>
-                  <TableCell colSpan={columns.length + 1} className="h-24 text-center">
-                    No jobs in queue.
+            {table.getRowModel().rows.map((row) => (
+              <SortableRow key={row.id} row={row} dragDisabled={dragDisabled}>
+                {row.getVisibleCells().map((cell) => (
+                  <TableCell
+                    key={cell.id}
+                    style={{ width: cell.column.getSize() }}
+                    className="max-w-0 overflow-hidden"
+                  >
+                    {flexRender(cell.column.columnDef.cell, cell.getContext())}
                   </TableCell>
-                </TableRow>
-              )}
-            </TableBody>
-          </Table>
-        </DndContext>
+                ))}
+              </SortableRow>
+            ))}
+          </SortableContext>
+        )
+      ) : (
+        <TableRow>
+          <TableCell colSpan={colSpan} className="h-24 text-center text-muted-foreground">
+            {emptyMessage}
+          </TableCell>
+        </TableRow>
+      )}
+    </TableBody>
+  )
+
+  const tableHeader = (
+    <TableHeader>
+      {table.getHeaderGroups().map((headerGroup) => (
+        <TableRow key={headerGroup.id}>
+          {!previewMode && (
+            <TableHead className="w-10 relative" style={{ width: 40 }}>
+              <span className="sr-only">Reorder</span>
+            </TableHead>
+          )}
+          {headerGroup.headers.map((header) => (
+            <ResizableTableHeadCell key={header.id} header={header} />
+          ))}
+        </TableRow>
+      ))}
+    </TableHeader>
+  )
+
+  if (previewMode) {
+    return (
+      <div className="rounded-md border">
+        <ResizableTable containerRef={containerRef}>
+          {tableHeader}
+          {tableBody}
+        </ResizableTable>
       </div>
+    )
+  }
 
-      <Dialog
-        open={errorDetailOrder !== null}
-        onOpenChange={(open) => !open && setErrorDetailOrder(null)}
-      >
-        <DialogContent className="max-w-lg max-h-[85vh] flex flex-col">
-          <DialogHeader>
-            <DialogTitle>Start error</DialogTitle>
-            <DialogDescription>
-              {errorDetailOrder
-                ? `${errorDetailOrder.name || errorDetailOrder.filename} (job #${errorDetailOrder.id})`
-                : ''}
-            </DialogDescription>
-          </DialogHeader>
-          {errorDetailOrder?.last_error ? (
-            <p className="text-sm text-destructive">{errorDetailOrder.last_error}</p>
-          ) : null}
-          <div className="text-xs text-muted-foreground space-y-1">
-            {errorDetailOrder?.last_error_printer ? (
-              <p>Printer: {errorDetailOrder.last_error_printer}</p>
-            ) : null}
-            {errorDetailOrder?.last_error_phase ? (
-              <p>Phase: {errorDetailOrder.last_error_phase}</p>
-            ) : null}
-            {errorDetailOrder?.last_error_at ? (
-              <p>Last seen: {new Date(errorDetailOrder.last_error_at).toLocaleString()}</p>
-            ) : null}
-          </div>
-          {(errorDetailOrder?.error_events?.length ?? 0) > 0 ? (
-            <div className="flex-1 min-h-0 overflow-y-auto border rounded-md p-2 space-y-2">
-              <p className="text-xs font-medium text-muted-foreground">Recent events</p>
-              {[...(errorDetailOrder?.error_events ?? [])].reverse().map((evt, idx) => (
-                <div
-                  key={`${evt.at}-${idx}`}
-                  className="text-xs border-b last:border-0 pb-2 last:pb-0"
-                >
-                  <p className="text-muted-foreground">{new Date(evt.at).toLocaleString()}</p>
-                  <p>{evt.message}</p>
-                  {evt.printer ? (
-                    <p className="text-muted-foreground">Printer: {evt.printer}</p>
-                  ) : null}
-                  {evt.phase ? <p className="text-muted-foreground">Phase: {evt.phase}</p> : null}
-                  {evt.batch_id ? (
-                    <p className="text-muted-foreground">Batch: {evt.batch_id}</p>
-                  ) : null}
-                  {evt.task_id ? (
-                    <p className="text-muted-foreground">Task: {evt.task_id}</p>
-                  ) : null}
-                </div>
-              ))}
-            </div>
-          ) : null}
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setErrorDetailOrder(null)}>
-              Close
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      <Dialog
-        open={customGcodeOrder !== null}
-        onOpenChange={(open) => !open && setCustomGcodeOrder(null)}
-      >
-        <DialogContent className="max-w-2xl max-h-[85vh] flex flex-col">
-          <DialogHeader>
-            <DialogTitle>Custom ejection G-code</DialogTitle>
-            <DialogDescription>
-              {customGcodeOrder
-                ? `Edit ejection sequence for ${customGcodeOrder.name || customGcodeOrder.filename}`
-                : ''}
-            </DialogDescription>
-          </DialogHeader>
-          <GcodeEditor
-            value={customGcodeValue}
-            onChange={setCustomGcodeValue}
-            className="flex-1 min-h-[300px]"
-          />
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setCustomGcodeOrder(null)}>
-              Cancel
-            </Button>
-            <Button onClick={handleSaveCustomGcode} disabled={!customGcodeValue.trim()}>
-              Save
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+  return (
+    <div className="rounded-md border">
+      <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
+        <ResizableTable containerRef={containerRef}>
+          {tableHeader}
+          {tableBody}
+        </ResizableTable>
+      </DndContext>
     </div>
   )
 }

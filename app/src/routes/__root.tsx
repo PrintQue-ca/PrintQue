@@ -12,8 +12,8 @@ import {
 import { TanStackRouterDevtoolsPanel } from '@tanstack/react-router-devtools'
 import { useEffect } from 'react'
 import { Toaster } from 'sonner'
-import { ConnectionBanner } from '@/components/layout/ConnectionBanner'
-import { Button } from '@/components/ui/button'
+import { Footer } from '@/components/layout/Footer'
+import { Navigation } from '@/components/layout/Navigation'
 import { useTheme } from '@/hooks'
 import { initSocket } from '@/lib/socket'
 import { queryClient } from '@/router'
@@ -66,134 +66,6 @@ export const Route = createRootRouteWithContext<{
 
   component: RootComponent,
 })
-
-function ThemeToggle() {
-  const { theme, toggleTheme } = useTheme()
-
-  return (
-    <Button
-      variant="ghost"
-      size="icon"
-      onClick={toggleTheme}
-      className="h-9 w-9"
-      aria-label={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`}
-    >
-      {theme === 'dark' ? (
-        <svg
-          xmlns="http://www.w3.org/2000/svg"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="2"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-          className="h-5 w-5"
-        >
-          <circle cx="12" cy="12" r="4" />
-          <path d="M12 2v2" />
-          <path d="M12 20v2" />
-          <path d="m4.93 4.93 1.41 1.41" />
-          <path d="m17.66 17.66 1.41 1.41" />
-          <path d="M2 12h2" />
-          <path d="M20 12h2" />
-          <path d="m6.34 17.66-1.41 1.41" />
-          <path d="m19.07 4.93-1.41 1.41" />
-        </svg>
-      ) : (
-        <svg
-          xmlns="http://www.w3.org/2000/svg"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="2"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-          className="h-5 w-5"
-        >
-          <path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z" />
-        </svg>
-      )}
-    </Button>
-  )
-}
-
-function Navigation() {
-  return (
-    <nav className="border-b bg-card">
-      <div className="h-1 bg-linear-to-r from-primary via-primary/80 to-primary/60" />
-      <div className="container mx-auto px-4">
-        <div className="flex h-14 items-center justify-between">
-          <div className="flex items-center gap-6">
-            <Link to="/" className="flex items-center hover:opacity-80 transition-opacity">
-              <img src="/logo192.png" alt="PrintQue" className="h-8 w-auto" />
-            </Link>
-            <div className="flex items-center gap-4">
-              <Link
-                to="/"
-                className="text-sm font-medium transition-colors hover:text-primary [&.active]:text-primary [&.active]:font-semibold"
-                activeOptions={{ exact: true }}
-              >
-                Dashboard
-              </Link>
-              <Link
-                to="/printers"
-                className="text-sm font-medium transition-colors hover:text-primary [&.active]:text-primary [&.active]:font-semibold"
-              >
-                Printers
-              </Link>
-              <Link
-                to="/stats"
-                className="text-sm font-medium transition-colors hover:text-primary [&.active]:text-primary [&.active]:font-semibold"
-              >
-                Stats
-              </Link>
-              <Link
-                to="/ejection-codes"
-                className="text-sm font-medium transition-colors hover:text-primary [&.active]:text-primary [&.active]:font-semibold"
-              >
-                Ejection Codes
-              </Link>
-              <Link
-                to="/license"
-                className="text-sm font-medium transition-colors hover:text-primary [&.active]:text-primary [&.active]:font-semibold"
-              >
-                License
-              </Link>
-              <Link
-                to="/system"
-                className="text-sm font-medium transition-colors hover:text-primary [&.active]:text-primary [&.active]:font-semibold"
-              >
-                System
-              </Link>
-            </div>
-          </div>
-          <div className="flex items-center gap-3">
-            <ConnectionBanner />
-            <ThemeToggle />
-          </div>
-        </div>
-      </div>
-    </nav>
-  )
-}
-
-function Footer() {
-  return (
-    <footer className="border-t bg-card mt-auto">
-      <div className="container mx-auto px-4 py-4">
-        <div className="flex items-center justify-between text-sm text-muted-foreground">
-          <div className="flex items-center gap-2">
-            <img src="/logo192.png" alt="PrintQue" className="h-5 w-auto opacity-60" />
-            <span>PrintQue - Print Queue Management</span>
-          </div>
-          <div className="flex items-center gap-4">
-            <span>3D Print Farm Automation</span>
-          </div>
-        </div>
-      </div>
-    </footer>
-  )
-}
 
 function RootComponent() {
   const { theme } = useTheme()

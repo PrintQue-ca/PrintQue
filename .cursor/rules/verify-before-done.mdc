@@ -13,6 +13,7 @@ Before declaring any task complete, run the relevant CI checks locally and confi
 |-------|---------|-------------|
 | Python lint | `ruff check api/` | After editing any `api/**/*.py` file |
 | Backend tests | `cd api && pytest` | After editing any `api/**/*.py` file |
+| Biome lint/format | `cd app && npm run lint` | After editing any `app/**/*.{ts,tsx,js,json}` file |
 | TypeScript type check | `cd app && npx tsc --noEmit` | After editing any `app/**/*.{ts,tsx}` file |
 | Frontend tests | `cd app && npm run test` | After editing any `app/**/*.{ts,tsx}` file |
 
@@ -21,3 +22,4 @@ Before declaring any task complete, run the relevant CI checks locally and confi
 - Run **all** checks that apply to the files you changed — not just one.
 - If a check fails, fix the issue before marking the task complete.
 - Do not skip checks to save time. A failing CI pipeline is worse than a slow response.
+- Frontend commits run Biome via husky/lint-staged (`biome check --write` on staged files). Biome **errors** block commits — run `cd app && npm run lint` before finishing frontend work; use `npm run lint:fix` and, if needed, `npx biome check --write --unsafe .` to apply safe/unsafe autofixes, then re-run lint until clean.

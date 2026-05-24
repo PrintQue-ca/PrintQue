@@ -72,6 +72,12 @@ const GCODE_REFERENCE: Record<string, { description: string; params?: Record<str
   },
 
   // Positioning Commands
+  G20: {
+    description: 'Set units to inches — subsequent coordinates are in inches',
+  },
+  G21: {
+    description: 'Set units to millimeters — subsequent coordinates are in mm (Bambu default)',
+  },
   G90: {
     description: 'Set absolute positioning - coordinates are absolute from origin',
   },

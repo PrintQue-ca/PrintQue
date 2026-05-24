@@ -12,7 +12,8 @@ import { Route as rootRouteImport } from './routes/__root'
 import { Route as SystemRouteImport } from './routes/system'
 import { Route as StatsRouteImport } from './routes/stats'
 import { Route as PrintersRouteImport } from './routes/printers'
-import { Route as LicenseRouteImport } from './routes/license'
+import { Route as OrdersRouteImport } from './routes/orders'
+import { Route as LibraryRouteImport } from './routes/library'
 import { Route as EjectionCodesRouteImport } from './routes/ejection-codes'
 import { Route as IndexRouteImport } from './routes/index'
 
@@ -31,9 +32,14 @@ const PrintersRoute = PrintersRouteImport.update({
   path: '/printers',
   getParentRoute: () => rootRouteImport,
 } as any)
-const LicenseRoute = LicenseRouteImport.update({
-  id: '/license',
-  path: '/license',
+const OrdersRoute = OrdersRouteImport.update({
+  id: '/orders',
+  path: '/orders',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const LibraryRoute = LibraryRouteImport.update({
+  id: '/library',
+  path: '/library',
   getParentRoute: () => rootRouteImport,
 } as any)
 const EjectionCodesRoute = EjectionCodesRouteImport.update({
@@ -50,7 +56,8 @@ const IndexRoute = IndexRouteImport.update({
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/ejection-codes': typeof EjectionCodesRoute
-  '/license': typeof LicenseRoute
+  '/library': typeof LibraryRoute
+  '/orders': typeof OrdersRoute
   '/printers': typeof PrintersRoute
   '/stats': typeof StatsRoute
   '/system': typeof SystemRoute
@@ -58,7 +65,8 @@ export interface FileRoutesByFullPath {
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/ejection-codes': typeof EjectionCodesRoute
-  '/license': typeof LicenseRoute
+  '/library': typeof LibraryRoute
+  '/orders': typeof OrdersRoute
   '/printers': typeof PrintersRoute
   '/stats': typeof StatsRoute
   '/system': typeof SystemRoute
@@ -67,7 +75,8 @@ export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/ejection-codes': typeof EjectionCodesRoute
-  '/license': typeof LicenseRoute
+  '/library': typeof LibraryRoute
+  '/orders': typeof OrdersRoute
   '/printers': typeof PrintersRoute
   '/stats': typeof StatsRoute
   '/system': typeof SystemRoute
@@ -77,17 +86,26 @@ export interface FileRouteTypes {
   fullPaths:
     | '/'
     | '/ejection-codes'
-    | '/license'
+    | '/library'
+    | '/orders'
     | '/printers'
     | '/stats'
     | '/system'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/ejection-codes' | '/license' | '/printers' | '/stats' | '/system'
+  to:
+    | '/'
+    | '/ejection-codes'
+    | '/library'
+    | '/orders'
+    | '/printers'
+    | '/stats'
+    | '/system'
   id:
     | '__root__'
     | '/'
     | '/ejection-codes'
-    | '/license'
+    | '/library'
+    | '/orders'
     | '/printers'
     | '/stats'
     | '/system'
@@ -96,7 +114,8 @@ export interface FileRouteTypes {
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   EjectionCodesRoute: typeof EjectionCodesRoute
-  LicenseRoute: typeof LicenseRoute
+  LibraryRoute: typeof LibraryRoute
+  OrdersRoute: typeof OrdersRoute
   PrintersRoute: typeof PrintersRoute
   StatsRoute: typeof StatsRoute
   SystemRoute: typeof SystemRoute
@@ -125,11 +144,18 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof PrintersRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/license': {
-      id: '/license'
-      path: '/license'
-      fullPath: '/license'
-      preLoaderRoute: typeof LicenseRouteImport
+    '/orders': {
+      id: '/orders'
+      path: '/orders'
+      fullPath: '/orders'
+      preLoaderRoute: typeof OrdersRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/library': {
+      id: '/library'
+      path: '/library'
+      fullPath: '/library'
+      preLoaderRoute: typeof LibraryRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/ejection-codes': {
@@ -152,7 +178,8 @@ declare module '@tanstack/react-router' {
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   EjectionCodesRoute: EjectionCodesRoute,
-  LicenseRoute: LicenseRoute,
+  LibraryRoute: LibraryRoute,
+  OrdersRoute: OrdersRoute,
   PrintersRoute: PrintersRoute,
   StatsRoute: StatsRoute,
   SystemRoute: SystemRoute,

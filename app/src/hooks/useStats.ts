@@ -1,15 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useAdaptiveRefetchInterval } from '@/hooks/useApiConnection'
 import { api } from '@/lib/api'
-import type {
-  ApiResponse,
-  EjectionCode,
-  EjectionStatus,
-  Group,
-  License,
-  Stats,
-  SystemInfo,
-} from '@/types'
+import type { ApiResponse, EjectionCode, EjectionStatus, Group, Stats, SystemInfo } from '@/types'
 
 export function useStats() {
   const refetchInterval = useAdaptiveRefetchInterval()
@@ -54,14 +46,6 @@ export function useResumeEjection() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['ejection'] })
     },
-  })
-}
-
-export function useLicense() {
-  return useQuery({
-    queryKey: ['license'],
-    queryFn: () => api.get<License>('/system/license'),
-    staleTime: 60000, // License doesn't change often
   })
 }
 

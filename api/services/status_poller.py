@@ -2,6 +2,8 @@
 Status polling and broadcasting for printer status updates.
 Handles fetching printer status from APIs and broadcasting to clients.
 """
+import json
+import os
 import time
 import asyncio
 import aiohttp
@@ -13,9 +15,10 @@ from services.state import (
     logging, orders_lock, filament_lock, printers_rwlock,
     SafeLock, ReadLock, WriteLock,
     get_printer_ejection_state, clear_printer_ejection_state,
-    resolve_ejection_gcode, DEFAULT_EJECTION_GCODE,
+    resolve_ejection_gcode,
     increment_queue_sent_count,
 )
+from services.default_settings import DEFAULT_EJECTION_GCODE
 from services.library_queue import clear_queue_job_error, record_queue_job_error
 from services.bambu_handler import (
     get_bambu_status, send_bambu_ejection_gcode,
@@ -76,6 +79,27 @@ _COOLING_UI_BROADCAST_INTERVAL_SEC = 3.0
 # Bambu queue "sent" counts only when a newly distributed copy leaves prepare and starts printing.
 _BAMBU_SENT_COUNT_START_STATES = frozenset({'PREPARING', 'PREPARE'})
 _COOLING_MAINTAIN_INTERVAL_SEC = 12.0
+
+# #region agent log
+_AGENT_DEBUG_LOG = os.path.normpath(
+    os.path.join(os.path.dirname(__file__), '..', '..', 'debug-e398f0.log')
+)
+
+
+def _agent_debug_log(location, message, data, hypothesis_id):
+    try:
+        with open(_AGENT_DEBUG_LOG, 'a', encoding='utf-8') as f:
+            f.write(json.dumps({
+                'sessionId': 'e398f0',
+                'location': location,
+                'message': message,
+                'data': data,
+                'hypothesisId': hypothesis_id,
+                'timestamp': int(time.time() * 1000),
+            }) + '\n')
+    except Exception:
+        pass
+# #endregion
 
 
 def set_status_broadcast_refs(socketio, app):
@@ -366,6 +390,20 @@ def update_bambu_printer_states():
                         f"Bambu {printer_name}: preserving manually-set READY "
                         f"(ignoring stale MQTT {new_state} after cancel)"
                     )
+                    # #region agent log
+                    if printer.get('order_id'):
+                        _agent_debug_log(
+                            'status_poller.py:manual_ready_ignore_preparing',
+                            'manually_set READY ignored PREPARING while job assigned',
+                            {
+                                'printer': printer_name,
+                                'order_id': printer.get('order_id'),
+                                'new_state': new_state,
+                                'pending_file': pending_file,
+                            },
+                            'H2',
+                        )
+                    # #endregion
                     if 'nozzle_temp' in bambu_state:
                         printer['nozzle_temp'] = bambu_state['nozzle_temp']
                     if 'bed_temp' in bambu_state:
@@ -409,6 +447,29 @@ def update_bambu_printer_states():
                     printer['file'] = bambu_state['file']
 
             # Count queue job as sent when prepare finishes and the copy actually starts printing.
+            # #region agent log
+            if (
+                new_state == 'PRINTING'
+                and printer.get('from_queue')
+                and printer.get('order_id')
+            ):
+                _agent_debug_log(
+                    'status_poller.py:sent_count_check',
+                    'Evaluating Bambu sent-count increment conditions',
+                    {
+                        'printer': printer_name,
+                        'order_id': printer.get('order_id'),
+                        'current_state': current_state,
+                        'new_state': new_state,
+                        'start_state_match': current_state in _BAMBU_SENT_COUNT_START_STATES,
+                        'count_incremented': printer.get('count_incremented_for_current_job'),
+                        'job_reached_running': bambu_state.get('job_reached_running'),
+                        'progress': bambu_state.get('progress'),
+                        'manually_set': printer.get('manually_set'),
+                    },
+                    'H1',
+                )
+            # #endregion
             if (
                 new_state == 'PRINTING'
                 and current_state in _BAMBU_SENT_COUNT_START_STATES
@@ -418,6 +479,14 @@ def update_bambu_printer_states():
             ):
                 job_id = printer['order_id']
                 pending_sent_increments.append((printer_name, job_id))
+                # #region agent log
+                _agent_debug_log(
+                    'status_poller.py:sent_count_queued',
+                    'Queued sent-count increment for Bambu queue job',
+                    {'printer': printer_name, 'order_id': job_id},
+                    'H1',
+                )
+                # #endregion
                 filament_g = printer.get('filament_used_g', 0)
                 if filament_g and printer.get('from_queue'):
                     pending_filament_g.append((printer_name, filament_g))
@@ -437,6 +506,30 @@ def update_bambu_printer_states():
                 logging.warning(
                     f"Bambu {printer_name}: ignoring FINISHED (job never reached RUNNING)"
                 )
+                # #region agent log
+                _job_id = printer.get('order_id')
+                _queue_job = next((j for j in ORDERS if j.get('id') == _job_id), None)
+                _agent_debug_log(
+                    'status_poller.py:bambu_never_running',
+                    'FINISHED rejected — count_incremented still false',
+                    {
+                        'printer': printer_name,
+                        'order_id': _job_id,
+                        'sent': (_queue_job or {}).get('sent'),
+                        'quantity': (_queue_job or {}).get('quantity'),
+                        'current_state': current_state,
+                        'new_state': new_state,
+                        'count_incremented': printer.get('count_incremented_for_current_job'),
+                        'job_reached_running': bambu_state.get('job_reached_running'),
+                        'gcode_state': bambu_state.get('gcode_state'),
+                        'progress': bambu_state.get('progress'),
+                        'manually_set': printer.get('manually_set'),
+                        'from_queue': printer.get('from_queue'),
+                        'file': printer.get('file'),
+                    },
+                    'H3',
+                )
+                # #endregion
                 clear_bambu_print_assignment(printer_name)
                 if bambu_state.get('error'):
                     new_state = 'ERROR'
@@ -486,6 +579,19 @@ def update_bambu_printer_states():
 
     for printer_name, job_id in pending_sent_increments:
         success_inc, updated_job = increment_queue_sent_count(job_id)
+        # #region agent log
+        _agent_debug_log(
+            'status_poller.py:sent_count_result',
+            'Applied queued sent-count increment',
+            {
+                'printer': printer_name,
+                'order_id': job_id,
+                'success': success_inc,
+                'updated_sent': (updated_job or {}).get('sent'),
+            },
+            'H5',
+        )
+        # #endregion
         if success_inc:
             clear_queue_job_error(job_id)
             try:

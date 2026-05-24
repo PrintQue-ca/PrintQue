@@ -529,7 +529,7 @@ export function AddToLibraryForm() {
                   setEndGcode(value)
                   setSelectedEjectionCodeId('custom')
                 }}
-                placeholder="G28 X Y&#10;M84"
+                placeholder="G90&#10;M211 X0 Y0 Z0&#10;G1 X60 Z1 F6000&#10;G1 Y300 F6000&#10;G1 Y-4 F300&#10;M400&#10;M211 S1"
                 className="h-full min-h-0"
               />
             </div>

@@ -31,6 +31,7 @@ import {
   useTestEjectionCode,
   useUpdateEjectionCode,
 } from '@/hooks'
+import { parseApiErrorMessage } from '@/lib/api'
 import type { EjectionCode } from '@/types'
 
 export function EjectionCodesManager() {
@@ -108,8 +109,8 @@ export function EjectionCodesManager() {
       setIsCreateOpen(false)
       setNewName('')
       setNewGcode('')
-    } catch {
-      toast.error('Failed to create ejection code')
+    } catch (error) {
+      toast.error(parseApiErrorMessage(error, 'Failed to create ejection code'))
     }
   }
 
@@ -119,8 +120,8 @@ export function EjectionCodesManager() {
     try {
       await deleteCode.mutateAsync(code.id)
       toast.success(`Deleted "${code.name}"`)
-    } catch {
-      toast.error('Failed to delete ejection code')
+    } catch (error) {
+      toast.error(parseApiErrorMessage(error, 'Failed to delete ejection code'))
     }
   }
 
@@ -176,8 +177,8 @@ export function EjectionCodesManager() {
       })
       toast.success(`Ejection code "${editedName}" updated`)
       setIsViewOpen(false)
-    } catch {
-      toast.error('Failed to update ejection code')
+    } catch (error) {
+      toast.error(parseApiErrorMessage(error, 'Failed to update ejection code'))
     }
   }
 
@@ -206,7 +207,7 @@ export function EjectionCodesManager() {
       setTestingCode(null)
       setSelectedPrinter('')
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'Failed to send ejection code')
+      toast.error(parseApiErrorMessage(error, 'Failed to send ejection code'))
     }
   }
 
@@ -271,7 +272,7 @@ export function EjectionCodesManager() {
                       <GcodeEditor
                         value={newGcode}
                         onChange={setNewGcode}
-                        placeholder="; Ejection sequence&#10;G28 X Y&#10;M84"
+                        placeholder="; A1 Mini (center ≈ X180 Y180)&#10;G90&#10;M211 X0 Y0 Z0&#10;G1 X60 Z1 F6000&#10;G1 Y300 F6000&#10;G1 Y-4 F300&#10;M400&#10;M211 S1"
                         className="h-full min-h-0"
                       />
                     </div>
@@ -402,7 +403,7 @@ export function EjectionCodesManager() {
                   <GcodeEditor
                     value={editedGcode}
                     onChange={setEditedGcode}
-                    placeholder="; Ejection sequence&#10;G28 X Y&#10;M84"
+                    placeholder="; A1 Mini (center ≈ X180 Y180)&#10;G90&#10;M211 X0 Y0 Z0&#10;G1 X60 Z1 F6000&#10;G1 Y300 F6000&#10;G1 Y-4 F300&#10;M400&#10;M211 S1"
                     className="h-full min-h-0"
                   />
                 </div>

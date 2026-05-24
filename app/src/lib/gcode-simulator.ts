@@ -284,6 +284,11 @@ export function simulateGcode(
         state.absolute = false
         break
 
+      case 'G20':
+      case 'G21':
+        // Units (inches / mm) — preview always uses mm; no motion.
+        break
+
       case 'G92': {
         if (params.has('X')) state.x = params.get('X')!
         if (params.has('Y')) state.y = params.get('Y')!

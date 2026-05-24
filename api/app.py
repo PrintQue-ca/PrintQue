@@ -116,8 +116,8 @@ def serve_frontend_assets(filename):
         return send_from_directory(assets_folder, filename)
     return '', 404
 
-@app.route('/', defaults={'path': ''})
-@app.route('/<path:path>')
+@app.route('/', defaults={'path': ''}, endpoint='index')
+@app.route('/<path:path>', endpoint='index')
 def serve_frontend(path):
     """Serve React frontend - SPA catch-all route"""
     # Skip API routes and socket.io

@@ -1,13 +1,13 @@
-from flask import render_template, request, redirect, url_for, flash, jsonify, make_response
+from flask import request, redirect, url_for, flash, jsonify, make_response
+from services import state
 from services.state import (
     ReadLock, WriteLock, SafeLock, printers_rwlock, PRINTERS,
-    orders_lock, ORDERS, filament_lock, TOTAL_FILAMENT_CONSUMPTION,
-    save_data, load_data, PRINTERS_FILE, QUEUE_FILE, TOTAL_FILAMENT_FILE,
+    orders_lock, ORDERS, filament_lock,
+    save_data, PRINTERS_FILE, QUEUE_FILE, TOTAL_FILAMENT_FILE,
     sanitize_group_name, apply_ejection_fields_to_order,
 )
 from services.default_settings import load_default_settings
 import os
-import uuid
 import logging
 from datetime import datetime
 import csv
@@ -19,121 +19,6 @@ import shutil
 
 def register_misc_routes(app, socketio):
     """Register miscellaneous routes for the Flask app"""
-
-    @app.route("/")
-    def index():
-        """Main dashboard page - serves React frontend or legacy templates"""
-        import sys
-        from flask import send_file
-
-        # Determine base directory for packaged vs development mode
-        if getattr(sys, 'frozen', False):
-            base_dir = sys._MEIPASS
-        else:
-            base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-
-        # Check if React frontend exists (packaged build)
-        frontend_folder = os.path.join(base_dir, 'frontend_dist')
-        if os.path.exists(frontend_folder):
-            # Serve React frontend - try index.html or _shell.html (TanStack)
-            for html_file in ['index.html', '_shell.html']:
-                html_path = os.path.join(frontend_folder, html_file)
-                if os.path.exists(html_path):
-                    return send_file(html_path)
-
-        # Fallback to legacy template rendering
-        # Get filament data
-        with SafeLock(filament_lock):
-            filament_data = load_data(TOTAL_FILAMENT_FILE, {"total_filament_used_g": 0})
-            total_filament_kg = filament_data.get("total_filament_used_g", 0) / 1000
-
-        # Get active orders
-        with SafeLock(orders_lock):
-            active_orders = [o for o in ORDERS if not o.get('deleted', False)]
-            logging.debug(f"Rendering index. Printers: {len(PRINTERS)}, Active orders: {len(active_orders)}, Total orders: {len(ORDERS)}, Loaded TOTAL_FILAMENT_CONSUMPTION: {TOTAL_FILAMENT_CONSUMPTION}")
-
-        # Get printer groups
-        with ReadLock(printers_rwlock):
-            groups = sorted(set(str(p.get('group', 'Default')) for p in PRINTERS)) if PRINTERS else ['Default']
-
-        # Load default settings for the template
-        default_settings = load_default_settings()
-        default_end_gcode = default_settings.get('default_end_gcode', '')
-        default_ejection_enabled = default_settings.get('default_ejection_enabled', False)
-
-        # Count printers
-        with ReadLock(printers_rwlock):
-            printer_count = len(PRINTERS)
-
-        return render_template("index.html",
-                              printers=PRINTERS,
-                              total_filament=total_filament_kg,
-                              total_filament_consumption=total_filament_kg,
-                              orders=active_orders,
-                              default_end_gcode=default_end_gcode,
-                              default_ejection_enabled=default_ejection_enabled,
-                              last_refresh=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                              total_printers=len(PRINTERS),
-                              groups=groups,
-                              license_tier='OPEN_SOURCE',
-                              license_valid=True,
-                              max_printers=-1,
-                              printer_count=printer_count)
-
-    @app.route("/printers")
-    def printers():
-        """Printers management page"""
-        with ReadLock(printers_rwlock):
-            printer_count = len(PRINTERS)
-
-        return render_template("printers.html",
-                              printers=PRINTERS,
-                              license_tier='OPEN_SOURCE',
-                              license_valid=True,
-                              max_printers=-1,
-                              printer_count=printer_count)
-
-    @app.route("/stats")
-    def stats():
-        """Statistics page"""
-        with SafeLock(filament_lock):
-            filament_data = load_data(TOTAL_FILAMENT_FILE, {"total_filament_used_g": 0})
-            total_filament_kg = filament_data.get("total_filament_used_g", 0) / 1000
-
-        with ReadLock(printers_rwlock):
-            printer_stats = {
-                'total': len(PRINTERS),
-                'online': len([p for p in PRINTERS if p['state'] != 'OFFLINE']),
-                'printing': len([p for p in PRINTERS if p['state'] == 'PRINTING']),
-                'ready': len([p for p in PRINTERS if p['state'] == 'READY'])
-            }
-
-        with SafeLock(orders_lock):
-            order_stats = {
-                'total': len(ORDERS),
-                'active': len([o for o in ORDERS if not o.get('deleted', False)]),
-                'fulfilled': len([o for o in ORDERS if o.get('status') == 'fulfilled']),
-                'deleted': len([o for o in ORDERS if o.get('deleted', False)])
-            }
-
-        return render_template("stats.html",
-                              printer_stats=printer_stats,
-                              order_stats=order_stats,
-                              total_filament=total_filament_kg)
-
-    @app.route("/bulk_upload")
-    def bulk_upload():
-        """Render the bulk upload page"""
-        # Get available printer groups
-        groups = None
-        with ReadLock(printers_rwlock):
-            groups = sorted(set(str(p.get('group', 'Default')) for p in PRINTERS)) if PRINTERS else ['Default']
-
-        return render_template("bulk_upload.html",
-                              license_tier='OPEN_SOURCE',
-                              license_valid=True,
-                              max_printers=-1,
-                              available_groups=groups)
 
     @app.route('/clear_all_data', methods=['POST'])
     def clear_all_data():
@@ -149,9 +34,8 @@ def register_misc_routes(app, socketio):
                 save_data(QUEUE_FILE, ORDERS)
 
             with SafeLock(filament_lock, 'clear_all_data'):
-                global TOTAL_FILAMENT_CONSUMPTION
-                TOTAL_FILAMENT_CONSUMPTION = 0
-                save_data(TOTAL_FILAMENT_FILE, {"total_filament_used_g": TOTAL_FILAMENT_CONSUMPTION})
+                state.TOTAL_FILAMENT_CONSUMPTION = 0
+                save_data(TOTAL_FILAMENT_FILE, {"total_filament_used_g": state.TOTAL_FILAMENT_CONSUMPTION})
 
             flash("All data cleared successfully")
             return redirect(url_for('index'))
@@ -209,25 +93,6 @@ def register_misc_routes(app, socketio):
             logging.error(f"Error exporting orders: {str(e)}")
             flash(f"Error exporting orders: {str(e)}")
             return redirect(url_for('index'))
-
-    @app.route('/system-info')
-    def system_info():
-        """Display system information including Machine ID"""
-        import platform
-
-        # Generate a unique machine ID
-        system_info_str = platform.node() + platform.machine() + platform.processor()
-        machine_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, system_info_str))
-
-        info = {
-            'machine_id': machine_id,
-            'hostname': platform.node(),
-            'system': platform.system(),
-            'release': platform.release(),
-            'processor': platform.processor()
-        }
-
-        return render_template('system_info.html', info=info)
 
     @app.route('/api/bulk_print', methods=['POST'])
     def api_bulk_print():

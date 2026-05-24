@@ -8,10 +8,10 @@ import {
   SheetTitle,
 } from '@/components/ui/sheet'
 import {
-  formatQueueJobProgressSummary,
+  formatQueueJobActivitySummary,
   getCurrentCopyLabel,
+  getQueueJobActivity,
   getQueueJobDisplayName,
-  getQueueJobProgress,
 } from '@/lib/printer-queue-job'
 import type { Printer, QueueJob, QueueJobStatus } from '@/types'
 
@@ -20,6 +20,8 @@ interface QueueJobDetailSheetProps {
   onOpenChange: (open: boolean) => void
   printer: Printer
   job: QueueJob | null
+  /** All printers for farm-wide completed / in-progress counts */
+  printers?: Printer[]
 }
 
 const queueStatusLabels: Record<QueueJobStatus, string> = {
@@ -57,11 +59,13 @@ export function QueueJobDetailSheet({
   onOpenChange,
   printer,
   job,
+  printers,
 }: QueueJobDetailSheetProps) {
   const currentFileName =
     typeof printer.current_file === 'string' ? printer.current_file : 'Unknown file'
   const jobName = job ? getQueueJobDisplayName(job) : 'Unknown queue job'
-  const progress = job ? getQueueJobProgress(job) : null
+  const printersForActivity = printers?.length ? printers : [printer]
+  const activity = job ? getQueueJobActivity(job, printersForActivity) : null
   const copyLabel = job ? getCurrentCopyLabel(job, printer.status) : null
   const groupsLabel = job?.groups?.length ? job.groups.map((g) => String(g)).join(', ') : '—'
 
@@ -101,12 +105,13 @@ export function QueueJobDetailSheet({
             )}
           </Section>
 
-          {job && progress && (
+          {job && activity && (
             <Section title="Order progress">
-              <DetailRow label="Total" value={progress.total} />
-              <DetailRow label="Started" value={progress.started} />
-              <DetailRow label="Remaining" value={progress.remaining} />
-              <DetailRow label="Summary" value={formatQueueJobProgressSummary(job)} />
+              <DetailRow label="Total" value={activity.total} />
+              <DetailRow label="Completed" value={activity.completed} />
+              <DetailRow label="In progress" value={activity.inProgress} />
+              <DetailRow label="Pending" value={activity.pending} />
+              <DetailRow label="Summary" value={formatQueueJobActivitySummary(activity)} />
               {copyLabel && <p className="text-sm text-muted-foreground">{copyLabel}</p>}
             </Section>
           )}

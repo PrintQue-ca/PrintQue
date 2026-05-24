@@ -94,6 +94,7 @@ export interface QueueJob {
   ejection_enabled?: boolean
   ejection_code_id?: string
   ejection_code_name?: string
+  end_gcode?: string
   cooldown_temp?: number | null
   last_error?: string | null
   last_error_at?: string | null
@@ -136,17 +137,6 @@ export interface Stats {
   active_prints: number
   idle_printers: number
   completed_today: number
-}
-
-// License types
-export type LicenseTier = 'free' | 'basic' | 'pro' | 'enterprise'
-
-export interface License {
-  valid: boolean
-  tier: LicenseTier
-  max_printers: number
-  expires_at?: string
-  machine_id?: string
 }
 
 // Ejection status

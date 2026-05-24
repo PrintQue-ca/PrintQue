@@ -1,6 +1,7 @@
 export * from './useApiConnection'
 export * from './useLibrary'
 export * from './useOrders'
+export * from './usePaginatedSearch'
 export * from './usePrinters'
 export * from './useQueue'
 export * from './useStats'

@@ -1,4 +1,4 @@
-from flask import render_template, jsonify
+from flask import jsonify
 from datetime import datetime
 import os
 import json
@@ -9,11 +9,6 @@ import traceback
 
 def register_history_routes(app, socketio):
     """Register print history related routes"""
-
-    @app.route('/print_history')
-    def print_history():
-        """Render the print history page"""
-        return render_template('print_history.html')
 
     @app.route('/api/print_history')
     def api_print_history():

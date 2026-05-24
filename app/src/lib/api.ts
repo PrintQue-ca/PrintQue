@@ -1,5 +1,18 @@
 const API_BASE = import.meta.env.DEV ? 'http://localhost:5000/api/v1' : '/api/v1'
 
+/** Extract a user-facing message from a failed API client Error (JSON or plain text). */
+export function parseApiErrorMessage(error: unknown, fallback: string): string {
+  if (!(error instanceof Error) || !error.message) {
+    return fallback
+  }
+  try {
+    const parsed = JSON.parse(error.message) as { error?: string; message?: string }
+    return parsed.error ?? parsed.message ?? error.message
+  } catch {
+    return error.message
+  }
+}
+
 export const api = {
   get: async <T>(endpoint: string): Promise<T> => {
     const res = await fetch(`${API_BASE}${endpoint}`)

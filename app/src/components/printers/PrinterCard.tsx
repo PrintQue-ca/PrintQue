@@ -42,6 +42,7 @@ import { QueueJobDetailSheet } from './QueueJobDetailSheet'
 interface PrinterCardProps {
   printer: Printer
   queueJobs?: QueueJob[]
+  printers?: Printer[]
 }
 
 const statusColors: Record<string, string> = {
@@ -70,7 +71,7 @@ const statusLabels: Record<string, string> = {
   OFFLINE: 'Offline',
 }
 
-export function PrinterCard({ printer, queueJobs = [] }: PrinterCardProps) {
+export function PrinterCard({ printer, queueJobs = [], printers = [] }: PrinterCardProps) {
   const [editOpen, setEditOpen] = useState(false)
   const [jobSheetOpen, setJobSheetOpen] = useState(false)
   const stopPrint = useStopPrint()
@@ -146,6 +147,7 @@ export function PrinterCard({ printer, queueJobs = [] }: PrinterCardProps) {
     <PrinterActiveJobButton
       printer={printer}
       job={queueJob}
+      printers={printers}
       onClick={() => setJobSheetOpen(true)}
     />
   ) : null
@@ -370,6 +372,7 @@ export function PrinterCard({ printer, queueJobs = [] }: PrinterCardProps) {
             onOpenChange={setJobSheetOpen}
             printer={printer}
             job={queueJob}
+            printers={printers}
           />
         )}
 

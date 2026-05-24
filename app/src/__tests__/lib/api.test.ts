@@ -3,7 +3,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { api } from '../../lib/api'
+import { api, parseApiErrorMessage } from '../../lib/api'
 
 describe('API Client', () => {
   beforeEach(() => {
@@ -111,6 +111,20 @@ describe('API Client', () => {
           method: 'DELETE',
         })
       )
+    })
+  })
+
+  describe('parseApiErrorMessage', () => {
+    it('extracts error field from JSON API responses', () => {
+      const message = parseApiErrorMessage(
+        new Error(JSON.stringify({ success: false, error: 'Cannot delete: blocked.' })),
+        'Fallback'
+      )
+      expect(message).toBe('Cannot delete: blocked.')
+    })
+
+    it('returns fallback for non-Error values', () => {
+      expect(parseApiErrorMessage(undefined, 'Fallback')).toBe('Fallback')
     })
   })
 

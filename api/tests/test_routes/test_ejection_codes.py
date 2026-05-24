@@ -131,4 +131,20 @@ class TestDeleteEjectionCode:
             assert response.status_code == 409
             data = response.get_json()
             assert data['success'] is False
-            assert 'active order' in data['error'].lower()
+            assert 'queue job' in data['error'].lower()
+
+    def test_delete_code_blocked_when_default_setting(self, client, mock_ejection_codes):
+        """Cannot delete a preset selected as the default ejection setting."""
+        codes = mock_ejection_codes.copy()
+        with patch('routes.ejection_codes.EJECTION_CODES', codes), \
+             patch('services.state.QUEUE_JOBS', []), \
+             patch('services.state.LIBRARY_ITEMS', []), \
+             patch('services.default_settings.load_default_settings', return_value={
+                 'default_ejection_code_id': 'ejection-1',
+             }):
+            response = client.delete('/api/v1/ejection-codes/ejection-1')
+
+            assert response.status_code == 409
+            data = response.get_json()
+            assert data['success'] is False
+            assert 'default ejection setting' in data['error'].lower()

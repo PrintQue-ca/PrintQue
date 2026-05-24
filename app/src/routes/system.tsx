@@ -5,7 +5,9 @@ import {
   Copy,
   Cpu,
   FileText,
+  Github,
   HardDrive,
+  Heart,
   Loader2,
   Power,
   Server,
@@ -13,6 +15,7 @@ import {
 } from 'lucide-react'
 import { useState } from 'react'
 import { toast } from 'sonner'
+import { DiscordIcon } from '@/components/icons/DiscordIcon'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import {
@@ -40,6 +43,12 @@ import {
   useShutdown,
   useSystemInfo,
 } from '@/hooks'
+import {
+  DISCORD_INVITE_URL,
+  GITHUB_CONTRIBUTING_URL,
+  GITHUB_ISSUES_URL,
+  GITHUB_REPO_URL,
+} from '@/lib/community-links'
 
 export const Route = createFileRoute('/system')({ component: SystemPage })
 
@@ -171,6 +180,60 @@ function SystemPage() {
             Features include automatic print job distribution, real-time status monitoring,
             auto-ejection support, and printer grouping for organized workflow management.
           </p>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Heart className="h-5 w-5 text-red-500" />
+            Support the Project
+          </CardTitle>
+          <CardDescription>PrintQue is free and open source software</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <div className="space-y-4">
+            <p className="text-muted-foreground">
+              PrintQue is developed and maintained by the community. If you find it useful, consider
+              supporting the project:
+            </p>
+            <div className="flex flex-wrap gap-4">
+              <a
+                href={GITHUB_REPO_URL}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-2 px-4 py-2 rounded-md bg-secondary hover:bg-secondary/80 transition-colors"
+              >
+                <Github className="h-4 w-4" />
+                Star on GitHub
+              </a>
+              <a
+                href={GITHUB_ISSUES_URL}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-2 px-4 py-2 rounded-md bg-secondary hover:bg-secondary/80 transition-colors"
+              >
+                Report Issues
+              </a>
+              <a
+                href={GITHUB_CONTRIBUTING_URL}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-2 px-4 py-2 rounded-md bg-secondary hover:bg-secondary/80 transition-colors"
+              >
+                Contribute
+              </a>
+              <a
+                href={DISCORD_INVITE_URL}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-2 px-4 py-2 rounded-md bg-secondary hover:bg-secondary/80 transition-colors"
+              >
+                <DiscordIcon className="h-4 w-4" />
+                Join Discord
+              </a>
+            </div>
+          </div>
         </CardContent>
       </Card>
     </div>
