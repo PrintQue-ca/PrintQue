@@ -34,6 +34,7 @@ function isQueueMutationInFlight(queryClient: QueryClient): boolean {
   return (
     queryClient.isMutating({ mutationKey: ['reorderQueueJob'] }) > 0 ||
     queryClient.isMutating({ mutationKey: ['updateQueueQuantity'] }) > 0 ||
+    queryClient.isMutating({ mutationKey: ['updateQueuePaused'] }) > 0 ||
     queryClient.isMutating({ mutationKey: ['deleteQueueJob'] }) > 0 ||
     queryClient.isMutating({ mutationKey: ['bulkDeleteQueueJob'] }) > 0
   )

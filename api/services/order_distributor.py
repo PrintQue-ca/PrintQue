@@ -57,15 +57,21 @@ def _printer_available_for_distribution(printer: dict) -> bool:
     return True
 
 
+def _job_needs_distribution(job: dict) -> bool:
+    """True if a queue job still has unpaused copies waiting for printers."""
+    return (
+        not job.get('deleted', False)
+        and not job.get('paused', False)
+        and job.get('status') != 'completed'
+        and job.get('sent', 0) < job.get('quantity', 1)
+    )
+
+
 def has_pending_queue_copies() -> bool:
     """True if any queue job still needs more copies (same filter as distribute_orders_async)."""
     with SafeLock(orders_lock):
         for job in QUEUE_JOBS:
-            if (
-                not job.get('deleted', False)
-                and job.get('status') != 'completed'
-                and job.get('sent', 0) < job.get('quantity', 1)
-            ):
+            if _job_needs_distribution(job):
                 return True
     return False
 
@@ -178,10 +184,7 @@ async def distribute_orders_async(socketio, app, task_id=None, batch_size=10):
 
     active_orders = []
     with SafeLock(orders_lock):
-        active_orders = [o.copy() for o in QUEUE_JOBS
-                        if not o.get('deleted', False)
-                        and o['status'] != 'completed'
-                        and o['sent'] < o['quantity']]
+        active_orders = [o.copy() for o in QUEUE_JOBS if _job_needs_distribution(o)]
         logging.debug(f"Active orders: {[(o['id'], o['sent'], o['quantity']) for o in active_orders]}")
 
     if not active_orders:

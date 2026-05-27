@@ -60,6 +60,7 @@ export interface LibraryItem {
   filepath?: string
   groups: (number | string)[]
   filament_g?: number
+  estimated_print_seconds?: number | null
   ejection_enabled?: boolean
   ejection_code_id?: string
   ejection_code_name?: string
@@ -88,11 +89,13 @@ export interface QueueJob {
   quantity: number
   sent: number
   status: QueueJobStatus
+  paused?: boolean
   groups: (number | string)[]
+  estimated_print_seconds?: number | null
   created_at?: string
   filepath?: string
   ejection_enabled?: boolean
-  ejection_code_id?: string
+  ejection_code_id?: string | null
   ejection_code_name?: string
   end_gcode?: string
   cooldown_temp?: number | null

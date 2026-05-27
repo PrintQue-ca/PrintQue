@@ -28,6 +28,7 @@ import {
   useUpdateLibraryEjection,
   useUpdateLibraryItem,
 } from '@/hooks'
+import { parseApiErrorMessage } from '@/lib/api'
 import type { LibraryItem } from '@/types'
 
 interface LibraryEditDialogProps {
@@ -112,8 +113,7 @@ export function LibraryEditDialog({ item, open, onOpenChange }: LibraryEditDialo
       await replaceFile.mutateAsync({ id: item.id, file })
       toast.success('Print file replaced')
     } catch (e) {
-      const msg = e instanceof Error ? e.message : 'Failed to replace file'
-      toast.error(msg.includes('409') ? 'Cannot replace file while prints are in progress' : msg)
+      toast.error(parseApiErrorMessage(e, 'Failed to replace file'))
     }
   }
 

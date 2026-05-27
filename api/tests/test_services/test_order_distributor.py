@@ -46,6 +46,15 @@ class TestPendingDistributionNeeded:
              patch('services.order_distributor.BAMBU_PRINTER_STATES', {}):
             assert pending_distribution_needed() is True
 
+    def test_paused_partial_job_ready_bambu(self):
+        printers = [make_bambu_printer()]
+        jobs = [make_partial_job()]
+        jobs[0]['paused'] = True
+        with patch('services.order_distributor.QUEUE_JOBS', jobs), \
+             patch('services.order_distributor.PRINTERS', printers), \
+             patch('services.order_distributor.BAMBU_PRINTER_STATES', {}):
+            assert pending_distribution_needed() is False
+
     def test_partial_job_finished_printer(self):
         printers = [make_bambu_printer(state='FINISHED')]
         jobs = [make_partial_job()]

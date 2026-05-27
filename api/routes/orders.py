@@ -9,7 +9,12 @@ from services.state import (
     validate_gcode_file, sanitize_group_name,
     apply_ejection_fields_to_order, auto_save_ejection_code,
 )
-from services.printer_manager import extract_filament_from_file, start_background_distribution, prepare_printer_data_for_broadcast
+from services.printer_manager import (
+    extract_filament_from_file,
+    extract_print_time_from_file,
+    start_background_distribution,
+    prepare_printer_data_for_broadcast,
+)
 from services.default_settings import load_default_settings, save_default_settings
 from utils.logger import debug_log
 
@@ -72,6 +77,7 @@ def register_order_routes(app, socketio):
         os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
         file.save(filepath)
         filament_g = extract_filament_from_file(filepath)
+        estimated_print_seconds = extract_print_time_from_file(filepath)
 
         with SafeLock(orders_lock):
             # Find the highest integer ID from existing orders
@@ -96,6 +102,7 @@ def register_order_routes(app, socketio):
                 'sent': 0,
                 'status': 'pending',
                 'filament_g': filament_g,
+                'estimated_print_seconds': estimated_print_seconds,
                 'groups': groups,  # Now contains sanitized strings instead of integers
                 'cooldown_temp': cooldown_temp,  # Bed temp to wait for before ejection (Bambu only)
                 'from_new_orders': True

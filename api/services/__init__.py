@@ -14,7 +14,7 @@ from .state import (
 from .printer_manager import (
     start_background_tasks, close_connection_pool,
     get_minutes_since_finished, distribute_orders_async,
-    extract_filament_from_file, start_background_distribution,
+    extract_filament_from_file, extract_print_time_from_file, start_background_distribution,
     send_print_to_printer, prepare_printer_data_for_broadcast,
     trigger_mass_ejection_for_finished_printers
 )
@@ -35,7 +35,7 @@ __all__ = [
     # Printer manager exports
     "start_background_tasks", "close_connection_pool",
     "get_minutes_since_finished", "distribute_orders_async",
-    "extract_filament_from_file", "start_background_distribution",
+    "extract_filament_from_file", "extract_print_time_from_file", "start_background_distribution",
     "send_print_to_printer", "prepare_printer_data_for_broadcast",
     "trigger_mass_ejection_for_finished_printers",
     # Default settings exports

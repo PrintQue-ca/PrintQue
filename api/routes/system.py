@@ -12,7 +12,11 @@ import logging
 from datetime import datetime
 import csv
 import io
-from services.printer_manager import start_background_distribution, extract_filament_from_file
+from services.printer_manager import (
+    start_background_distribution,
+    extract_filament_from_file,
+    extract_print_time_from_file,
+)
 from werkzeug.utils import secure_filename
 import shutil
 
@@ -424,6 +428,7 @@ def register_misc_routes(app, socketio):
 
                     # Extract filament usage
                     filament_g = extract_filament_from_file(upload_path)
+                    estimated_print_seconds = extract_print_time_from_file(upload_path)
 
                     # Process ejection settings
                     ejection_enabled = job.get('ejection_enabled', False)
@@ -470,6 +475,7 @@ def register_misc_routes(app, socketio):
                             'sent': 0,
                             'status': 'pending',
                             'filament_g': filament_g,
+                            'estimated_print_seconds': estimated_print_seconds,
                             'groups': job.get('printer_groups', ['Default']),
                             'extra_data': extra_data,  # Store all extra columns
                             'source': 'csv_upload',

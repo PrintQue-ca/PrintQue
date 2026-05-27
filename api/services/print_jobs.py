@@ -23,35 +23,10 @@ from services.bambu_handler import (
     resume_bambu_print,
     clear_bambu_print_assignment,
 )
+from services.filename_matching import match_shortened_filename
 from services.library_queue import clear_queue_job_error
 from utils.retry_utils import retry_async
 from utils.logger import log_state_transition
-
-
-def match_shortened_filename(full_filename, shortened_filename):
-    """Match potentially shortened filenames (for 8.3 FAT compatibility)"""
-    if not full_filename or not shortened_filename:
-        return False
-
-    full_base = os.path.splitext(os.path.basename(full_filename))[0]
-    short_base = os.path.splitext(os.path.basename(shortened_filename))[0]
-
-    if full_base.upper() == short_base.upper():
-        return True
-
-    if len(short_base) >= 6 and short_base[:6].upper() == full_base[:6].upper() and '~' in short_base:
-        return True
-
-    if len(short_base) >= 3 and full_base.upper().startswith(short_base[:3].upper()):
-        return True
-
-    if len(short_base) >= 8 and short_base[:8].upper() == full_base[:8].upper():
-        return True
-
-    if short_base.upper() in full_base.upper() or full_base.upper() in short_base.upper():
-        return True
-
-    return False
 
 
 async def verify_print_started(session, printer, filename, headers, max_attempts=3, initial_delay=20):

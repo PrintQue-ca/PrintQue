@@ -21,7 +21,7 @@ def sample_gcode_in_uploads(app, temp_data_dir):
     uploads = app.config['UPLOAD_FOLDER']
     path = os.path.join(uploads, 'test_part.gcode')
     with open(path, 'w', encoding='utf-8') as f:
-        f.write('; filament used [g] = 5.0\nG28\n')
+        f.write('; filament used [g] = 5.0\n;TIME:493\nG28\n')
     return path
 
 
@@ -50,6 +50,7 @@ class TestLibraryAPI:
         listed = client.get('/api/v1/library').get_json()
         assert len(listed) == 1
         assert listed[0]['name'] == 'Test Part'
+        assert listed[0]['estimated_print_seconds'] == 493
 
     def test_patch_library_item(self, client, sample_gcode_in_uploads):
         with open(sample_gcode_in_uploads, 'rb') as f:
@@ -120,3 +121,35 @@ class TestLibraryAPI:
         for item in client.get('/api/v1/library').get_json():
             assert item['groups'] == ['GroupA']
             assert item['ejection_enabled'] is True
+
+    def test_replace_file_updates_print_time_and_pending_queue_snapshot(
+        self,
+        client,
+        app,
+        sample_gcode_in_uploads,
+    ):
+        with open(sample_gcode_in_uploads, 'rb') as f:
+            create_response = client.post(
+                '/api/v1/library',
+                data={'file': (f, 'test_part.gcode')},
+                content_type='multipart/form-data',
+            )
+        item_id = create_response.get_json()['library_item_id']
+        client.post('/api/v1/queue', json={'library_item_id': item_id, 'quantity': 2})
+
+        replacement_path = os.path.join(app.config['UPLOAD_FOLDER'], 'replacement.gcode')
+        with open(replacement_path, 'w', encoding='utf-8') as f:
+            f.write('; filament used [g] = 2.0\n;TIME:120\nG28\n')
+
+        with open(replacement_path, 'rb') as f:
+            response = client.put(
+                f'/api/v1/library/{item_id}/file',
+                data={'file': (f, 'replacement.gcode')},
+                content_type='multipart/form-data',
+            )
+
+        assert response.status_code == 200
+        assert response.get_json()['item']['estimated_print_seconds'] == 120
+
+        jobs = client.get('/api/v1/queue').get_json()
+        assert jobs[0]['estimated_print_seconds'] == 120

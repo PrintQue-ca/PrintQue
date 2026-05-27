@@ -25,7 +25,7 @@ from services.library_queue import (
     LIBRARY_BULK_UPDATE_FIELDS,
     _next_int_id,
 )
-from services.printer_manager import extract_filament_from_file
+from services.printer_manager import extract_filament_from_file, extract_print_time_from_file
 from services.state import (
     LIBRARY_ITEMS,
     LIBRARY_FILE,
@@ -105,6 +105,7 @@ def register_library_routes(app, socketio):
             filepath = os.path.join(upload_folder, filename)
             file.save(filepath)
             filament_g = extract_filament_from_file(filepath)
+            estimated_print_seconds = extract_print_time_from_file(filepath)
             now = datetime.now().isoformat()
 
             with SafeLock(orders_lock):
@@ -115,6 +116,7 @@ def register_library_routes(app, socketio):
                     'name': order_name or None,
                     'filepath': filepath,
                     'filament_g': filament_g,
+                    'estimated_print_seconds': estimated_print_seconds,
                     'groups': groups,
                     'cooldown_temp': cooldown_temp,
                     'created_at': now,
@@ -323,6 +325,7 @@ def register_library_routes(app, socketio):
             filepath = os.path.join(upload_folder, filename)
             file.save(filepath)
             filament_g = extract_filament_from_file(filepath)
+            estimated_print_seconds = extract_print_time_from_file(filepath)
 
             with SafeLock(orders_lock):
                 item = find_library_item(LIBRARY_ITEMS, item_id)
@@ -336,6 +339,7 @@ def register_library_routes(app, socketio):
                 item['filename'] = filename
                 item['filepath'] = filepath
                 item['filament_g'] = filament_g
+                item['estimated_print_seconds'] = estimated_print_seconds
                 item['updated_at'] = datetime.now().isoformat()
                 update_pending_queue_snapshots_for_library(item, QUEUE_JOBS)
                 save_data(LIBRARY_FILE, LIBRARY_ITEMS)
@@ -351,6 +355,7 @@ def register_library_routes(app, socketio):
             export_fields = [
                 'id', 'filename', 'filepath', 'name', 'groups',
                 'ejection_enabled', 'ejection_code_id', 'cooldown_temp', 'filament_g',
+                'estimated_print_seconds',
             ]
             with SafeLock(orders_lock):
                 items = []
@@ -412,6 +417,7 @@ def register_library_routes(app, socketio):
                                 'filepath': filepath,
                                 'name': row.get('name'),
                                 'filament_g': row.get('filament_g', 0),
+                                'estimated_print_seconds': row.get('estimated_print_seconds'),
                                 'groups': groups,
                                 'cooldown_temp': row.get('cooldown_temp'),
                                 'created_at': now,
@@ -461,6 +467,7 @@ def register_library_routes(app, socketio):
                         upload_path = os.path.join(upload_folder, upload_filename)
                         shutil.copy2(full_path, upload_path)
                         filament_g = extract_filament_from_file(upload_path)
+                        estimated_print_seconds = extract_print_time_from_file(upload_path)
                         with SafeLock(orders_lock):
                             item_id = _next_int_id(LIBRARY_ITEMS)
                             now = datetime.now().isoformat()
@@ -469,6 +476,7 @@ def register_library_routes(app, socketio):
                                 'filename': upload_filename,
                                 'filepath': upload_path,
                                 'filament_g': filament_g,
+                                'estimated_print_seconds': estimated_print_seconds,
                                 'groups': groups,
                                 'created_at': now,
                                 'updated_at': now,

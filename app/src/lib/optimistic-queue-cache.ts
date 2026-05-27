@@ -7,11 +7,11 @@ export type QueueEjectionPatch = {
   cooldown_temp?: number | null
 }
 
-/** Patch ejection fields on a queue job in cache immediately; returns snapshot for rollback. */
-export async function optimisticPatchQueueJobEjection(
+/** Patch fields on a queue job in cache immediately; returns snapshot for rollback. */
+export async function optimisticPatchQueueJob(
   queryClient: QueryClient,
   id: number,
-  patch: Partial<QueueEjectionPatch>
+  patch: Partial<QueueJob>
 ): Promise<{ previous: QueueJob[] | undefined }> {
   await queryClient.cancelQueries({ queryKey: ['queue'] })
   const previous = queryClient.getQueryData<QueueJob[]>(['queue'])
@@ -22,6 +22,15 @@ export async function optimisticPatchQueueJobEjection(
     )
   }
   return { previous }
+}
+
+/** Patch ejection fields on a queue job in cache immediately; returns snapshot for rollback. */
+export async function optimisticPatchQueueJobEjection(
+  queryClient: QueryClient,
+  id: number,
+  patch: Partial<QueueEjectionPatch>
+): Promise<{ previous: QueueJob[] | undefined }> {
+  return optimisticPatchQueueJob(queryClient, id, patch)
 }
 
 /** Remove job(s) from the queue cache immediately; returns snapshot for rollback. */

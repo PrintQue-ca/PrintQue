@@ -62,6 +62,63 @@ class TestDataPersistence:
         with open(PRINTERS_FILE, encoding='utf-8') as f:
             assert json.load(f) == []
 
+    def test_atomic_printers_save_leaves_valid_file_on_success(self, temp_data_dir):
+        """Printer saves use the atomic path and leave valid JSON behind."""
+        from services.state import PRINTERS_FILE, save_data
+
+        printers = [{'name': 'test-printer', 'ip': '10.0.0.1'}]
+
+        save_data(PRINTERS_FILE, printers)
+
+        with open(PRINTERS_FILE, encoding='utf-8') as f:
+            assert json.load(f) == printers
+        assert os.path.getsize(PRINTERS_FILE) > 0
+
+    def test_atomic_printers_save_creates_bak(self, temp_data_dir):
+        """The previous valid printers file is kept as a recovery backup."""
+        from services.state import PRINTERS_FILE, save_data
+
+        first = [{'name': 'first-printer', 'ip': '10.0.0.1'}]
+        second = [{'name': 'second-printer', 'ip': '10.0.0.2'}]
+
+        save_data(PRINTERS_FILE, first)
+        save_data(PRINTERS_FILE, second)
+
+        with open(f"{os.fspath(PRINTERS_FILE)}.bak", encoding='utf-8') as f:
+            assert json.load(f) == first
+        with open(PRINTERS_FILE, encoding='utf-8') as f:
+            assert json.load(f) == second
+
+    def test_load_printers_falls_back_to_bak(self, temp_data_dir):
+        """A corrupt printers file is recovered from printers.json.bak."""
+        from services.state import PRINTERS_FILE, load_data
+
+        printers = [{'name': 'backup-printer', 'ip': '10.0.0.3'}]
+        printers_path = os.fspath(PRINTERS_FILE)
+
+        with open(printers_path, 'w', encoding='utf-8') as f:
+            f.write('\x00' * 32)
+        with open(f"{printers_path}.bak", 'w', encoding='utf-8') as f:
+            json.dump(printers, f)
+
+        loaded = load_data(PRINTERS_FILE, [])
+
+        assert loaded == printers
+        with open(PRINTERS_FILE, encoding='utf-8') as f:
+            assert json.load(f) == printers
+
+    def test_empty_printers_guard_works_with_atomic_path(self, temp_data_dir):
+        """The atomic printers path still refuses accidental empty overwrites."""
+        from services.state import PRINTERS_FILE, save_data
+
+        printers = [{'name': 'guarded-printer', 'ip': '10.0.0.4'}]
+
+        save_data(PRINTERS_FILE, printers)
+        save_data(PRINTERS_FILE, [])
+
+        with open(PRINTERS_FILE, encoding='utf-8') as f:
+            assert json.load(f) == printers
+
     def test_load_data_existing_file(self, temp_data_dir):
         """Test loading data from existing file."""
         from services.state import load_data
@@ -84,6 +141,36 @@ class TestDataPersistence:
 
         loaded = load_data(filepath, default)
         assert loaded == default
+
+    def test_relink_orphaned_active_print(self, temp_data_dir):
+        """An active printer with a file but no order_id is linked back to its queue job."""
+        from services.state import PRINTERS, QUEUE_JOBS, relink_orphaned_active_prints
+
+        PRINTERS.clear()
+        QUEUE_JOBS.clear()
+        QUEUE_JOBS.append({
+            'id': 42,
+            'filename': 'part-file.gcode.3mf',
+            'quantity': 2,
+            'sent': 1,
+            'deleted': False,
+        })
+        PRINTERS.append({
+            'name': 'lil',
+            'type': 'bambu',
+            'state': 'PRINTING',
+            'status': 'PRINTING',
+            'file': 'part-file.gcode.3mf',
+            'order_id': None,
+        })
+
+        try:
+            assert relink_orphaned_active_prints() == 1
+            assert PRINTERS[0]['order_id'] == 42
+            assert PRINTERS[0]['from_queue'] is True
+        finally:
+            PRINTERS.clear()
+            QUEUE_JOBS.clear()
 
     def test_load_data_invalid_json_returns_default(self, temp_data_dir):
         """Test loading invalid JSON returns default."""

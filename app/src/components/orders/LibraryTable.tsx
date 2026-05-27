@@ -14,6 +14,7 @@ import { ResizableTable, ResizableTableHeadCell } from '@/components/ui/resizabl
 import { TableBody, TableCell, TableHeader, TableRow } from '@/components/ui/table'
 import { TruncatedText } from '@/components/ui/truncated-text'
 import { useBulkDeleteLibrary, useDeleteLibraryItem } from '@/hooks'
+import { formatPrintDuration } from '@/lib/format-duration'
 import { resizableTableDefaultColumn, useFitTableColumns } from '@/lib/resizable-table'
 import type { LibraryItem } from '@/types'
 import { BulkEnqueueDialog } from './BulkEnqueueDialog'
@@ -149,6 +150,16 @@ export function LibraryTable({
           )
         },
       }),
+      columnHelper.accessor('estimated_print_seconds', {
+        header: 'Est. time',
+        size: 100,
+        minSize: 80,
+        cell: (info) => (
+          <span className="text-sm text-muted-foreground tabular-nums">
+            {formatPrintDuration(info.getValue())}
+          </span>
+        ),
+      }),
       columnHelper.display({
         id: 'ejection',
         header: 'Ejection',
@@ -224,6 +235,7 @@ export function LibraryTable({
       select: 0.5,
       name: 3,
       groups: 1.2,
+      estimated_print_seconds: 0.9,
       ejection: 1,
       actions: 0.8,
     }),

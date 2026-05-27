@@ -17,6 +17,7 @@ from services.state import (
     get_printer_ejection_state, clear_printer_ejection_state,
     resolve_ejection_gcode,
     increment_queue_sent_count,
+    relink_orphaned_active_prints,
 )
 from services.default_settings import DEFAULT_EJECTION_GCODE
 from services.library_queue import clear_queue_job_error, record_queue_job_error
@@ -1257,6 +1258,8 @@ async def get_printer_status_async(socketio, app, batch_index=None, batch_size=N
 
     if printers_need_save:
         save_data(PRINTERS_FILE, PRINTERS)
+
+    relink_orphaned_active_prints()
 
     for printer_name, gcode_content in cooling_ejections:
         _complete_cooling_ejection_send(

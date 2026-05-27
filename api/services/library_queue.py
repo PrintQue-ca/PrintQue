@@ -32,6 +32,7 @@ def normalize_groups(groups):
 def normalize_library_item(item):
     item.setdefault('deleted', False)
     item.setdefault('filament_g', 0)
+    item.setdefault('estimated_print_seconds', None)
     item.setdefault('groups', ['Default'])
     item['groups'] = normalize_groups(item.get('groups'))
     item.setdefault('ejection_enabled', False)
@@ -42,9 +43,11 @@ def normalize_library_item(item):
 
 def normalize_queue_job(job):
     job.setdefault('deleted', False)
+    job.setdefault('paused', False)
     job.setdefault('sent', 0)
     job.setdefault('status', 'pending')
     job.setdefault('filament_g', 0)
+    job.setdefault('estimated_print_seconds', None)
     job.setdefault('groups', ['Default'])
     job['groups'] = normalize_groups(job.get('groups'))
     job.setdefault('ejection_enabled', False)
@@ -159,6 +162,7 @@ def library_item_from_order(order, library_id):
         'name': order.get('name'),
         'groups': order.get('groups', ['Default']),
         'filament_g': order.get('filament_g', 0),
+        'estimated_print_seconds': order.get('estimated_print_seconds'),
         'ejection_enabled': order.get('ejection_enabled', False),
         'ejection_code_id': order.get('ejection_code_id'),
         'cooldown_temp': order.get('cooldown_temp'),
@@ -180,6 +184,7 @@ def queue_job_from_order(order, library_item_id):
         'status': order.get('status', 'pending'),
         'groups': order.get('groups', ['Default']),
         'filament_g': order.get('filament_g', 0),
+        'estimated_print_seconds': order.get('estimated_print_seconds'),
         'ejection_enabled': order.get('ejection_enabled', False),
         'ejection_code_id': order.get('ejection_code_id'),
         'cooldown_temp': order.get('cooldown_temp'),
@@ -200,6 +205,7 @@ def snapshot_queue_job_from_library(library_item, quantity, groups_override=None
         'status': 'pending',
         'groups': groups,
         'filament_g': library_item.get('filament_g', 0),
+        'estimated_print_seconds': library_item.get('estimated_print_seconds'),
         'ejection_enabled': library_item.get('ejection_enabled', False),
         'ejection_code_id': library_item.get('ejection_code_id'),
         'cooldown_temp': library_item.get('cooldown_temp'),
@@ -360,7 +366,7 @@ def can_replace_library_file(library_id, queue_jobs, printers):
 
 
 def update_pending_queue_snapshots_for_library(library_item, queue_jobs):
-    """Refresh filepath/filament for queue jobs with sent==0 linked to this library item."""
+    """Refresh file metadata for queue jobs with sent==0 linked to this library item."""
     for job in queue_jobs:
         if job.get('deleted'):
             continue
@@ -371,3 +377,4 @@ def update_pending_queue_snapshots_for_library(library_item, queue_jobs):
         job['filepath'] = library_item['filepath']
         job['filename'] = library_item['filename']
         job['filament_g'] = library_item.get('filament_g', 0)
+        job['estimated_print_seconds'] = library_item.get('estimated_print_seconds')

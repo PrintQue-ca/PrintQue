@@ -7,6 +7,7 @@ import { renderHook, waitFor } from '@testing-library/react'
 import type React from 'react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { useCreateOrder, useDeleteOrder, useOrders, useUpdateOrder } from '../../hooks/useOrders'
+import { useUpdateQueuePaused } from '../../hooks/useQueue'
 import type { Order } from '../../types'
 
 // Mock the API module
@@ -174,6 +175,40 @@ describe('useOrders', () => {
       })
 
       expect(api.patch).toHaveBeenCalledWith('/queue/1', { quantity: 10 })
+    })
+  })
+
+  describe('useUpdateQueuePaused hook', () => {
+    it('should optimistically update paused state', async () => {
+      vi.mocked(api.patch).mockResolvedValue({
+        success: true,
+        job: { ...mockOrders[0], paused: true },
+      })
+
+      const queryClient = new QueryClient({
+        defaultOptions: {
+          queries: { retry: false },
+          mutations: { retry: false },
+        },
+      })
+      queryClient.setQueryData(['queue'], mockOrders)
+
+      const { result } = renderHook(() => useUpdateQueuePaused(), {
+        wrapper: ({ children }: { children: React.ReactNode }) => (
+          <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+        ),
+      })
+
+      result.current.mutate({ id: 1, paused: true })
+
+      await waitFor(() => {
+        expect(queryClient.getQueryData<Order[]>(['queue'])?.[0]?.paused).toBe(true)
+      })
+      await waitFor(() => {
+        expect(result.current.isSuccess).toBe(true)
+      })
+
+      expect(api.patch).toHaveBeenCalledWith('/queue/1', { paused: true })
     })
   })
 })

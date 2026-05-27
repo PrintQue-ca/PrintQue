@@ -20,7 +20,17 @@ import {
   getCoreRowModel,
   useReactTable,
 } from '@tanstack/react-table'
-import { GripVertical, Minus, Plus, Thermometer, Trash2, Zap, ZapOff } from 'lucide-react'
+import {
+  GripVertical,
+  Minus,
+  Pause,
+  Play,
+  Plus,
+  Thermometer,
+  Trash2,
+  Zap,
+  ZapOff,
+} from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { Badge } from '@/components/ui/badge'
@@ -43,7 +53,9 @@ import {
   useReorderOrder,
   useUpdateOrder,
   useUpdateQueueEjection,
+  useUpdateQueuePaused,
 } from '@/hooks'
+import { formatPrintDuration } from '@/lib/format-duration'
 import { getQueueJobActivity } from '@/lib/printer-queue-job'
 import { resizableTableDefaultColumn, useFitTableColumns } from '@/lib/resizable-table'
 import type { Order, Printer } from '@/types'
@@ -161,7 +173,11 @@ function SortableRow({
   }
 
   return (
-    <TableRow ref={setNodeRef} style={style} className={isDragging ? 'bg-muted' : ''}>
+    <TableRow
+      ref={setNodeRef}
+      style={style}
+      className={`${isDragging ? 'bg-muted' : ''} ${row.original.paused ? 'bg-muted/40' : ''}`}
+    >
       <TableCell className="w-10">
         {!dragDisabled && (
           <div
@@ -202,6 +218,7 @@ export function OrdersTable({
   const { bumpQuantity, setQuantity, flushQuantity } = useDebouncedQueueQuantity()
   const updateOrder = useUpdateOrder()
   const updateQueueEjection = useUpdateQueueEjection()
+  const updateQueuePaused = useUpdateQueuePaused()
   const { data: ejectionCodes } = useEjectionCodes()
   const [editingQuantity, setEditingQuantity] = useState<number | null>(null)
   const [quantityValue, setQuantityValue] = useState<number>(0)
@@ -299,6 +316,18 @@ export function OrdersTable({
       }
     },
     [deleteOrder]
+  )
+
+  const handlePauseToggle = useCallback(
+    async (order: Order, paused: boolean) => {
+      try {
+        await updateQueuePaused.mutateAsync({ id: order.id, paused })
+        toast.success(paused ? 'Queue job paused' : 'Queue job resumed')
+      } catch {
+        toast.error(paused ? 'Failed to pause queue job' : 'Failed to resume queue job')
+      }
+    },
+    [updateQueuePaused]
   )
 
   const handleQuantityChange = useCallback((id: number, currentQuantity: number) => {
@@ -420,11 +449,18 @@ export function OrdersTable({
               onClick={() => handleNameChange(order)}
               className="block w-full min-w-0 text-left hover:bg-muted rounded px-1 -mx-1 py-0.5 -my-0.5"
             >
-              <TruncatedText
-                text={displayName}
-                secondary={name ? filename : undefined}
-                className="font-medium"
-              />
+              <div className="flex min-w-0 items-center gap-2">
+                <TruncatedText
+                  text={displayName}
+                  secondary={name ? filename : undefined}
+                  className={order.paused ? 'font-medium text-muted-foreground' : 'font-medium'}
+                />
+                {order.paused && (
+                  <Badge variant="secondary" className="shrink-0 text-xs">
+                    Paused
+                  </Badge>
+                )}
+              </div>
             </button>
           )
         },
@@ -468,7 +504,7 @@ export function OrdersTable({
                 <Minus className="h-3 w-3" />
               </Button>
               <span
-                className="cursor-pointer min-w-[2rem] text-center tabular-nums"
+                className="cursor-pointer min-w-8 text-center tabular-nums"
                 onClick={() => handleQuantityChange(id, currentQty)}
               >
                 {currentQty}
@@ -518,6 +554,16 @@ export function OrdersTable({
             </span>
           )
         },
+      }),
+      columnHelper.accessor('estimated_print_seconds', {
+        header: 'Est. time',
+        size: 96,
+        minSize: 80,
+        cell: (info) => (
+          <span className="text-sm text-muted-foreground tabular-nums">
+            {formatPrintDuration(info.getValue())}
+          </span>
+        ),
       }),
       columnHelper.accessor('groups', {
         header: 'Groups',
@@ -630,20 +676,41 @@ export function OrdersTable({
       columnHelper.display({
         id: 'actions',
         header: '',
-        size: 48,
-        minSize: 48,
-        maxSize: 48,
+        size: 88,
+        minSize: 88,
+        maxSize: 88,
         enableResizing: false,
-        cell: (info) => (
-          <Button
-            variant="ghost"
-            size="sm"
-            className="h-8 w-8 p-0 text-destructive hover:text-destructive"
-            onClick={() => handleDelete(info.row.original.id)}
-          >
-            <Trash2 className="h-4 w-4" />
-          </Button>
-        ),
+        cell: (info) => {
+          const order = info.row.original
+          const isPaused = order.paused === true
+          const hasPendingCopies = order.sent < order.quantity
+
+          return (
+            <div className="flex items-center justify-end gap-1">
+              {!previewMode && (isPaused || hasPendingCopies) && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-8 w-8 p-0"
+                  title={isPaused ? 'Resume queue job' : 'Pause queue job'}
+                  aria-label={isPaused ? 'Resume queue job' : 'Pause queue job'}
+                  onClick={() => handlePauseToggle(order, !isPaused)}
+                  disabled={updateQueuePaused.isPending}
+                >
+                  {isPaused ? <Play className="h-4 w-4" /> : <Pause className="h-4 w-4" />}
+                </Button>
+              )}
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-8 w-8 p-0 text-destructive hover:text-destructive"
+                onClick={() => handleDelete(order.id)}
+              >
+                <Trash2 className="h-4 w-4" />
+              </Button>
+            </div>
+          )
+        },
       }),
     ],
     [
@@ -659,11 +726,13 @@ export function OrdersTable({
       handleEjectionChange,
       handleNameChange,
       handleNameSubmit,
+      handlePauseToggle,
       handleQuantityChange,
       handleQuantityDecrement,
       handleQuantityIncrement,
       handleQuantitySubmit,
       queuePosition,
+      updateQueuePaused.isPending,
     ]
   )
 
@@ -683,6 +752,7 @@ export function OrdersTable({
     quantity: 1,
     completed: 0.6,
     inProgress: 0.6,
+    estimated_print_seconds: 0.8,
     groups: 1,
     ejection: 1.5,
     actions: 0.4,
@@ -696,7 +766,7 @@ export function OrdersTable({
       {table.getRowModel().rows?.length ? (
         previewMode ? (
           table.getRowModel().rows.map((row) => (
-            <TableRow key={row.id}>
+            <TableRow key={row.id} className={row.original.paused ? 'bg-muted/40' : undefined}>
               {row.getVisibleCells().map((cell) => (
                 <TableCell
                   key={cell.id}

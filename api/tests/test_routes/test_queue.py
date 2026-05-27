@@ -1,6 +1,7 @@
 """Tests for /api/v1/queue endpoints."""
 
 import os
+from unittest.mock import patch
 
 import pytest
 
@@ -29,6 +30,7 @@ def library_item(app, temp_data_dir):
             'name': 'Queue Test',
             'groups': ['Default'],
             'filament_g': 1.0,
+            'estimated_print_seconds': 493,
             'ejection_enabled': False,
             'deleted': False,
             'created_at': '2024-01-01T00:00:00',
@@ -59,6 +61,7 @@ class TestQueueAPI:
         assert jobs[0]['quantity'] == 3
         assert jobs[0]['sent'] == 0
         assert jobs[0]['library_item_id'] == library_item
+        assert jobs[0]['estimated_print_seconds'] == 493
 
     def test_patch_quantity_below_sent_rejected(self, client, library_item):
         client.post(
@@ -72,6 +75,38 @@ class TestQueueAPI:
                     job['sent'] = 3
                     break
         response = client.patch(f'/api/v1/queue/{job_id}', json={'quantity': 2})
+        assert response.status_code == 400
+
+    def test_patch_paused_persists_and_resume_restarts_distribution(self, client, library_item):
+        client.post(
+            '/api/v1/queue/bulk',
+            json={'items': [{'library_item_id': library_item, 'quantity': 3}]},
+        )
+        job_id = client.get('/api/v1/queue').get_json()[0]['id']
+
+        response = client.patch(f'/api/v1/queue/{job_id}', json={'paused': True})
+        assert response.status_code == 200
+        assert response.get_json()['job']['paused'] is True
+
+        jobs = client.get('/api/v1/queue').get_json()
+        assert jobs[0]['paused'] is True
+
+        with patch('routes.queue.start_background_distribution') as start_distribution:
+            response = client.patch(f'/api/v1/queue/{job_id}', json={'paused': False})
+
+        assert response.status_code == 200
+        assert response.get_json()['job']['paused'] is False
+        start_distribution.assert_called_once()
+
+    def test_patch_paused_requires_boolean(self, client, library_item):
+        client.post(
+            '/api/v1/queue/bulk',
+            json={'items': [{'library_item_id': library_item, 'quantity': 1}]},
+        )
+        job_id = client.get('/api/v1/queue').get_json()[0]['id']
+
+        response = client.patch(f'/api/v1/queue/{job_id}', json={'paused': 'yes'})
+
         assert response.status_code == 400
 
     def test_get_queue_includes_error_fields(self, client, library_item):

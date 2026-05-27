@@ -26,7 +26,12 @@ from services.state import (
     apply_ejection_fields_to_order, resolve_ejection_gcode,
     resolve_order_ejection_code_id, auto_save_ejection_code,
 )
-from services.printer_manager import prepare_printer_data_for_broadcast, start_background_distribution, extract_filament_from_file
+from services.printer_manager import (
+    prepare_printer_data_for_broadcast,
+    start_background_distribution,
+    extract_filament_from_file,
+    extract_print_time_from_file,
+)
 from services.library_queue import (
     normalize_library_item,
     snapshot_queue_job_from_library,
@@ -968,6 +973,7 @@ def register_routes(app, socketio):
                         upload_path = os.path.join(upload_folder, upload_filename)
                         shutil.copy2(full_path, upload_path)
                         filament_g = extract_filament_from_file(upload_path)
+                        estimated_print_seconds = extract_print_time_from_file(upload_path)
 
                         with SafeLock(orders_lock):
                             existing_int_ids = []
@@ -985,6 +991,7 @@ def register_routes(app, socketio):
                                 'sent': 0,
                                 'status': 'pending',
                                 'filament_g': filament_g,
+                                'estimated_print_seconds': estimated_print_seconds,
                                 'groups': printer_groups,
                                 'created_at': datetime.now().isoformat(),
                                 'from_new_orders': True,
@@ -1079,6 +1086,7 @@ def register_routes(app, socketio):
 
             # Extract filament usage
             filament_g = extract_filament_from_file(filepath)
+            estimated_print_seconds = extract_print_time_from_file(filepath)
 
             now = datetime.now().isoformat()
             queue_job_id = None
@@ -1090,6 +1098,7 @@ def register_routes(app, socketio):
                     'name': order_name or None,
                     'filepath': filepath,
                     'filament_g': filament_g,
+                    'estimated_print_seconds': estimated_print_seconds,
                     'groups': groups,
                     'cooldown_temp': cooldown_temp,
                     'created_at': now,
@@ -1147,8 +1156,9 @@ def register_routes(app, socketio):
     def api_update_order(order_id):
         """API: Update an order"""
         try:
-            data = request.get_json()
-            quantity_updated = False
+            data = request.get_json() or {}
+            start_distribution = False
+            updated_order = None
             with SafeLock(orders_lock):
                 for order in ORDERS:
                     if order.get('id') == order_id:
@@ -1159,15 +1169,29 @@ def register_routes(app, socketio):
                                     'error': f'Quantity cannot be less than {order["sent"]} (already sent)',
                                 }), 400
                             order['quantity'] = new_qty
-                            quantity_updated = True
+                            start_distribution = True
+                        if 'paused' in data:
+                            if not isinstance(data['paused'], bool):
+                                return jsonify({'error': 'paused must be a boolean'}), 400
+                            is_fulfilled = order.get('sent', 0) >= order.get('quantity', 1)
+                            order['paused'] = bool(data['paused']) if not is_fulfilled else False
+                            if not order['paused']:
+                                start_distribution = True
                         if 'groups' in data:
                             order['groups'] = data['groups']
                         if 'name' in data:
                             order['name'] = data['name'].strip() if data['name'] else None
                         save_data(QUEUE_FILE, QUEUE_JOBS)
-                        if quantity_updated and order.get('quantity', 0) > 0:
-                            start_background_distribution(socketio, app)
-                        return jsonify({'success': True})
+                        updated_order = order.copy()
+                        break
+            if updated_order:
+                if (
+                    start_distribution
+                    and not updated_order.get('paused', False)
+                    and updated_order.get('sent', 0) < updated_order.get('quantity', 1)
+                ):
+                    start_background_distribution(socketio, app)
+                return jsonify({'success': True, 'order': updated_order})
             return jsonify({'error': 'Order not found'}), 404
         except Exception as e:
             return jsonify({'error': str(e)}), 500

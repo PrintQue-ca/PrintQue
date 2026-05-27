@@ -3,6 +3,7 @@ import importlib.util
 import json
 import os
 import shutil
+import tempfile
 import threading
 import logging
 import time
@@ -28,6 +29,7 @@ from services.library_queue import (
     normalize_library_item,
     normalize_queue_job,
 )
+from services.filename_matching import match_shortened_filename
 import copy
 import uuid
 import re
@@ -540,6 +542,56 @@ def _resolve_path(filename) -> str:
     return os.fspath(filename)
 
 
+def _is_printers_path(path: str) -> bool:
+    printers_path = os.path.normcase(os.path.realpath(os.fspath(PRINTERS_FILE)))
+    path_norm = os.path.normcase(os.path.realpath(path))
+    return path_norm == printers_path
+
+
+def _printers_backup_path(path: str) -> str:
+    return f"{path}.bak"
+
+
+def _load_json_file(path: str):
+    with open(path, 'r', encoding='utf-8') as f:
+        return json.load(f)
+
+
+def _atomic_write_json(path: str, data) -> None:
+    directory = os.path.dirname(path) or '.'
+    os.makedirs(directory, exist_ok=True)
+    fd, tmp_path = tempfile.mkstemp(
+        prefix=f".{os.path.basename(path)}.",
+        suffix=".tmp",
+        dir=directory,
+        text=True,
+    )
+    try:
+        with os.fdopen(fd, 'w', encoding='utf-8') as f:
+            json.dump(data, f, indent=4, ensure_ascii=False)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp_path, path)
+    except Exception:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
+
+
+def _backup_valid_json(path: str, backup_path: str) -> bool:
+    if not os.path.exists(path):
+        return False
+    try:
+        _load_json_file(path)
+    except (json.JSONDecodeError, UnicodeDecodeError, OSError) as e:
+        logger.warning("Skipping backup for invalid JSON file %s: %s", path, e)
+        return False
+    shutil.copy2(path, backup_path)
+    return True
+
+
 def _assert_safe_write_path(filename) -> None:
     """Block pytest from writing to real ~/PrintQueData if paths were bound too early."""
     if not os.environ.get('PYTEST_CURRENT_TEST'):
@@ -577,9 +629,7 @@ def backup_data_files_before_migration(*filenames: str) -> str | None:
 
 def _should_skip_empty_printers_save(path: str, data) -> bool:
     """Refuse to overwrite a populated printers.json with an empty list."""
-    printers_path = os.path.normcase(os.path.realpath(os.fspath(PRINTERS_FILE)))
-    path_norm = os.path.normcase(os.path.realpath(path))
-    if path_norm != printers_path:
+    if not _is_printers_path(path):
         return False
     if data != []:
         return False
@@ -607,29 +657,61 @@ def save_data(filename, data, *, allow_empty_printers=False):
     if not allow_empty_printers and _should_skip_empty_printers_save(path, data):
         return
     try:
-        with open(path, 'w', encoding='utf-8') as f:
-            json.dump(data, f, indent=4, ensure_ascii=False)
+        if _is_printers_path(path):
+            _backup_valid_json(path, _printers_backup_path(path))
+            _atomic_write_json(path, data)
+        else:
+            with open(path, 'w', encoding='utf-8') as f:
+                json.dump(data, f, indent=4, ensure_ascii=False)
         logger.debug(f"Saved data to {path}")
     except Exception as e:
         logger.error(f"Failed to save data to {path}: {str(e)}")
 
 def load_data(filename, default_value):
     path = _resolve_path(filename)
+    is_printers_file = _is_printers_path(path)
     bundle_path = os.path.join(os.path.dirname(__file__), os.path.basename(path))
-    path = path if os.path.exists(path) else bundle_path
-    if os.path.exists(path):
+    load_path = path if os.path.exists(path) else bundle_path
+    if os.path.exists(load_path):
         try:
-            with open(path, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-                logger.debug(f"Loaded data from {path}")
-                return data
+            data = _load_json_file(load_path)
+            logger.debug(f"Loaded data from {load_path}")
+            return data
         except (json.JSONDecodeError, UnicodeDecodeError) as e:
-            logger.error(f"Error reading {path}: {e}")
-            return default_value
+            logger.error(f"Error reading {load_path}: {e}")
         except Exception as e:
-            logger.error(f"Unexpected error loading {path}: {e}")
+            logger.error(f"Unexpected error loading {load_path}: {e}")
+
+        if not is_printers_file:
             return default_value
-    logger.debug(f"No {path} found, returning default")
+
+    if is_printers_file:
+        backup_path = _printers_backup_path(path)
+        if os.path.exists(backup_path):
+            try:
+                data = _load_json_file(backup_path)
+                logger.warning(
+                    "Loaded printers from backup %s after primary %s was missing or invalid",
+                    backup_path,
+                    path,
+                )
+                try:
+                    _assert_safe_write_path(path)
+                    _atomic_write_json(path, data)
+                    logger.warning("Restored printers file %s from backup", path)
+                except Exception as restore_error:
+                    logger.error(
+                        "Loaded printers from backup but failed to restore %s: %s",
+                        path,
+                        restore_error,
+                    )
+                return data
+            except (json.JSONDecodeError, UnicodeDecodeError) as e:
+                logger.error(f"Error reading printers backup {backup_path}: {e}")
+            except Exception as e:
+                logger.error(f"Unexpected error loading printers backup {backup_path}: {e}")
+
+    logger.debug(f"No {load_path} found, returning default")
     return default_value
 
 def get_ejection_paused():
@@ -1130,6 +1212,79 @@ def get_pending_transactions():
                 if tx['status'] in ['pending', 'verifying'] and
                 time.time() - tx['start_time'] < 3600}  # Only consider transactions from the last hour
 
+
+ACTIVE_ORPHAN_PRINT_STATES = {'PRINTING', 'PAUSED', 'PREPARING', 'PREPARE', 'COOLING', 'EJECTING'}
+
+
+def _queue_job_has_pending_copies(job):
+    try:
+        sent = int(job.get('sent', 0) or 0)
+        quantity = int(job.get('quantity', 0) or 0)
+    except (TypeError, ValueError):
+        return False
+    return sent < quantity
+
+
+def _queue_job_sort_id(job):
+    job_id = job.get('id')
+    if isinstance(job_id, int):
+        return job_id
+    if isinstance(job_id, str) and job_id.isdigit():
+        return int(job_id)
+    return float('inf')
+
+
+def relink_orphaned_active_prints():
+    """Recover printer->queue links when active printer state survived but order_id did not."""
+    with SafeLock(orders_lock):
+        candidate_jobs = [
+            copy.deepcopy(job)
+            for job in QUEUE_JOBS
+            if not job.get('deleted', False) and _queue_job_has_pending_copies(job)
+        ]
+
+    if not candidate_jobs:
+        return 0
+
+    relinked = 0
+    with WriteLock(printers_rwlock):
+        for printer in PRINTERS:
+            if printer.get('order_id') or printer.get('queue_job_id'):
+                continue
+
+            state = str(printer.get('state') or printer.get('status') or '').upper()
+            if state not in ACTIVE_ORPHAN_PRINT_STATES:
+                continue
+
+            printer_file = printer.get('file')
+            if not printer_file:
+                continue
+
+            matches = [
+                job
+                for job in candidate_jobs
+                if match_shortened_filename(job.get('filename'), printer_file)
+            ]
+            if not matches:
+                continue
+
+            job = min(matches, key=_queue_job_sort_id)
+            printer['order_id'] = job.get('id')
+            printer['from_queue'] = True
+            relinked += 1
+            logger.warning(
+                "Relinked active printer %s to queue job %s by matching file %s",
+                printer.get('name'),
+                job.get('id'),
+                printer_file,
+            )
+
+        if relinked:
+            save_data(PRINTERS_FILE, PRINTERS)
+
+    return relinked
+
+
 def reconcile_order_counts():
     """
     Reconcile order counts with actual printer status
@@ -1398,6 +1553,10 @@ def initialize_state():
 
     # Emergency reset on startup
     reset_all_ejection_states()
+
+    relinked = relink_orphaned_active_prints()
+    if relinked:
+        logging.warning(f"Relinked {relinked} active printer(s) to queue jobs on startup")
 
     logger.debug(
         f"State initialized: {len(PRINTERS)} printers, {len(LIBRARY_ITEMS)} library items, "

@@ -3,6 +3,7 @@ import { useAdaptiveRefetchInterval } from '@/hooks/useApiConnection'
 import { api } from '@/lib/api'
 import { createDebouncedQueueQuantityActions } from '@/lib/debounced-queue-quantity'
 import {
+  optimisticPatchQueueJob,
   optimisticPatchQueueJobEjection,
   optimisticRemoveQueueJobs,
   type QueueEjectionPatch,
@@ -72,6 +73,31 @@ export function useUpdateQueueQuantity() {
       api.patch<ApiResponse>(`/queue/${id}`, { quantity }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['queue'] })
+    },
+  })
+}
+
+export function useUpdateQueuePaused() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationKey: ['updateQueuePaused'],
+    mutationFn: ({ id, paused }: { id: number; paused: boolean }) =>
+      api.patch<ApiResponse & { job?: QueueJob }>(`/queue/${id}`, { paused }),
+    onMutate: async ({ id, paused }) => optimisticPatchQueueJob(queryClient, id, { paused }),
+    onSuccess: (data) => {
+      const job = data?.job
+      if (job) {
+        queryClient.setQueryData<QueueJob[]>(
+          ['queue'],
+          (old) => old?.map((j) => (j.id === job.id ? { ...j, ...job } : j)) ?? old
+        )
+      }
+    },
+    onError: (_err, _variables, context) => {
+      restoreQueueCache(queryClient, context?.previous)
+      void import('sonner').then(({ toast }) => {
+        toast.error('Failed to update queue pause')
+      })
     },
   })
 }

@@ -139,7 +139,8 @@ def register_queue_routes(app, socketio):
     def api_update_queue_job(job_id):
         try:
             data = request.get_json() or {}
-            quantity_updated = False
+            start_distribution = False
+            updated_job = None
             with SafeLock(orders_lock):
                 for job in QUEUE_JOBS:
                     if job.get('id') != job_id or job.get('deleted'):
@@ -151,15 +152,29 @@ def register_queue_routes(app, socketio):
                                 'error': f'Quantity cannot be less than {job["sent"]} (already sent)',
                             }), 400
                         job['quantity'] = new_qty
-                        quantity_updated = True
+                        start_distribution = True
+                    if 'paused' in data:
+                        if not isinstance(data['paused'], bool):
+                            return jsonify({'error': 'paused must be a boolean'}), 400
+                        is_fulfilled = job.get('sent', 0) >= job.get('quantity', 1)
+                        job['paused'] = bool(data['paused']) if not is_fulfilled else False
+                        if not job['paused']:
+                            start_distribution = True
                     if 'groups' in data:
                         job['groups'] = data['groups']
                     if 'name' in data:
                         job['name'] = data['name'].strip() if data['name'] else None
                     save_data(QUEUE_FILE, QUEUE_JOBS)
-                    if quantity_updated and job.get('quantity', 0) > 0:
-                        start_background_distribution(socketio, app)
-                    return jsonify({'success': True})
+                    updated_job = _attach_ejection_name(job)
+                    break
+            if updated_job:
+                if (
+                    start_distribution
+                    and not updated_job.get('paused', False)
+                    and updated_job.get('sent', 0) < updated_job.get('quantity', 1)
+                ):
+                    start_background_distribution(socketio, app)
+                return jsonify({'success': True, 'job': updated_job})
             return jsonify({'error': 'Queue job not found'}), 404
         except Exception as e:
             return jsonify({'error': str(e)}), 500

@@ -133,6 +133,90 @@ def convert_mm_to_g(filament_mm, density):
     return volume_cm3 * density
 
 
+PRINT_TIME_SCAN_BYTES = 4096
+_CURA_TIME_RE = re.compile(r'^\s*;\s*TIME\s*:\s*(\d+(?:\.\d+)?)\s*$', re.IGNORECASE)
+_ESTIMATED_PRINT_TIME_RE = re.compile(
+    r'^\s*;\s*estimated printing time(?:\s*\([^)]*\))?\s*=\s*(.+?)\s*$',
+    re.IGNORECASE,
+)
+_TIME_COMPONENT_RE = re.compile(r'(\d+(?:\.\d+)?)\s*([dhms])\b', re.IGNORECASE)
+
+
+def _parse_human_print_time(value):
+    seconds = 0.0
+    matched = False
+    for amount, unit in _TIME_COMPONENT_RE.findall(value):
+        matched = True
+        multiplier = {
+            'd': 86400,
+            'h': 3600,
+            'm': 60,
+            's': 1,
+        }[unit.lower()]
+        seconds += float(amount) * multiplier
+    if not matched:
+        return None
+    return int(round(seconds))
+
+
+def _extract_print_time_from_gcode_text(gcode_text):
+    for line in gcode_text.splitlines():
+        match = _CURA_TIME_RE.match(line)
+        if match:
+            return int(round(float(match.group(1))))
+
+        match = _ESTIMATED_PRINT_TIME_RE.match(line)
+        if match:
+            parsed = _parse_human_print_time(match.group(1))
+            if parsed is not None:
+                return parsed
+    return None
+
+
+def _read_gcode_head_tail(filepath, byte_count=PRINT_TIME_SCAN_BYTES):
+    with open(filepath, 'rb') as f:
+        head = f.read(byte_count)
+        f.seek(0, os.SEEK_END)
+        size = f.tell()
+        if size <= byte_count:
+            tail = b''
+        else:
+            f.seek(max(size - byte_count, 0))
+            tail = f.read(byte_count)
+    return b'\n'.join(part for part in (head, tail) if part).decode('utf-8', errors='ignore')
+
+
+def extract_print_time_from_file(filepath):
+    """Extract slicer-estimated print time in seconds from gcode or 3mf metadata."""
+    estimated_print_seconds = None
+
+    if filepath.endswith('.3mf'):
+        try:
+            import zipfile
+
+            with zipfile.ZipFile(filepath, 'r') as zip_file:
+                for filename in zip_file.namelist():
+                    if 'gcode' not in filename.lower() or not filename.endswith('.gcode'):
+                        continue
+                    with zip_file.open(filename) as gcode_file:
+                        content = gcode_file.read().decode('utf-8', errors='ignore')
+                    estimated_print_seconds = _extract_print_time_from_gcode_text(content)
+                    if estimated_print_seconds is not None:
+                        break
+        except Exception as e:
+            logging.error(f"Error parsing print time from .3mf file {filepath}: {str(e)}")
+    else:
+        try:
+            estimated_print_seconds = _extract_print_time_from_gcode_text(
+                _read_gcode_head_tail(filepath)
+            )
+        except Exception as e:
+            logging.error(f"Error parsing print time from {filepath}: {str(e)}")
+
+    logging.debug(f"Extracted print time from {filepath}: {estimated_print_seconds}s")
+    return estimated_print_seconds
+
+
 def extract_filament_from_file(filepath, is_bgcode=False):
     """Extract filament usage from gcode or 3mf file"""
     filament_g = 0
